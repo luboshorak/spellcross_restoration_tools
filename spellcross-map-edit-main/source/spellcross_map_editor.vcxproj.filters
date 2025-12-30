@@ -1,0 +1,468 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Header Files\forms">
+      <UniqueIdentifier>{45d75289-0d2b-4daa-9fc0-07becd1da616}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\forms">
+      <UniqueIdentifier>{22fea265-b296-45d8-9f72-06c5b4c11d6b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\cxxmidi">
+      <UniqueIdentifier>{67a85a8f-d024-43ae-bc0d-0abb48b61d6d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\cxxmidi\guts">
+      <UniqueIdentifier>{50197c97-2fff-46be-b152-36586f083259}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\cxxmidi\player">
+      <UniqueIdentifier>{444b9f08-3c7a-4f7d-bba6-0446ab0a32db}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\cxxmidi\output">
+      <UniqueIdentifier>{8f45cb1c-2736-4586-8830-becbdf6017b4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\cxxmidi\output\linux">
+      <UniqueIdentifier>{d1826efc-9cae-4839-b997-67d7e5451215}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="fs_archive.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="fsu_archive.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LZ_spell.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="map.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_units.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spellcross.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sprites.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="other.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_font.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_graphics.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_hud_buttons.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_sound.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="RtAudio.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_map_event.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_texts.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_filter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_video.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="riff_loader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_events.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_gr_view.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_loader.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_map_options.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_message_box.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_new_object.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_objects.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_pal_view.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_sprite_view.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_unit_options.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_units.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_video.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_video_box.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="spell_midi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_midi.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_minimap.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_map_units_list.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_mission_params.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_about.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_anm.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_sound.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_flags.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="forms\form_edit_toolset.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
+    <ClCompile Include="level.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="strategic_level_frame.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="fs_archive.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fsu_archive.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LZ_spell.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="main.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="map.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SimpleIni.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_units.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spellcross.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sprites.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="other.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="map_types.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_font.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_graphics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_hud_buttons.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_sound.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RtAudio.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_map_event.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_texts.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_filter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_video.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="riff_loader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_events.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_gr_view.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_loader.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_map_options.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_message_box.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_new_object.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_objects.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_pal_view.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_sprite_view.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_unit_options.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_units.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_video.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_video_box.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\converters.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\event.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\file.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\instrument.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\message.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\note.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\sysex.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\track.hpp">
+      <Filter>Header Files\cxxmidi</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\guts\cvt_xmi2mid.hpp">
+      <Filter>Header Files\cxxmidi\guts</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\guts\endianness.hpp">
+      <Filter>Header Files\cxxmidi\guts</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\guts\FileData.hpp">
+      <Filter>Header Files\cxxmidi\guts</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\guts\player_base.hpp">
+      <Filter>Header Files\cxxmidi\guts</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\guts\simulator.hpp">
+      <Filter>Header Files\cxxmidi\guts</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\guts\utils.hpp">
+      <Filter>Header Files\cxxmidi\guts</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\output\abstract.hpp">
+      <Filter>Header Files\cxxmidi\output</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\output\default.hpp">
+      <Filter>Header Files\cxxmidi\output</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\output\null.hpp">
+      <Filter>Header Files\cxxmidi\output</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\output\windows.hpp">
+      <Filter>Header Files\cxxmidi\output</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\output\linux\alsa.hpp">
+      <Filter>Header Files\cxxmidi\output\linux</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\player\player_async.hpp">
+      <Filter>Header Files\cxxmidi\player</Filter>
+    </ClInclude>
+    <ClInclude Include="cxxmidi\player\player_sync.hpp">
+      <Filter>Header Files\cxxmidi\player</Filter>
+    </ClInclude>
+    <ClInclude Include="spell_midi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_midi.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_minimap.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_map_units_list.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_mission_params.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_about.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_anm.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_sound.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_flags.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="wx_other.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_edit_toolset.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="level.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="strategic_level_frame.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="ico\map.ICO">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="ico\multi.png">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\std.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\folder1.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\folder2.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\file1.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\computer.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\drive.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\cdrom.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\floppy.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\removble.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="ico\sprite.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="ico\pal.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\csquery.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="wx\msw\colours.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="C:\Users\nixantora\Downloads\ikony.png">
+      <Filter>Resource Files</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="wx\msw\hand.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\bullseye.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\pencil.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\magnif1.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\roller.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\pbrush.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\pntleft.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\pntright.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\blank.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="wx\msw\cross.cur">
+      <Filter>Resource Files</Filter>
+    </None>
+  </ItemGroup>
+</Project>

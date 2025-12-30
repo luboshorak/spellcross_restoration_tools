@@ -1,0 +1,393 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release static|Win32">
+      <Configuration>Release static</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release static|x64">
+      <Configuration>Release static</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="forms\form_about.cpp" />
+    <ClCompile Include="forms\form_anm.cpp" />
+    <ClCompile Include="forms\form_edit_toolset.cpp" />
+    <ClCompile Include="forms\form_events.cpp" />
+    <ClCompile Include="forms\form_flags.cpp" />
+    <ClCompile Include="forms\form_gr_view.cpp" />
+    <ClCompile Include="forms\form_loader.cpp" />
+    <ClCompile Include="forms\form_map_options.cpp" />
+    <ClCompile Include="forms\form_map_units_list.cpp" />
+    <ClCompile Include="forms\form_message_box.cpp" />
+    <ClCompile Include="forms\form_midi.cpp" />
+    <ClCompile Include="forms\form_minimap.cpp" />
+    <ClCompile Include="forms\form_mission_params.cpp" />
+    <ClCompile Include="forms\form_new_object.cpp" />
+    <ClCompile Include="forms\form_objects.cpp" />
+    <ClCompile Include="forms\form_pal_view.cpp" />
+    <ClCompile Include="forms\form_sound.cpp" />
+    <ClCompile Include="forms\form_sprite_view.cpp" />
+    <ClCompile Include="forms\form_units.cpp" />
+    <ClCompile Include="forms\form_unit_options.cpp" />
+    <ClCompile Include="forms\form_video.cpp" />
+    <ClCompile Include="forms\form_video_box.cpp" />
+    <ClCompile Include="fsu_archive.cpp" />
+    <ClCompile Include="fs_archive.cpp" />
+    <ClCompile Include="level.cpp" />
+    <ClCompile Include="LZ_spell.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="map.cpp" />
+    <ClCompile Include="other.cpp" />
+    <ClCompile Include="riff_loader.cpp" />
+    <ClCompile Include="RtAudio.cpp" />
+    <ClCompile Include="spell_filter.cpp" />
+    <ClCompile Include="spell_midi.cpp" />
+    <ClCompile Include="spell_texts.cpp" />
+    <ClCompile Include="spell_graphics.cpp" />
+    <ClCompile Include="spellcross.cpp" />
+    <ClCompile Include="spell_font.cpp" />
+    <ClCompile Include="spell_hud_buttons.cpp" />
+    <ClCompile Include="spell_map_event.cpp" />
+    <ClCompile Include="spell_sound.cpp" />
+    <ClCompile Include="spell_units.cpp" />
+    <ClCompile Include="spell_video.cpp" />
+    <ClCompile Include="sprites.cpp" />
+    <ClCompile Include="strategic_level_frame.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="cxxmidi\converters.hpp" />
+    <ClInclude Include="cxxmidi\event.hpp" />
+    <ClInclude Include="cxxmidi\file.hpp" />
+    <ClInclude Include="cxxmidi\guts\cvt_xmi2mid.hpp" />
+    <ClInclude Include="cxxmidi\guts\endianness.hpp" />
+    <ClInclude Include="cxxmidi\guts\FileData.hpp" />
+    <ClInclude Include="cxxmidi\guts\player_base.hpp" />
+    <ClInclude Include="cxxmidi\guts\simulator.hpp" />
+    <ClInclude Include="cxxmidi\guts\utils.hpp" />
+    <ClInclude Include="cxxmidi\instrument.hpp" />
+    <ClInclude Include="cxxmidi\message.hpp" />
+    <ClInclude Include="cxxmidi\note.hpp" />
+    <ClInclude Include="cxxmidi\output\abstract.hpp" />
+    <ClInclude Include="cxxmidi\output\default.hpp" />
+    <ClInclude Include="cxxmidi\output\linux\alsa.hpp" />
+    <ClInclude Include="cxxmidi\output\null.hpp" />
+    <ClInclude Include="cxxmidi\output\windows.hpp" />
+    <ClInclude Include="cxxmidi\player\player_async.hpp" />
+    <ClInclude Include="cxxmidi\player\player_sync.hpp" />
+    <ClInclude Include="cxxmidi\sysex.hpp" />
+    <ClInclude Include="cxxmidi\track.hpp" />
+    <ClInclude Include="forms\form_about.h" />
+    <ClInclude Include="forms\form_anm.h" />
+    <ClInclude Include="forms\form_edit_toolset.h" />
+    <ClInclude Include="forms\form_events.h" />
+    <ClInclude Include="forms\form_flags.h" />
+    <ClInclude Include="forms\form_gr_view.h" />
+    <ClInclude Include="forms\form_loader.h" />
+    <ClInclude Include="forms\form_map_options.h" />
+    <ClInclude Include="forms\form_map_units_list.h" />
+    <ClInclude Include="forms\form_message_box.h" />
+    <ClInclude Include="forms\form_midi.h" />
+    <ClInclude Include="forms\form_minimap.h" />
+    <ClInclude Include="forms\form_mission_params.h" />
+    <ClInclude Include="forms\form_new_object.h" />
+    <ClInclude Include="forms\form_objects.h" />
+    <ClInclude Include="forms\form_pal_view.h" />
+    <ClInclude Include="forms\form_sound.h" />
+    <ClInclude Include="forms\form_sprite_view.h" />
+    <ClInclude Include="forms\form_units.h" />
+    <ClInclude Include="forms\form_unit_options.h" />
+    <ClInclude Include="forms\form_video.h" />
+    <ClInclude Include="forms\form_video_box.h" />
+    <ClInclude Include="fsu_archive.h" />
+    <ClInclude Include="fs_archive.h" />
+    <ClInclude Include="level.h" />
+    <ClInclude Include="strategic_level_frame.h" />
+    <ClInclude Include="wx_other.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="riff_loader.h" />
+    <ClInclude Include="spell_midi.h" />
+    <ClInclude Include="spell_video.h" />
+    <ClInclude Include="spell_filter.h" />
+    <ClInclude Include="spell_texts.h" />
+    <ClInclude Include="spell_map_event.h" />
+    <ClInclude Include="RtAudio.h" />
+    <ClInclude Include="spell_graphics.h" />
+    <ClInclude Include="map_types.h" />
+    <ClInclude Include="other.h" />
+    <ClInclude Include="LZ_spell.h" />
+    <ClInclude Include="main.h" />
+    <ClInclude Include="map.h" />
+    <ClInclude Include="SimpleIni.h" />
+    <ClInclude Include="spellcross.h" />
+    <ClInclude Include="spell_font.h" />
+    <ClInclude Include="spell_hud_buttons.h" />
+    <ClInclude Include="spell_sound.h" />
+    <ClInclude Include="spell_units.h" />
+    <ClInclude Include="sprites.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="C:\Users\nixantora\Downloads\ikony.png" />
+    <Image Include="ico\map.ICO" />
+    <Image Include="ico\multi.png" />
+    <Image Include="ico\pal.ico" />
+    <Image Include="ico\sprite.ico" />
+    <Image Include="wx\msw\cdrom.ico" />
+    <Image Include="wx\msw\colours.bmp" />
+    <Image Include="wx\msw\computer.ico" />
+    <Image Include="wx\msw\csquery.bmp" />
+    <Image Include="wx\msw\drive.ico" />
+    <Image Include="wx\msw\file1.ico" />
+    <Image Include="wx\msw\floppy.ico" />
+    <Image Include="wx\msw\folder1.ico" />
+    <Image Include="wx\msw\folder2.ico" />
+    <Image Include="wx\msw\removble.ico" />
+    <Image Include="wx\msw\std.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="wx\msw\blank.cur" />
+    <None Include="wx\msw\bullseye.cur" />
+    <None Include="wx\msw\cross.cur" />
+    <None Include="wx\msw\hand.cur" />
+    <None Include="wx\msw\magnif1.cur" />
+    <None Include="wx\msw\pbrush.cur" />
+    <None Include="wx\msw\pencil.cur" />
+    <None Include="wx\msw\pntleft.cur" />
+    <None Include="wx\msw\pntright.cur" />
+    <None Include="wx\msw\roller.cur" />
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{1f9bd075-0b74-49a9-8e70-e936a26aef6f}</ProjectGuid>
+    <RootNamespace>spellcrossmapeditor</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release static|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release static|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release static|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release static|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release static|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+    <OutDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</IntDir>
+    <IncludePath>$(wxwin)include\;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</IntDir>
+    <IncludePath>$(wxwin)include\;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release static|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</IntDir>
+    <IncludePath>$(wxwin)include\;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release static|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_HAS_STD_BYTE=0;_WINSOCKAPI_;_DEBUG;_WINDOWS;WXUSINGDLL;_CRT_SECURE_NO_WARNINGS;_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS;__WINDOWS_DS__;NOMINMAX
+;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(wxwin)include;$(wxwin)include\msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <Optimization>Disabled</Optimization>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <IntrinsicFunctions>false</IntrinsicFunctions>
+      <FavorSizeOrSpeed>Neither</FavorSizeOrSpeed>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>dsound.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(wxwin)lib\vc_x64_dll;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_HAS_STD_BYTE=0;_WINSOCKAPI_;NDEBUG;_WINDOWS;WXUSINGDLL;_CRT_SECURE_NO_WARNINGS;_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS;__WINDOWS_DS__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(wxwin)src-3.1.7\include;$(wxwin)src-3.1.7\include\msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(wxwin)src-3.1.7\lib\vc_x64_dll;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>dsound.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release static|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_HAS_STD_BYTE=0;_WINSOCKAPI_;NDEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS;__WINDOWS_DS__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(wxwin)include;$(wxwin)include\msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(wxwin)lib\vc_x64_lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>dsound.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
