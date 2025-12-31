@@ -43,6 +43,7 @@ private:
 	
 	void OnClose(wxCloseEvent& ev);
 	void OnCloseClick(wxCommandEvent& event);
+	void OnExportPNG(wxCommandEvent& event);
 	void OnPaintCanvas(wxPaintEvent& event);
 	void OnSelectFile(wxCommandEvent& event);
 	void OnWidthChange(wxSpinEvent& event);
@@ -54,6 +55,7 @@ protected:
 	enum
 	{
 		wxID_MM_CLOSE = 1000,
+		ID_GRES_EXPORT_PNG,
 		wxID_SB,
 		wxID_LB_FILES,
 		wxID_SPIN_W,

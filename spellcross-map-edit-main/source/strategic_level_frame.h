@@ -67,6 +67,11 @@ private:
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
 
+    wxBitmap m_bgBitmapScaled;
+    int m_bgScaledW = -1;
+    int m_bgScaledH = -1;
+
+
     enum : int {
         ID_TERRITORY_BASE = 20000,
         ID_BTN_RESEARCH,

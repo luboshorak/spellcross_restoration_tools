@@ -11,6 +11,8 @@
 #include "LZ_spell.h"
 
 #include <wx/rawbmp.h>
+#include <wx/filedlg.h>
+#include <wx/msgdlg.h>
 
 #include <filesystem>
 
@@ -27,6 +29,10 @@ FormGResView::FormGResView(wxWindow* parent,SpellData* spell_data,wxWindowID id,
 
 	m_menubar5 = new wxMenuBar(0);
 	mmFile = new wxMenu();
+	wxMenuItem* mmExport;
+	mmExport = new wxMenuItem(mmFile, ID_GRES_EXPORT_PNG, wxString(wxT("Export to PNG...")), wxEmptyString, wxITEM_NORMAL);
+	mmFile->Append(mmExport);
+	mmFile->AppendSeparator();
 	wxMenuItem* mmClose;
 	mmClose = new wxMenuItem(mmFile,wxID_MM_CLOSE,wxString(wxT("Close")),wxEmptyString,wxITEM_NORMAL);
 	mmFile->Append(mmClose);
@@ -76,6 +82,7 @@ FormGResView::FormGResView(wxWindow* parent,SpellData* spell_data,wxWindowID id,
 	// close
 	Bind(wxEVT_CLOSE_WINDOW, &FormGResView::OnClose, this, this->m_windowId);
 	Bind(wxEVT_MENU,&FormGResView::OnCloseClick,this,wxID_MM_CLOSE);
+	Bind(wxEVT_MENU,&FormGResView::OnExportPNG,this,ID_GRES_EXPORT_PNG);
 	
 	// canvas stuff:
 	canvas->SetDoubleBuffered(true);
@@ -274,3 +281,115 @@ void FormGResView::OnPaintCanvas(wxPaintEvent& event)
 }
 
 
+
+// Export currently selected graphics as PNG
+void FormGResView::OnExportPNG(wxCommandEvent& event)
+{
+	if(lboxFiles->GetSelection() < 0 || !lboxFiles->GetCount())
+	{
+		wxMessageBox("No graphics selected.", "Export to PNG", wxICON_WARNING, this);
+		return;
+	}
+
+	std::filesystem::path name = lboxFiles->GetString(lboxFiles->GetSelection()).ToStdString();
+
+	wxFileDialog dlg(
+		this,
+		"Export graphics to PNG",
+		"",
+		(wxString(name.stem().string()) + ".png"),
+		"PNG files (*.png)|*.png",
+		wxFD_SAVE | wxFD_OVERWRITE_PROMPT
+	);
+	if(dlg.ShowModal() != wxID_OK)
+		return;
+
+	// load file data exactly like the preview does
+	uint8_t *data = nullptr;
+	int len = 0;
+	bool is_lzw = false;
+
+	SpellGraphicItem *grpi = nullptr;
+	if((grpi = spell_data->gres.GetResource(name.string().c_str())) != NULL)
+	{
+		// loaded resource
+		data = grpi->GetPixels();
+		len = grpi->x_size * grpi->y_size;
+		spinWidth->SetValue(grpi->x_size);
+	}
+	else if(name.extension().compare(".LZ") == 0 || name.extension().compare(".LZ0") == 0)
+	{
+		is_lzw = true;
+		uint8_t *lzdata;
+		int lzlen;
+		common->GetFile(name.string().c_str(), &lzdata, &lzlen);
+
+		LZWexpand lzw = LZWexpand(1048576);
+		lzw.Decode(lzdata, &lzdata[lzlen], &data, &len);
+	}
+	else
+	{
+		// raw data
+		common->GetFile(name.string().c_str(), &data, &len);
+	}
+
+	if(!data || len <= 0)
+	{
+		wxMessageBox("Failed to load selected resource.", "Export to PNG", wxICON_ERROR, this);
+		return;
+	}
+
+	// palette (same logic as preview)
+	auto terr = spell_data->GetTerrain(0);
+	uint8_t pal[256][3];
+	memcpy((void*)pal, (void*)terr->pal, 256*3);
+
+	uint8_t *pdata;
+	int plen;
+	if(!common->GetFile(name.stem().concat(".PAL").string().c_str(), &pdata, &plen) && plen == 768)
+	{
+		memcpy((void*)pal,(void*)pdata,256*3);
+	}
+
+	// export dimensions
+	int x_size = spinWidth->GetValue();
+	if(grpi)
+		x_size = grpi->x_size;
+	if(x_size <= 0)
+		x_size = 1;
+	int y_size = len / x_size + ((len % x_size) ? 1 : 0);
+	if(y_size <= 0)
+		y_size = 1;
+
+	wxImage img(x_size, y_size, true);
+	img.InitAlpha();
+
+	// Fill pixels; index 0 becomes transparent (matches preview checkerboard intent)
+	int i = 0;
+	for(int y = 0; y < y_size; y++)
+	{
+		for(int x = 0; x < x_size; x++)
+		{
+			uint8_t idx = 0;
+			if(i < len)
+				idx = data[i];
+			i++;
+
+			unsigned char r = pal[idx][0];
+			unsigned char g = pal[idx][1];
+			unsigned char b = pal[idx][2];
+			img.SetRGB(x, y, r, g, b);
+			img.SetAlpha(x, y, (idx == 0) ? 0 : 255);
+		}
+	}
+
+	// Loose LZW decompressed buffer
+	if(is_lzw)
+		delete[] data;
+
+	// Save as PNG (RGBA). Keep alpha so index 0 stays transparent.
+	if(!img.SaveFile(dlg.GetPath(), wxBITMAP_TYPE_PNG))
+	{
+		wxMessageBox("Failed to save PNG.", "Export to PNG", wxICON_ERROR, this);
+	}
+}

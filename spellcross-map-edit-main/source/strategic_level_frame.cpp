@@ -10,6 +10,15 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cmath>
+#include "LZ_spell.h"
+
+// Best-effort background decoding.
+// Some LEVEL_XX.LZ files are *compressed* using Spellcross LZW variant.
+// LZ_spell.cpp provides the implementation; we forward-declare the minimal API here
+// to keep this file decoupled from headers.
+
 
 wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
@@ -384,6 +393,9 @@ void StrategicLevelFrame::TryLoadBackground()
 {
     m_hasBg = false;
     m_bgBitmap = wxBitmap();
+    m_bgBitmapScaled = wxBitmap();
+    m_bgScaledW = -1;
+    m_bgScaledH = -1;
 
     namespace fs = std::filesystem;
 
@@ -401,29 +413,58 @@ void StrategicLevelFrame::TryLoadBackground()
     if(palBytes.size() != 192 || lzBytes.size() < 4)
         return;
 
-    auto rd16 = [&](size_t off) -> unsigned {
-        return (unsigned)lzBytes[off] | ((unsigned)lzBytes[off + 1] << 8);
+    // Best-effort:
+    //  - Some .LZ are already raw (header w/h + pixels)
+    //  - Some .LZ are compressed with Spellcross LZW; for those, first deLZ then read header
+    const uint8_t* src = (const uint8_t*)lzBytes.data();
+    size_t srcLen = lzBytes.size();
+
+    auto rd16 = [&](const uint8_t* p, size_t off) -> unsigned {
+        return (unsigned)p[off] | ((unsigned)p[off + 1] << 8);
     };
 
-    unsigned w = rd16(0);
-    unsigned h = rd16(2);
-    const size_t need = 4ull + (size_t)w * (size_t)h;
+    unsigned w = 0, h = 0;
+    const uint8_t* pix = nullptr;
+    std::vector<uint8_t> raw;
 
-    // best-effort: some LZ files may not be raw (compressed). If this check fails, just skip.
-    if(w == 0 || h == 0 || need > lzBytes.size())
-        return;
+    auto try_parse_raw = [&](const uint8_t* p, size_t len) -> bool {
+        if(len < 4) return false;
+        unsigned tw = rd16(p, 0);
+        unsigned th = rd16(p, 2);
+        if(tw == 0 || th == 0) return false;
+        const size_t need = 4ull + (size_t)tw * (size_t)th;
+        if(need > len) return false;
+        w = tw; h = th;
+        pix = p + 4;
+        return true;
+    };
+
+    // 1) try direct/raw first (keeps old behavior)
+    if(!try_parse_raw(src, srcLen))
+    {
+        // 2) try Spellcross LZW decode (only if LZ_spell.cpp is linked in)
+        LZWexpand delz(256 * 1024);
+        raw = delz.Decode((uint8_t*)src, (uint8_t*)src + srcLen);
+        if(raw.empty() || !try_parse_raw(raw.data(), raw.size()))
+            return;
+    }
+
+    // Palette is typically 6-bit VGA (0..63). Scale up for proper colors.
+    auto vga6_to_8 = [](unsigned char v) -> unsigned char {
+        // 0..63 -> 0..252 (classic VGA6 scaling)
+        return (unsigned char)std::min(255, (int)v * 4);
+    };
 
     wxImage img((int)w, (int)h);
     unsigned char* rgb = img.GetData();
-    const unsigned char* pix = lzBytes.data() + 4;
 
     for(unsigned y = 0; y < h; ++y)
     for(unsigned x = 0; x < w; ++x)
     {
         unsigned idx = pix[y * w + x] & 0x3F;
-        unsigned char r = palBytes[idx * 3 + 0];
-        unsigned char g = palBytes[idx * 3 + 1];
-        unsigned char b = palBytes[idx * 3 + 2];
+        unsigned char r = vga6_to_8(palBytes[idx * 3 + 0]);
+        unsigned char g = vga6_to_8(palBytes[idx * 3 + 1]);
+        unsigned char b = vga6_to_8(palBytes[idx * 3 + 2]);
 
         size_t o = ((size_t)y * w + x) * 3;
         rgb[o + 0] = r;
@@ -441,16 +482,34 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
     wxAutoBufferedPaintDC dc(m_mapPanel);
     dc.Clear();
 
-    if(m_hasBg)
+    if(m_hasBg && m_bgBitmap.IsOk())
     {
         int pw, ph;
         m_mapPanel->GetClientSize(&pw, &ph);
 
-        int bw = m_bgBitmap.GetWidth();
-        int bh = m_bgBitmap.GetHeight();
+        const int bw = m_bgBitmap.GetWidth();
+        const int bh = m_bgBitmap.GetHeight();
+        if(pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
+            return;
 
-        int x = (pw - bw) / 2;
-        int y = (ph - bh) / 2;
-        dc.DrawBitmap(m_bgBitmap, x, y, false);
+        // Scale to fit panel while keeping aspect ratio.
+        const double sx = (double)pw / (double)bw;
+        const double sy = (double)ph / (double)bh;
+        const double s  = std::min(sx, sy);
+        const int dw = std::max(1, (int)std::lround((double)bw * s));
+        const int dh = std::max(1, (int)std::lround((double)bh * s));
+
+        // Cache the scaled bitmap so we don't rescale on every paint.
+        if(!m_bgBitmapScaled.IsOk() || m_bgScaledW != dw || m_bgScaledH != dh)
+        {
+            wxImage img = m_bgBitmap.ConvertToImage();
+            m_bgBitmapScaled = wxBitmap(img.Scale(dw, dh, wxIMAGE_QUALITY_NEAREST));
+            m_bgScaledW = dw;
+            m_bgScaledH = dh;
+        }
+
+        const int x = (pw - dw) / 2;
+        const int y = (ph - dh) / 2;
+        dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
     }
 }
