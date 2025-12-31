@@ -2,7 +2,6 @@
 
 #include <unordered_map>
 #include <string>
-#include <vector>
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
@@ -23,13 +22,6 @@ private:
     // background (LEVEL_XX.LZ + LEVEL_XX.PAL) - best effort
     void TryLoadBackground();
     void OnMapPaint(wxPaintEvent& ev);
-
-    // chrome overlay
-    void LoadUiOverlay();
-    void PaintUiOverlay(wxDC& dc);
-    void PaintHud(wxDC& dc);
-    void LayoutAnchors();
-    void OnSize(wxSizeEvent&);
 
     // actions
     void OnTerritory(wxCommandEvent& ev);
@@ -61,20 +53,13 @@ private:
     wxBitmap m_bgBitmap;
     bool m_hasBg = false;
 
-    // overlay chrome
-    wxBitmap m_overlaySrc;
-    wxBitmap m_overlayScaled;
-    wxSize   m_overlayScaledSize;
-    bool     m_overlayOk = false;
-
     // widgets
-    wxPanel* m_mapPanel = nullptr;
-    wxPanel* m_bottomPanel = nullptr;
-    wxPanel* m_sidePanel = nullptr;
-    wxPanel* m_toolbarPanel = nullptr;
-    wxPanel* m_overlayPanel = nullptr;
+    wxStaticText* m_lblMoney = nullptr;
+    wxStaticText* m_lblResearch = nullptr;
+    wxStaticText* m_lblTurn = nullptr;
 
-    wxTextCtrl* m_log = nullptr;
+    wxPanel* m_mapPanel = nullptr;
+    wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_roster = nullptr;
 
     wxButton* m_btnResearch = nullptr;

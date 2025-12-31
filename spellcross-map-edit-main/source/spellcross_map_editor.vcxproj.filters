@@ -429,9 +429,6 @@
     <Image Include="wx\msw\colours.bmp">
       <Filter>Resource Files</Filter>
     </Image>
-    <Image Include="C:\Users\nixantora\Downloads\ikony.png">
-      <Filter>Resource Files</Filter>
-    </Image>
   </ItemGroup>
   <ItemGroup>
     <None Include="wx\msw\hand.cur">

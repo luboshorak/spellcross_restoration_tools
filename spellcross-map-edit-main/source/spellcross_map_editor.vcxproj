@@ -147,7 +147,6 @@
     <ResourceCompile Include="resources.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="C:\Users\nixantora\Downloads\ikony.png" />
     <Image Include="ico\map.ICO" />
     <Image Include="ico\multi.png" />
     <Image Include="ico\pal.ico" />

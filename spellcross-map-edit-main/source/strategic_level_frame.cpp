@@ -4,8 +4,6 @@
 
 #include <wx/dcbuffer.h>
 #include <wx/choicdlg.h>
-#include <wx/stdpaths.h>
-#include <wx/graphics.h>
 
 #include <filesystem>
 #include <fstream>
@@ -13,15 +11,25 @@
 #include <algorithm>
 #include <cctype>
 
-static wxString U8(const char* s){ return wxString::FromUTF8(s); }
-static wxString S(const std::string& s){ return wxString::FromUTF8(s.c_str()); }
-
 wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY,      StrategicLevelFrame::OnBuyUnits)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN,  StrategicLevelFrame::OnEndTurn)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
 wxEND_EVENT_TABLE()
+
+static wxString fmt_int(const wxString& label, int v)
+{
+    return wxString::Format("%s %d", label, v);
+}
+
+static std::string trim(std::string s)
+{
+    auto notspace = [](unsigned char c){ return !std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notspace));
+    s.erase(std::find_if(s.rbegin(), s.rend(), notspace).base(), s.end());
+    return s;
+}
 
 static std::string to_upper(std::string s)
 {
@@ -36,10 +44,13 @@ static std::string to_lower(std::string s)
 }
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
-    : wxFrame(parent, wxID_ANY, U8(u8"Strategick\u00e1 mapa"), wxDefaultPosition, wxSize(1100, 700)),
+    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1100, 700)),
       m_main(parent),
       m_level(level)
 {
+    m_money = 0;
+    m_research = 0;
+
     // init territory mission state from LevelData
     for(const auto& t : m_level.territories)
     {
@@ -50,150 +61,116 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     BuildUI();
     TryLoadBackground();
     RefreshUI();
-
-    Bind(wxEVT_SIZE, &StrategicLevelFrame::OnSize, this);
-    Bind(wxEVT_SHOW, [this](wxShowEvent& e){ if(e.IsShown()){ Raise(); SetFocus(); } e.Skip(); });
-    Bind(wxEVT_ACTIVATE, [this](wxActivateEvent& e){ if(e.GetActive()){ Raise(); SetFocus(); } e.Skip(); });
 }
 
 void StrategicLevelFrame::BuildUI()
 {
-    // Force Windows "System" font (legacy), fallback to MS Shell Dlg 2
-    wxFont f;
-    if(!f.SetFaceName("System"))
-        f = wxFontInfo(9).FaceName("MS Shell Dlg 2");
-    f.SetPointSize(9);
-    SetFont(f);
+    auto root = new wxPanel(this);
 
-    // Main content panels (will be positioned by anchors)
-    m_mapPanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    m_bottomPanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    m_sidePanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    m_toolbarPanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    // --- Top bar (Money / Research / Turn) ---
+    auto topBar = new wxPanel(root);
+    topBar->SetBackgroundColour(wxColour(20, 70, 20));
+    auto topSizer = new wxBoxSizer(wxHORIZONTAL);
 
+    m_lblMoney = new wxStaticText(topBar, wxID_ANY, "Money 0");
+    m_lblResearch = new wxStaticText(topBar, wxID_ANY, "Research 0");
+    m_lblTurn = new wxStaticText(topBar, wxID_ANY, "Turn 1");
+
+    auto font = m_lblMoney->GetFont();
+    font.SetPointSize(font.GetPointSize() + 3);
+    font.SetWeight(wxFONTWEIGHT_BOLD);
+    m_lblMoney->SetFont(font);
+    m_lblResearch->SetFont(font);
+    m_lblTurn->SetFont(font);
+
+    m_lblMoney->SetForegroundColour(*wxWHITE);
+    m_lblResearch->SetForegroundColour(*wxWHITE);
+    m_lblTurn->SetForegroundColour(*wxWHITE);
+
+    topSizer->AddStretchSpacer(1);
+    topSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+    topSizer->AddSpacer(20);
+    topSizer->Add(m_lblResearch, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+    topSizer->AddSpacer(20);
+    topSizer->Add(m_lblTurn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+    topSizer->AddSpacer(10);
+    topBar->SetSizer(topSizer);
+
+    // --- Main split: Map (left) + Right panel ---
+    auto mainSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    // Left "map" panel
+    m_mapPanel = new wxPanel(root);
+    m_mapPanel->SetBackgroundColour(wxColour(30, 30, 30));
     m_mapPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_mapPanel->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
 
-    // bottom
-    m_bottomPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_bottomPanel->Bind(wxEVT_PAINT, [this](wxPaintEvent&){
-        wxAutoBufferedPaintDC dc(m_bottomPanel);
-        dc.Clear();
-        dc.SetBrush(*wxBLACK_BRUSH);
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.DrawRectangle(m_bottomPanel->GetClientRect());
-    });
+    m_mapSizer = new wxBoxSizer(wxVERTICAL);
 
-    m_log = new wxTextCtrl(m_bottomPanel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize,
-                           wxTE_MULTILINE | wxTE_READONLY | wxBORDER_NONE);
-    m_log->SetBackgroundColour(*wxBLACK);
-    m_log->SetForegroundColour(wxColour(140,255,140));
-    auto bs = new wxBoxSizer(wxVERTICAL);
-    bs->Add(m_log, 1, wxEXPAND | wxALL, 8);
-    m_bottomPanel->SetSizer(bs);
+    auto mapTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Strategic map");
+    mapTitle->SetForegroundColour(*wxLIGHT_GREY);
+    m_mapSizer->Add(mapTitle, 0, wxALL, 8);
 
-    // side: roster + buttons at bottom (styled)
-    m_sidePanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_sidePanel->Bind(wxEVT_PAINT, [this](wxPaintEvent&){
-        wxAutoBufferedPaintDC dc(m_sidePanel);
-        dc.Clear();
-        dc.SetBrush(*wxBLACK_BRUSH);
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.DrawRectangle(m_sidePanel->GetClientRect());
-    });
+    // Grid pro territory buttony (zatim overlay nad mapou)
+    auto grid = new wxGridSizer(0, 4, 6, 6);
+    for(size_t i = 0; i < m_level.territories.size(); ++i)
+    {
+        const auto& t = m_level.territories[i];
+        auto id = ID_TERRITORY_BASE + (int)i;
 
-    m_roster = new wxListCtrl(m_sidePanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                             wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_NO_HEADER | wxBORDER_NONE);
-    m_roster->SetBackgroundColour(*wxBLACK);
-    m_roster->SetTextColour(wxColour(140,255,140));
-    m_roster->InsertColumn(0, U8(u8"Jednotka"), wxLIST_FORMAT_LEFT, 180);
-    m_roster->InsertColumn(1, U8(u8"Po\u010det"), wxLIST_FORMAT_LEFT, 70);
-    m_roster->InsertColumn(2, U8(u8"HP"), wxLIST_FORMAT_LEFT, 60);
+        wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
+        auto btn = new wxButton(m_mapPanel, id, label, wxDefaultPosition, wxSize(140, 60));
+        btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
+        grid->Add(btn, 0, wxEXPAND);
+    }
 
-    m_btnResearch = new wxButton(m_sidePanel, ID_BTN_RESEARCH, U8(u8"V\u00fdzkum"));
-    m_btnBuy      = new wxButton(m_sidePanel, ID_BTN_BUY,      U8(u8"N\u00e1kup"));
-    m_btnLaunch   = new wxButton(m_sidePanel, ID_BTN_LAUNCH,   U8(u8"Spustit"));
-    m_btnEndTurn  = new wxButton(m_sidePanel, ID_BTN_ENDTURN,  U8(u8"Kolo"));
+    m_mapSizer->Add(grid, 1, wxALL | wxEXPAND, 8);
+    m_mapPanel->SetSizer(m_mapSizer);
 
-    auto ss = new wxBoxSizer(wxVERTICAL);
-    ss->Add(m_roster, 1, wxEXPAND | wxALL, 8);
-    auto btnRow = new wxBoxSizer(wxHORIZONTAL);
-    btnRow->Add(m_btnResearch, 1, wxRIGHT, 6);
-    btnRow->Add(m_btnBuy, 1, wxRIGHT, 6);
-    btnRow->Add(m_btnLaunch, 1, wxRIGHT, 6);
-    btnRow->Add(m_btnEndTurn, 1);
-    ss->Add(btnRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
-    m_sidePanel->SetSizer(ss);
+    // Right panel: roster + actions
+    auto right = new wxPanel(root);
+    right->SetBackgroundColour(wxColour(10, 50, 10));
+    auto rightSizer = new wxBoxSizer(wxVERTICAL);
 
-    // toolbar panel: black for now (icons can be owner-drawn later)
-    m_toolbarPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_toolbarPanel->Bind(wxEVT_PAINT, [this](wxPaintEvent&){
-        wxAutoBufferedPaintDC dc(m_toolbarPanel);
-        dc.Clear();
-        dc.SetBrush(*wxBLACK_BRUSH);
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.DrawRectangle(m_toolbarPanel->GetClientRect());
-    });
+    auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
+    rosterTitle->SetForegroundColour(*wxWHITE);
+    rosterTitle->SetFont(font);
+    rightSizer->Add(rosterTitle, 0, wxALL, 10);
 
-    // Overlay panel on top
-    LoadUiOverlay();
-    m_overlayPanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                 wxBORDER_NONE | wxTRANSPARENT_WINDOW);
-    m_overlayPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_overlayPanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-        wxBORDER_NONE | wxTRANSPARENT_WINDOW);
-    m_overlayPanel->Bind(wxEVT_PAINT, [this](wxPaintEvent&){
-        wxAutoBufferedPaintDC dc(m_overlayPanel);
-        dc.Clear();
-        PaintUiOverlay(dc);
-        PaintHud(dc);
-    });
-    m_overlayPanel->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent&){});
+    m_roster = new wxListCtrl(right, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_roster->InsertColumn(0, "Unit");
+    m_roster->InsertColumn(1, "Count");
+    m_roster->InsertColumn(2, "HP");
+    rightSizer->Add(m_roster, 1, wxALL | wxEXPAND, 10);
 
-    LayoutAnchors();
-    m_overlayPanel->Raise();
-}
+    auto btnSizer = new wxBoxSizer(wxVERTICAL);
+    m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
+    m_btnBuy      = new wxButton(right, ID_BTN_BUY, "Buy units");
+    m_btnLaunch   = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
+    m_btnEndTurn  = new wxButton(right, ID_BTN_ENDTURN, "End turn");
 
-void StrategicLevelFrame::OnSize(wxSizeEvent&)
-{
-    LayoutAnchors();
-    if(m_overlayPanel) m_overlayPanel->Refresh();
-    if(m_mapPanel) m_mapPanel->Refresh();
-}
+    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuy,      0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 12);
+    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND);
 
-// Normalized anchors from 2048x1365 transparent layout
-static wxRect ScaleRect(const wxSize& sz, int x, int y, int w, int h)
-{
-    const double sx = sz.x / 2048.0;
-    const double sy = sz.y / 1365.0;
-    return wxRect((int)std::lround(x*sx), (int)std::lround(y*sy), (int)std::lround(w*sx), (int)std::lround(h*sy));
-}
+    rightSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+    right->SetSizer(rightSizer);
 
-void StrategicLevelFrame::LayoutAnchors()
-{
-    wxSize sz = GetClientSize();
-    if(sz.x <= 0 || sz.y <= 0) return;
+    mainSizer->Add(m_mapPanel, 2, wxEXPAND);
+    mainSizer->Add(right, 1, wxEXPAND);
 
-    // These numbers match the holes you drew (adjust if needed)
-    wxRect rcMap   = ScaleRect(sz,  84,  44, 1184, 756);
-    wxRect rcBot   = ScaleRect(sz,  92, 948, 1176, 360);
-    wxRect rcSide  = ScaleRect(sz, 1352,  76,  360, 1140);
-    wxRect rcTool  = ScaleRect(sz, 1840, 364,  148,  824);
-
-    if(m_mapPanel) m_mapPanel->SetSize(rcMap);
-    if(m_bottomPanel) m_bottomPanel->SetSize(rcBot);
-    if(m_sidePanel) m_sidePanel->SetSize(rcSide);
-    if(m_toolbarPanel) m_toolbarPanel->SetSize(rcTool);
-    if(m_overlayPanel) m_overlayPanel->SetSize(wxRect(0,0,sz.x,sz.y));
-
-    // Layout child sizers
-    if(m_bottomPanel) m_bottomPanel->Layout();
-    if(m_sidePanel) m_sidePanel->Layout();
+    auto rootSizer = new wxBoxSizer(wxVERTICAL);
+    rootSizer->Add(topBar, 0, wxEXPAND);
+    rootSizer->Add(mainSizer, 1, wxEXPAND);
+    root->SetSizer(rootSizer);
 }
 
 void StrategicLevelFrame::RefreshUI()
 {
-    if(!m_roster) return;
+    m_lblMoney->SetLabel(fmt_int("Money", m_money));
+    m_lblResearch->SetLabel(fmt_int("Research", m_research));
+    m_lblTurn->SetLabel(fmt_int("Turn", m_turn));
 
     m_roster->DeleteAllItems();
     for(size_t i = 0; i < m_level.start_units.size(); ++i)
@@ -204,15 +181,11 @@ void StrategicLevelFrame::RefreshUI()
         m_roster->SetItem(idx, 2, wxString::Format("%d", u.health));
     }
 
-    m_roster->SetColumnWidth(0, wxLIST_AUTOSIZE);
-    m_roster->SetColumnWidth(1, wxLIST_AUTOSIZE);
-    m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE);
+    m_roster->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
+    m_roster->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
+    m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
 
-    if(m_btnLaunch)
-        m_btnLaunch->Enable(m_selectedTerritory >= 0);
-
-    if(m_overlayPanel)
-        m_overlayPanel->Refresh();
+    m_btnLaunch->Enable(m_selectedTerritory >= 0);
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
@@ -226,12 +199,20 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
     const auto& t = m_level.territories[idx];
     wxString info;
     info << wxString::Format("Territory %d\n", t.id);
-    info << U8(u8"Mise: ") << S(t.mission) << "\n";
-    info << U8(u8"Intro: ") << S(t.intro_mission) << "\n";
-    info << U8(u8"Hudba: ") << S(t.music) << "\n";
+    info << "Mission: " << t.mission << "\n";
+    info << "Intro: " << t.intro_mission << "\n";
+    info << "Music: " << t.music << "\n";
     info << wxString::Format("Strategic point: %d,%d\n", t.strategic_x, t.strategic_y);
 
-    wxMessageBox(info, U8(u8"\u00dazem\u00ed"), wxOK | wxICON_INFORMATION, this);
+    auto itc = m_territoryCurrentMission.find(t.id);
+    if(itc != m_territoryCurrentMission.end())
+        info << "Current: " << itc->second << "\n";
+
+    auto itn = m_territoryLaunchCount.find(t.id);
+    if(itn != m_territoryLaunchCount.end())
+        info << wxString::Format("Played: %d\n", itn->second);
+
+    wxMessageBox(info, "Territory", wxOK | wxICON_INFORMATION, this);
     RefreshUI();
 }
 
@@ -241,30 +222,35 @@ void StrategicLevelFrame::OnResearch(wxCommandEvent&)
         m_money -= 100;
         m_research += 1;
     } else {
-        wxMessageBox(U8(u8"Nedostatek pen\u011bz (demo cena 100)."), U8(u8"V\u00fdzkum"), wxOK | wxICON_WARNING, this);
+        wxMessageBox("Not enough money for research (demo cost 100).", "Research", wxOK | wxICON_WARNING, this);
     }
     RefreshUI();
 }
 
 void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
 {
-    wxMessageBox(U8(u8"N\u00e1kup jednotek (stub)."), U8(u8"N\u00e1kup"), wxOK | wxICON_INFORMATION, this);
+    wxMessageBox("Unit shop stub.\n\nSem pozdeji napojime ceny a availability podle research flagu.",
+                 "Buy units", wxOK | wxICON_INFORMATION, this);
 }
 
 const LevelMission* StrategicLevelFrame::FindMissionByNameUpper(const std::string& name_upper) const
 {
     for(const auto& m : m_level.missions)
+    {
         if(to_upper(m.name) == name_upper)
             return &m;
+    }
     return nullptr;
 }
 
 std::string StrategicLevelFrame::ResolveMissionTokenForTerritory(int territory_id) const
 {
+    // first play can use intro
     int launches = 0;
     auto itL = m_territoryLaunchCount.find(territory_id);
     if(itL != m_territoryLaunchCount.end()) launches = itL->second;
 
+    // find territory record
     const LevelTerritory* terr = nullptr;
     for(const auto& t : m_level.territories)
         if(t.id == territory_id) { terr = &t; break; }
@@ -290,6 +276,7 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
     namespace fs = std::filesystem;
     fs::path base = fs::path(m_level.source_path).parent_path();
 
+    // 1) exact match (preferred)
     fs::path pExact1 = base / (to_upper(mission_token) + ".DEF");
     fs::path pExact2 = base / (mission_token + ".DEF");
     fs::path pExact3 = base / (mission_token + ".def");
@@ -298,6 +285,7 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
     if(fs::exists(pExact2)) return pExact2.wstring();
     if(fs::exists(pExact3)) return pExact3.wstring();
 
+    // 2) if token is base (e.g. m02_03) and multiple variants exist (m02_03a/b/c), offer choice
     std::string up = to_upper(mission_token);
 
     std::vector<fs::path> candidates;
@@ -308,7 +296,7 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
         if(ext != ".DEF") continue;
 
         std::string stem = to_upper(ent.path().stem().string());
-        if(stem.rfind(up, 0) == 0)
+        if(stem.rfind(up, 0) == 0) // starts with
             candidates.push_back(ent.path());
     }
 
@@ -324,10 +312,7 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
     for(const auto& c : candidates)
         choices.Add(wxString(c.filename().wstring()));
 
-    wxSingleChoiceDialog dlg(const_cast<StrategicLevelFrame*>(this),
-        U8(u8"Nalezeno v\u00edce variant mise. Kterou na\u010d\u00edst?"),
-        U8(u8"Vybrat misi"), choices);
-
+    wxSingleChoiceDialog dlg(const_cast<StrategicLevelFrame*>(this), "Multiple mission variants found. Which one to load?", "Select mission", choices);
     if(dlg.ShowModal() != wxID_OK)
         return L"";
 
@@ -351,19 +336,26 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     std::wstring defPath = ResolveMapDefPathForMissionToken(token);
     if(defPath.empty())
     {
-        wxMessageBox(U8(u8"Nenalezen map DEF pro misi: ") + S(token), U8(u8"Spustit"), wxOK | wxICON_WARNING, this);
+        wxMessageBox("Map DEF not found for mission: " + wxString(token), "Launch", wxOK | wxICON_WARNING, this);
         return;
     }
 
     if(!m_main->LoadMapFromDefPath(defPath))
         return;
 
+    // update launch count
     m_territoryLaunchCount[terr_id] += 1;
 
+    // very simple progression for multi-variant missions:
+    // if Mission(MXX_YYA) has EndOKMission(MXX_YYB) -> advance.
     const std::string upperName = to_upper(token);
     if(const LevelMission* m = FindMissionByNameUpper(upperName))
+    {
         if(!m->end_ok_mission.empty() && m->end_ok_mission != "none")
+        {
             m_territoryCurrentMission[terr_id] = to_lower(m->end_ok_mission);
+        }
+    }
 
     RefreshUI();
 }
@@ -405,6 +397,7 @@ void StrategicLevelFrame::TryLoadBackground()
     if(!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
         return;
 
+    // Spellcross palettes are commonly 64*3 = 192 bytes
     if(palBytes.size() != 192 || lzBytes.size() < 4)
         return;
 
@@ -415,6 +408,8 @@ void StrategicLevelFrame::TryLoadBackground()
     unsigned w = rd16(0);
     unsigned h = rd16(2);
     const size_t need = 4ull + (size_t)w * (size_t)h;
+
+    // best-effort: some LZ files may not be raw (compressed). If this check fails, just skip.
     if(w == 0 || h == 0 || need > lzBytes.size())
         return;
 
@@ -436,9 +431,9 @@ void StrategicLevelFrame::TryLoadBackground()
         rgb[o + 2] = b;
     }
 
-    img.Rescale(300, 150, wxIMAGE_QUALITY_BICUBIC);
     m_bgBitmap = wxBitmap(img);
     m_hasBg = m_bgBitmap.IsOk();
+    if(m_mapPanel) m_mapPanel->Refresh();
 }
 
 void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
@@ -446,86 +441,16 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
     wxAutoBufferedPaintDC dc(m_mapPanel);
     dc.Clear();
 
-    dc.SetBrush(*wxBLACK_BRUSH);
-    dc.SetPen(*wxTRANSPARENT_PEN);
-    dc.DrawRectangle(m_mapPanel->GetClientRect());
-
     if(m_hasBg)
     {
-        wxSize sz = m_mapPanel->GetClientSize();
-        wxSize bsz = m_bgBitmap.GetSize();
-        int x = (sz.x - bsz.x) / 2;
-        int y = (sz.y - bsz.y) / 2;
+        int pw, ph;
+        m_mapPanel->GetClientSize(&pw, &ph);
+
+        int bw = m_bgBitmap.GetWidth();
+        int bh = m_bgBitmap.GetHeight();
+
+        int x = (pw - bw) / 2;
+        int y = (ph - bh) / 2;
         dc.DrawBitmap(m_bgBitmap, x, y, false);
     }
-
-    // Territory buttons: for now keep the old grid as an overlay, but style it minimal.
-    // (We'll replace with clickable regions later.)
-    // If you still want buttons, create them elsewhere; painting only here.
-}
-
-void StrategicLevelFrame::LoadUiOverlay()
-{
-    // resources/Spell_new_ui_vectorized_transparent.png (next to EXE)
-    wxFileName exe(wxStandardPaths::Get().GetExecutablePath());
-    wxString p = exe.GetPathWithSep() + "resources" + wxFILE_SEP_PATH + "Spell_new_ui_vectorized_transparent.png";
-
-    wxImage img;
-    if(!img.LoadFile(p))
-    {
-        m_overlayOk = false;
-        wxMessageBox(U8(u8"Nelze na\u010d\u00edst UI overlay: ") + p,
-                     U8(u8"Chyba"), wxOK | wxICON_WARNING, this);
-        return;
-    }
-
-    m_overlaySrc = wxBitmap(img);
-    m_overlayOk = m_overlaySrc.IsOk();
-    m_overlayScaled = wxBitmap();
-    m_overlayScaledSize = wxSize();
-}
-
-void StrategicLevelFrame::PaintUiOverlay(wxDC& dc)
-{
-    if(!m_overlayOk) return;
-
-    wxSize sz = GetClientSize();
-    if(sz.x <= 0 || sz.y <= 0) return;
-
-    if(!m_overlayScaled.IsOk() || m_overlayScaledSize != sz)
-    {
-        wxImage img = m_overlaySrc.ConvertToImage();
-        img.Rescale(sz.x, sz.y, wxIMAGE_QUALITY_BICUBIC);
-        m_overlayScaled = wxBitmap(img);
-        m_overlayScaledSize = sz;
-    }
-
-    dc.DrawBitmap(m_overlayScaled, 0, 0, true);
-}
-
-void StrategicLevelFrame::PaintHud(wxDC& dc)
-{
-    // HUD text goes into the top-right green window area (scaled)
-    wxSize sz = GetClientSize();
-    if(sz.x <= 0 || sz.y <= 0) return;
-
-    wxRect rcHud = ScaleRect(sz, 1834, 82, 151, 268);
-
-    auto gc = wxGraphicsContext::Create(&dc);
-    if(!gc) return;
-
-    wxFont f = GetFont();
-    f.SetPointSize(11);
-    f.SetWeight(wxFONTWEIGHT_BOLD);
-    gc->SetFont(f, wxColour(80, 255, 80));
-
-    int x = rcHud.x + 18;
-    int y = rcHud.y + 18;
-    int lh = 26;
-
-    gc->DrawText(wxString::Format(U8(u8"Pen\u00edze! %d"), m_money), x, y); y += lh;
-    gc->DrawText(wxString::Format(U8(u8"V\u00fdzkum %d"), m_research), x, y); y += lh;
-    gc->DrawText(wxString::Format(U8(u8"Kolo %d"), m_turn), x, y);
-
-    delete gc;
 }
