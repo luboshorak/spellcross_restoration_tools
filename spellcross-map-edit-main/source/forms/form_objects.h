@@ -50,6 +50,7 @@ class FormObjects : public wxFrame
 		SpellObject *m_spell_obj;
 		SpellL2classRec* m_l2_obj;
 
+		int m_l2_kind = L2_NONE;
 
 		static constexpr int TERR_ID0 = 990;
 
@@ -96,17 +97,20 @@ class FormObjects : public wxFrame
 		void OnLoadObjects(wxCommandEvent& event);
 
 		wxTreeItemId m_drag_item;
+		enum L2Kind { L2_NONE = 0, L2_WALL = 1, L2_BRIDGE = 2, L2_SPEC = 3 };
+
 		class TreeNode : public wxTreeItemData {
 		public:
 			SpellObject* m_obj = NULL;
 			SpellL2classRec* m_l2 = NULL;
+			int m_l2_kind = L2_NONE;
 			int m_class_id = 0;
 			int m_tool_id = 0;
 
-			TreeNode(SpellObject* obj) { m_obj = obj; };
-			TreeNode(SpellL2classRec* rec) { m_l2 = rec; };
-			TreeNode(int class_id) { m_class_id = class_id; };
-			TreeNode(int class_id, int tool_id) { m_class_id = class_id; m_tool_id = tool_id; };
+			TreeNode(SpellObject* obj) { m_obj = obj; }
+			TreeNode(SpellL2classRec* rec, int kind) { m_l2 = rec; m_l2_kind = kind; }
+			TreeNode(int class_id) { m_class_id = class_id; }
+			TreeNode(int class_id, int tool_id) { m_class_id = class_id; m_tool_id = tool_id; }
 		};
 
 

@@ -165,7 +165,7 @@
     <ClCompile Include="level.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="form_level.cpp">
+    <ClCompile Include="forms\form_level.cpp">
       <Filter>Source Files\forms</Filter>
     </ClCompile>
   </ItemGroup>
@@ -374,7 +374,7 @@
     <ClInclude Include="level.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="form_level.h">
+    <ClInclude Include="forms\form_level.h">
       <Filter>Header Files\forms</Filter>
     </ClInclude>
   </ItemGroup>

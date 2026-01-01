@@ -33,6 +33,7 @@
     <ClCompile Include="forms\form_events.cpp" />
     <ClCompile Include="forms\form_flags.cpp" />
     <ClCompile Include="forms\form_gr_view.cpp" />
+    <ClCompile Include="forms\form_level.cpp" />
     <ClCompile Include="forms\form_loader.cpp" />
     <ClCompile Include="forms\form_map_options.cpp" />
     <ClCompile Include="forms\form_map_units_list.cpp" />
@@ -70,7 +71,6 @@
     <ClCompile Include="spell_units.cpp" />
     <ClCompile Include="spell_video.cpp" />
     <ClCompile Include="sprites.cpp" />
-    <ClCompile Include="form_level.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cxxmidi\converters.hpp" />
@@ -100,6 +100,7 @@
     <ClInclude Include="forms\form_events.h" />
     <ClInclude Include="forms\form_flags.h" />
     <ClInclude Include="forms\form_gr_view.h" />
+    <ClInclude Include="forms\form_level.h" />
     <ClInclude Include="forms\form_loader.h" />
     <ClInclude Include="forms\form_map_options.h" />
     <ClInclude Include="forms\form_map_units_list.h" />
@@ -119,7 +120,6 @@
     <ClInclude Include="fsu_archive.h" />
     <ClInclude Include="fs_archive.h" />
     <ClInclude Include="level.h" />
-    <ClInclude Include="form_level.h" />
     <ClInclude Include="wx_other.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="riff_loader.h" />

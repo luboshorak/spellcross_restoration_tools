@@ -495,6 +495,7 @@ void FormObjects::OnTreeSelectionChanged(wxTreeEvent& evt)
 	{
 		m_spell_obj = NULL;
 		m_l2_obj = NULL;
+		m_l2_kind = L2_NONE;
 		canvas->Refresh();
 		evt.Skip();
 		return;
@@ -502,6 +503,8 @@ void FormObjects::OnTreeSelectionChanged(wxTreeEvent& evt)
 
 	m_spell_obj = node->m_obj;
 	m_l2_obj = node->m_l2;
+	m_l2_kind = node->m_l2_kind;
+
 	canvas->Refresh();
 }
 
@@ -643,6 +646,7 @@ void FormObjects::SelectTerrain()
 	Terrain* terr = FindTerrain();
 	m_spell_obj = NULL;
 	m_l2_obj = NULL;
+	m_l2_kind = L2_NONE;
 
 
 	if (!terr)
@@ -704,6 +708,11 @@ void FormObjects::OnSaveObjects(wxCommandEvent& event)
 	terrain->SaveSpriteContext(path);
 }
 
+static char hex_digit(int v)
+{
+	v &= 0xF;
+	return (v < 10) ? char('0' + v) : char('A' + (v - 10));
+}
 
 // render preview
 void FormObjects::OnPaintCanvas(wxPaintEvent& event)
@@ -736,15 +745,54 @@ void FormObjects::OnPaintCanvas(wxPaintEvent& event)
             Terrain* found_terr = NULL;
             Sprite* found_spr = NULL;
 
-            // najdi první terrain, který obsahuje sprite odpovídající tagu (wildcard)
-            for(int k = 0; k < spell_data->GetTerrainCount(); k++)
-            {
-                auto* terr = spell_data->GetTerrain(k);
-                if(!terr) continue;
+            // Najdi první terrain, který obsahuje sprite odpovídající tagu (wildcard)
+            std::string pat;
+			// SPECOBJ: už má správný wildcard tag typu SOA?_000
+			if (m_l2_kind == L2_SPEC)
+			{
+				pat = m_l2_obj->tag;
+			}
+			// MURY: sprity jsou MRA??_??, class_id je v hex na pozici [3]
+			// jako reprezentativní dílek zvolíme „5“ (rovná èást) a zbytek wildcard
+			else if (m_l2_kind == L2_WALL)
+			{
+				int cls = (m_l2_obj->index & 0x03);   // 0..3
+				char h = hex_digit(cls | 0x08);       // 0x08 = „intact“ varianta (podle logiky ve sprites.cpp)
+				pat = "MRA";
+				pat += h;
+				pat += "5_??";
+			}
+			// MOSTY: sprity jsou MTA1A_?? (tøída A..D na pozici [4])
+			else if (m_l2_kind == L2_BRIDGE)
+			{
+				int cls = (m_l2_obj->index & 0x03);   // 0..3
+				char c = char('A' + cls);            // A..D
 
-                found_spr = terr->GetSpriteWild(m_l2_obj->tag.c_str(), Terrain::FIRST);
-                if(found_spr) { found_terr = terr; break; }
-            }
+				pat = "MTA1";
+				pat += c;        // A..D
+				pat += "_??";    // napø. _01
+			}
+
+			if (!pat.empty())
+			{
+				for (int k = 0; k < spell_data->GetTerrainCount(); k++)
+				{
+					auto* terr = spell_data->GetTerrain(k);
+					if (!terr) continue;
+
+					found_spr = terr->GetSpriteWild(pat.c_str(), Terrain::FIRST);
+					if (found_spr) { found_terr = terr; break; }
+				}
+			}
+
+			if (sbar)
+			{
+				if (found_spr)
+					sbar->SetStatusText(wxString::Format("Preview pattern: %s", pat));
+				else
+				 sbar->SetStatusText(wxString::Format("Sprite not found. Pattern tried: %s", pat));
+			}
+
 
             if(found_terr && found_spr)
             {
@@ -840,19 +888,19 @@ void FormObjects::FillToolsClasses()
 			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
 		for (auto* rec : spell_data->L2_classes->GetWallList())
 			treeCtrlClasses->AppendItem(walls, rec->name,
-				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec));
+				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec, L2_WALL));
 
 		auto bridges = treeCtrlClasses->AppendItem(l2root, "Bridges (MOSTY)",
 			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
 		for (auto* rec : spell_data->L2_classes->GetBridgeList())
 			treeCtrlClasses->AppendItem(bridges, rec->name,
-				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec));
+				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec, L2_BRIDGE));
 
 		auto spec = treeCtrlClasses->AppendItem(l2root, "Special objects (SPECOBJ)",
 			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
 		for (auto* rec : spell_data->L2_classes->GetSpecList())
 			treeCtrlClasses->AppendItem(spec, rec->name,
-				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec));
+				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec, L2_SPEC));
 	}
 
 
