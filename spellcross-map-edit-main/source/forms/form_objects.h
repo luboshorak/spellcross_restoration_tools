@@ -48,6 +48,8 @@ class FormObjects : public wxFrame
 		SpellData* spell_data;
 		SpellMap* spell_map;
 		SpellObject *m_spell_obj;
+		SpellL2classRec* m_l2_obj;
+
 
 		static constexpr int TERR_ID0 = 990;
 
@@ -91,16 +93,22 @@ class FormObjects : public wxFrame
 		void RenameToolset(int toolset_class_id,std::string title);
 		void SortItems();
 
+		void OnLoadObjects(wxCommandEvent& event);
+
 		wxTreeItemId m_drag_item;
-		class TreeNode : wxTreeItemData{
+		class TreeNode : public wxTreeItemData {
 		public:
-			SpellObject *m_obj = NULL;
+			SpellObject* m_obj = NULL;
+			SpellL2classRec* m_l2 = NULL;
 			int m_class_id = 0;
 			int m_tool_id = 0;
-			TreeNode(SpellObject *obj) {m_obj = obj;};
-			TreeNode(int class_id) { m_class_id = class_id;};
+
+			TreeNode(SpellObject* obj) { m_obj = obj; };
+			TreeNode(SpellL2classRec* rec) { m_l2 = rec; };
+			TreeNode(int class_id) { m_class_id = class_id; };
 			TreeNode(int class_id, int tool_id) { m_class_id = class_id; m_tool_id = tool_id; };
 		};
+
 
 		wxImageList* imlist = NULL;
 		enum Icons{
@@ -126,6 +134,8 @@ class FormObjects : public wxFrame
 			wxID_MM_NEW_CLASS,
 			wxID_MM_NEW_TOOL,
 			wxID_MM_EDIT_TOOLSET,
+			wxID_MM_LOAD_OBJECTS,
+
 		};
 
 		wxStatusBar* sbar;

@@ -4,19 +4,31 @@
 
 class wxListCtrlVirtual : public wxListCtrl {
 private:
-	std::function<wxString(long item)> m_get_item_text_cb;
+	std::function<wxString(long item, long column)> m_get_item_text_cb;
 	std::function<int(long item)> m_get_item_image_cb;
-	wxString OnGetItemText(long item,long column) const { if(m_get_item_text_cb) return(m_get_item_text_cb(item)); };
-	int OnGetItemImage(long item) const { if(m_get_item_image_cb) return(m_get_item_image_cb(item)); };
-public:
-	wxListCtrlVirtual(wxWindow* parent,wxWindowID id,const wxPoint& pos=wxDefaultPosition,const wxSize& size=wxDefaultSize,long style=wxLC_ICON,const wxValidator& validator=wxDefaultValidator,const wxString& name=wxListCtrlNameStr)
-		: wxListCtrl(parent,id,pos,size,style,validator,name) {};
-	//virtual ~wxListCtrlSprite() = default;
 
-	// set callback function for wxListCtrl->GetItemText() callback
-	void SetGetItemTextCb(std::function<wxString(long item)> cb) { m_get_item_text_cb = cb;};
-	// set callback function for wxListCtrl->GetItemImage() callback
-	void SetGetItemImageCb(std::function<int(long item)> cb) { m_get_item_image_cb = cb; };
+protected:
+	wxString OnGetItemText(long item, long column) const override {
+		if (m_get_item_text_cb) return m_get_item_text_cb(item, column);
+		return wxString(); // <-- dùležité
+	}
+
+	int OnGetItemImage(long item) const override {
+		if (m_get_item_image_cb) return m_get_item_image_cb(item);
+		return -1; // <-- dùležité (žádná ikona)
+	}
+
+public:
+	wxListCtrlVirtual(wxWindow* parent, wxWindowID id,
+		const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxDefaultSize,
+		long style = wxLC_REPORT | wxLC_VIRTUAL,
+		const wxValidator& validator = wxDefaultValidator,
+		const wxString& name = wxListCtrlNameStr)
+		: wxListCtrl(parent, id, pos, size, style, validator, name) {
+	}
+
+	void SetGetItemTextCb(std::function<wxString(long item, long column)> cb) { m_get_item_text_cb = std::move(cb); }
+	void SetGetItemImageCb(std::function<int(long item)> cb) { m_get_item_image_cb = std::move(cb); }
 };
 
 

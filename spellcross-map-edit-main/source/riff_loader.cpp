@@ -25,7 +25,7 @@ RIFF::RIFF(uint8_t* data,int len)
     uint32_t riff_len = *(uint32_t*)dptr; dptr += sizeof(uint32_t);
     if(riff_len + 8 > len)
         throw std::runtime_error("Input RIFF file possibly incomplete!");
-    auto riffend = &dptr[len];
+    auto riffend = data + 8 + riff_len;
 
     // check format
     if(std::memcmp(dptr,"WAVE",4) != 0)
@@ -68,7 +68,7 @@ RIFF::RIFF(uint8_t* data,int len)
             
             complete_level++;
         }
-        dptr += sub_chunk_size;
+        dptr += sub_chunk_size + (sub_chunk_size & 1);
     
     }while(dptr < riffend && complete_level < 2);
     if(complete_level != 2)

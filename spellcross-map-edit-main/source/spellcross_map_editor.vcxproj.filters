@@ -165,8 +165,8 @@
     <ClCompile Include="level.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="strategic_level_frame.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="form_level.cpp">
+      <Filter>Source Files\forms</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -374,8 +374,8 @@
     <ClInclude Include="level.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="strategic_level_frame.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="form_level.h">
+      <Filter>Header Files\forms</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

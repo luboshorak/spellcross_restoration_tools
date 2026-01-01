@@ -42,7 +42,7 @@
 #include "level.h"
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
-#include "strategic_level_frame.h"
+#include "form_level.h"
 
 bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
 {

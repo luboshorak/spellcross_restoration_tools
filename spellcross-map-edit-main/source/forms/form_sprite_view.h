@@ -276,7 +276,7 @@ class FormSprite : public wxFrame
 		wxListCtrlVirtual* lboxSprites;
 
 		wxTreeItemId m_drag_item;
-		class TreeNode : wxTreeItemData {
+		class TreeNode : public wxTreeItemData {
 		public:
 			Sprite* m_spr = NULL;
 			int m_class_id = -1;

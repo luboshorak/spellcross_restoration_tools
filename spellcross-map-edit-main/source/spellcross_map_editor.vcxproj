@@ -70,7 +70,7 @@
     <ClCompile Include="spell_units.cpp" />
     <ClCompile Include="spell_video.cpp" />
     <ClCompile Include="sprites.cpp" />
-    <ClCompile Include="strategic_level_frame.cpp" />
+    <ClCompile Include="form_level.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cxxmidi\converters.hpp" />
@@ -119,7 +119,7 @@
     <ClInclude Include="fsu_archive.h" />
     <ClInclude Include="fs_archive.h" />
     <ClInclude Include="level.h" />
-    <ClInclude Include="strategic_level_frame.h" />
+    <ClInclude Include="form_level.h" />
     <ClInclude Include="wx_other.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="riff_loader.h" />

@@ -10,6 +10,7 @@
 #include "sprites.h"
 #include "other.h"
 #include "wx_other.h"
+#include <wx/dcmemory.h>
 
 #include <filesystem>
 #include <regex>
@@ -69,15 +70,17 @@ FormObjects::FormObjects( wxWindow* parent,SpellData* spell_data,wxWindowID id, 
 
 	slideGamma = new wxSlider(this,wxID_SLIDE_GAMMA,1300,500,2000,wxDefaultPosition,wxDefaultSize,wxSL_HORIZONTAL);
 	szrView->Add(slideGamma,0,wxEXPAND|wxALL,1);
-
-
 	szrMain->Add(szrView,1,wxEXPAND,5);
-
 
 	this->SetSizer(szrMain);
 	this->Layout();
 	m_menubar2 = new wxMenuBar(0);
 	mnuFile = new wxMenu();
+
+	wxMenuItem* btnLoadList;
+	btnLoadList = new wxMenuItem(mnuFile, wxID_MM_LOAD_OBJECTS, wxString(wxT("Load objects context")), wxEmptyString, wxITEM_NORMAL);
+	mnuFile->Append(btnLoadList);
+
 	wxMenuItem* btnSaveList;
 	btnSaveList = new wxMenuItem(mnuFile,wxID_MM_SAVE_OBJECTS,wxString(wxT("Save objects")),wxEmptyString,wxITEM_NORMAL);
 	mnuFile->Append(btnSaveList);
@@ -171,6 +174,7 @@ FormObjects::FormObjects( wxWindow* parent,SpellData* spell_data,wxWindowID id, 
 	Bind(wxEVT_MENU,&FormObjects::OnNewClass,this,wxID_MM_NEW_CLASS);
 	Bind(wxEVT_MENU,&FormObjects::OnNewTool,this,wxID_MM_NEW_TOOL);
 	Bind(wxEVT_MENU,&FormObjects::OnEditToolset,this,wxID_MM_EDIT_TOOLSET);
+	Bind(wxEVT_MENU, &FormObjects::OnLoadObjects, this, wxID_MM_LOAD_OBJECTS);
 
 
 	// canvas stuff:
@@ -365,6 +369,40 @@ void FormObjects::OnTreeClassEndLabelEdit(wxTreeEvent& evt)
 	obj->m_obj->SetDescription(text);
 }
 
+void FormObjects::OnLoadObjects(wxCommandEvent& event)
+{
+	Terrain* terr = FindTerrain();
+	if (!terr)
+		return;
+
+	wxFileDialog dlg(
+		this,
+		"Load Spellcross terrain context file",
+		"",
+		"",
+		"Context file (*.con)|*.con|All files (*.*)|*.*",
+		wxFD_OPEN | wxFD_FILE_MUST_EXIST
+	);
+
+	if (dlg.ShowModal() != wxID_OK)
+		return;
+
+	std::wstring path = dlg.GetPath().ToStdWstring();
+
+	// InitSpriteContext vrací int – pøedpokládám 0 = OK, jinak fail
+	if (terr->InitSpriteContext(path) != 0)
+	{
+		wxMessageBox("Failed to load context file.", "Error", wxICON_ERROR);
+		return;
+	}
+
+	FillToolsClasses();
+	canvas->Refresh();
+
+	if (sbar)
+		sbar->SetStatusText(wxString::Format("Loaded objects: %d", terr->GetObjectsCount()));
+}
+
 
 void FormObjects::OnTreeClassBeginDrag(wxTreeEvent& evt)
 {
@@ -452,20 +490,21 @@ void FormObjects::OnTreeClassEndDrag(wxTreeEvent& evt)
 void FormObjects::OnTreeSelectionChanged(wxTreeEvent& evt)
 {
 	wxTreeItemId selectedNode = evt.GetItem();
-	auto *obj = (TreeNode*)treeCtrlClasses->GetItemData(selectedNode);
-	if(!obj)
+	auto* node = (TreeNode*)treeCtrlClasses->GetItemData(selectedNode);
+	if (!node)
 	{
-		// root
+		m_spell_obj = NULL;
+		m_l2_obj = NULL;
+		canvas->Refresh();
 		evt.Skip();
-		return; 
+		return;
 	}
-	
-	//FillToolItemsList();
 
-	// is node
-	m_spell_obj = obj->m_obj;
-	canvas->Refresh();	
+	m_spell_obj = node->m_obj;
+	m_l2_obj = node->m_l2;
+	canvas->Refresh();
 }
+
 
 // edit toolset class properties
 void FormObjects::OnEditToolset(wxCommandEvent& evt)
@@ -533,9 +572,6 @@ void FormObjects::OnTreeClassMenuClick(wxCommandEvent& evt)
 	}
 }
 
-
-
-
 FormObjects::~FormObjects()
 {
 	delete imlist;
@@ -582,30 +618,56 @@ void FormObjects::SetMap(SpellMap* map)
 // find terrain selected
 Terrain* FormObjects::FindTerrain()
 {
-	for(int k = 0;k<spell_data->GetTerrainCount();k++)
+	// 1) preferuj checked položku
+	for (int k = 0; k < spell_data->GetTerrainCount(); k++)
 	{
-		if(GetMenuBar()->FindItem(TERR_ID0 + k)->IsChecked())
-		{
-			// found selection
-			Terrain* terr = spell_data->GetTerrain(k);
-			return(terr);
-		}
+		auto* mi = GetMenuBar()->FindItem(TERR_ID0 + k);
+		if (mi && mi->IsChecked())
+			return spell_data->GetTerrain(k);
 	}
-	return(NULL);
+
+	// 2) fallback: pokud nic není checked, vynu první terén
+	if (spell_data->GetTerrainCount() > 0)
+	{
+		auto* mi0 = GetMenuBar()->FindItem(TERR_ID0 + 0);
+		if (mi0) mi0->Check(true);
+		return spell_data->GetTerrain(0);
+	}
+
+	return NULL;
 }
-
-
-
-
-
 
 // call when terrain is selected
 void FormObjects::SelectTerrain()
-{	
-	Terrain *terr = FindTerrain();
+{
+	Terrain* terr = FindTerrain();
 	m_spell_obj = NULL;
-	
+	m_l2_obj = NULL;
+
+
+	if (!terr)
+		return;
+
+	// 1) Pokud ještì nejsou objekty, zkus naèíst sprite context (.con)
+	//    (pokud už ho známe z minula / z konfigurace)
+	auto& ctx = terr->GetSpriteContextPath();
+	if (terr->GetObjectsCount() == 0 && !ctx.empty())
+	{
+		terr->InitSpriteContext(ctx);
+	}
+
+	// 2) Pokud poøád nic, aspoò to dej vìdìt do statusbaru (a víš, že je to data-issue)
+	if (terr->GetObjectsCount() == 0)
+	{
+		sbar->SetStatusText("No objects loaded for this terrain (missing .con context?)");
+	}
+	else
+	{
+		sbar->SetStatusText(wxString::Format("Objects loaded: %d", terr->GetObjectsCount()));
+	}
+
 	FillToolsClasses();
+	canvas->Refresh();
 }
 
 // change gamma
@@ -645,33 +707,56 @@ void FormObjects::OnSaveObjects(wxCommandEvent& event)
 
 // render preview
 void FormObjects::OnPaintCanvas(wxPaintEvent& event)
-{	
-	// make render buffer
-	wxBitmap bmp(canvas->GetClientSize(),24);
+{
+    wxSize sz = canvas->GetClientSize();
+    wxBitmap bmp(sz, 24);
 
-	if(m_spell_obj)
-	{					
-		// get this terrain
-		Terrain* terrain = FindTerrain();
-		if(terrain)
-		{
-			// check object exist (just in case)
-			if(std::find(terrain->objects.begin(),terrain->objects.end(),m_spell_obj) != terrain->objects.end())
-			{
-				// render preview
-				double gamma = 0.001*(double)slideGamma->GetValue();
-				m_spell_obj->RenderPreview(bmp, gamma);
-			}
-		}
-	}
-	
-	// blit to screen
-	wxPaintDC pdc(canvas);
-	pdc.DrawBitmap(bmp,wxPoint(0,0));
+    {
+        wxMemoryDC mdc(bmp);
+        mdc.SetBackground(*wxBLACK_BRUSH);
+        mdc.Clear();
+
+        // --- SpellObject preview (editor context objects)
+        if(m_spell_obj)
+        {
+            Terrain* terrain = FindTerrain();
+            if(terrain)
+            {
+                if(std::find(terrain->objects.begin(), terrain->objects.end(), m_spell_obj) != terrain->objects.end())
+                {
+                    double gamma = 0.001 * (double)slideGamma->GetValue();
+                    m_spell_obj->RenderPreview(bmp, gamma);
+                }
+            }
+        }
+
+        // --- Destructible class preview (MURY/MOSTY/SPECOBJ)
+        if(!m_spell_obj && m_l2_obj && spell_data)
+        {
+            Terrain* found_terr = NULL;
+            Sprite* found_spr = NULL;
+
+            // najdi první terrain, který obsahuje sprite odpovídající tagu (wildcard)
+            for(int k = 0; k < spell_data->GetTerrainCount(); k++)
+            {
+                auto* terr = spell_data->GetTerrain(k);
+                if(!terr) continue;
+
+                found_spr = terr->GetSpriteWild(m_l2_obj->tag.c_str(), Terrain::FIRST);
+                if(found_spr) { found_terr = terr; break; }
+            }
+
+            if(found_terr && found_spr)
+            {
+                double gamma = 0.001 * (double)slideGamma->GetValue();
+                found_terr->RenderSpritePreview(bmp, found_spr, 0, gamma);
+            }
+        }
+    }
+
+    wxPaintDC pdc(canvas);
+    pdc.DrawBitmap(bmp, wxPoint(0,0));
 }
-
-
-
 
 class TreeCtrlState{
 public:
@@ -687,43 +772,90 @@ public:
 // fills tool class menu
 void FormObjects::FillToolsClasses()
 {
-	// get this terrain
 	Terrain* terr = FindTerrain();
-	
-	// remember last expand states
+	if (!terr)
+		return;
+
 	wxTreeLister lister(treeCtrlClasses);
 
 	treeCtrlClasses->DeleteAllItems();
-	auto root_id = treeCtrlClasses->AddRoot("Classes",Icons::FOLDER,Icons::FOLDER_OPEN);	
-	for(int k = 0; k <= terr->GetToolsCount(); k++)
+	auto root_id = treeCtrlClasses->AddRoot("Classes", Icons::FOLDER, Icons::FOLDER_OPEN);
+
+	// --- k=0 = Not assigned (bez toolset items)
 	{
-		wxTreeItemId cid;
-		if(k == 0)
-			cid = treeCtrlClasses->AppendItem(root_id,"<Not assigned>",Icons::FOLDER,Icons::FOLDER_OPEN,(wxTreeItemData*)new TreeNode(k));
-		else
-			cid = treeCtrlClasses->AppendItem(root_id,GetToolsetTitle(k - 1),Icons::FOLDER,Icons::FOLDER_OPEN,(wxTreeItemData*)new TreeNode(k));
-		
-		for(int tid = 0; tid < terr->GetToolSetItemsCount(k-1); tid++)
+		int k = 0;
+		auto cid = treeCtrlClasses->AppendItem(root_id, "<Not assigned>",
+			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(k));
+
+		for (int oid = 0; oid < terr->GetObjectsCount(); oid++)
 		{
-			auto name = terr->GetToolSetItem(k-1,tid);
-			auto group_id = treeCtrlClasses->AppendItem(cid,name,Icons::MULTI,-1,(wxTreeItemData*)new TreeNode(k,tid + 1));
-			
-			for(int oid = 0; oid < terr->GetObjectsCount(); oid++)
+			auto obj = terr->objects[oid];
+			if (obj->GetToolClass() == k) // a group 0 / cokoliv podle tvé logiky
+				treeCtrlClasses->AppendItem(cid, obj->GetDescription(),
+					Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(obj));
+		}
+	}
+
+	// --- k=1..N = toolsety
+	for (int k = 1; k <= terr->GetToolsCount(); k++)
+	{
+		auto cid = treeCtrlClasses->AppendItem(root_id, GetToolsetTitle(k - 1),
+			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(k));
+
+		// skupiny (toolset items)
+		for (int tid = 0; tid < terr->GetToolSetItemsCount(k - 1); tid++)
+		{
+			auto name = terr->GetToolSetItem(k - 1, tid);
+			auto group_id = treeCtrlClasses->AppendItem(cid, name,
+				Icons::MULTI, -1, (wxTreeItemData*)new TreeNode(k, tid + 1));
+
+			for (int oid = 0; oid < terr->GetObjectsCount(); oid++)
 			{
 				auto obj = terr->objects[oid];
-				if(obj->GetToolClass() == k && obj->GetToolClassGroup() == tid + 1)
-					treeCtrlClasses->AppendItem(group_id,obj->GetDescription(),Icons::SINGLE,-1,(wxTreeItemData*)new TreeNode(obj));
+				if (obj->GetToolClass() == k && obj->GetToolClassGroup() == tid + 1)
+					treeCtrlClasses->AppendItem(group_id, obj->GetDescription(),
+						Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(obj));
 			}
 		}
 
-		for(int oid = 0; oid < terr->GetObjectsCount(); oid++)
-		{			
+		// “single” objekty bez group
+		for (int oid = 0; oid < terr->GetObjectsCount(); oid++)
+		{
 			auto obj = terr->objects[oid];
-			if(obj->GetToolClass() == k && obj->GetToolClassGroup() == 0)
-				treeCtrlClasses->AppendItem(cid,obj->GetDescription(),Icons::SINGLE,-1,(wxTreeItemData*)new TreeNode(obj));
+			if (obj->GetToolClass() == k && obj->GetToolClassGroup() == 0)
+				treeCtrlClasses->AppendItem(cid, obj->GetDescription(),
+					Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(obj));
 		}
 	}
-	// try restore last expand states
+
+	// -----------------------------------------------------------------
+	// Destructible object classes (loaded from COMMON.FS: MURY/MOSTY/SPECOBJ)
+	// These are NOT editor "context" objects; they are Spellcross gameplay classes.
+	if (spell_data && spell_data->L2_classes)
+	{
+		auto l2root = treeCtrlClasses->AppendItem(root_id, "Destructible objects",
+			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
+
+		auto walls = treeCtrlClasses->AppendItem(l2root, "Walls (MURY)",
+			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
+		for (auto* rec : spell_data->L2_classes->GetWallList())
+			treeCtrlClasses->AppendItem(walls, rec->name,
+				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec));
+
+		auto bridges = treeCtrlClasses->AppendItem(l2root, "Bridges (MOSTY)",
+			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
+		for (auto* rec : spell_data->L2_classes->GetBridgeList())
+			treeCtrlClasses->AppendItem(bridges, rec->name,
+				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec));
+
+		auto spec = treeCtrlClasses->AppendItem(l2root, "Special objects (SPECOBJ)",
+			Icons::FOLDER, Icons::FOLDER_OPEN, (wxTreeItemData*)new TreeNode(0));
+		for (auto* rec : spell_data->L2_classes->GetSpecList())
+			treeCtrlClasses->AppendItem(spec, rec->name,
+				Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(rec));
+	}
+
+
 	lister.treeCtrlSetStates(treeCtrlClasses);
 }
 

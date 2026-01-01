@@ -15,6 +15,7 @@
 #include <wx/msgdlg.h>
 
 #include <filesystem>
+#include <vector>
 
 ///////////////////////////////////////////////////////////////////////////
 
@@ -387,7 +388,7 @@ void FormGResView::OnExportPNG(wxCommandEvent& event)
 	if(is_lzw)
 		delete[] data;
 
-	// Save as PNG (RGBA). Keep alpha so index 0 stays transparent.
+	//img.SetOption(wxIMAGE_OPTION_PNG_FORMAT, wxPNG_TYPE_RGB);
 	if(!img.SaveFile(dlg.GetPath(), wxBITMAP_TYPE_PNG))
 	{
 		wxMessageBox("Failed to save PNG.", "Export to PNG", wxICON_ERROR, this);

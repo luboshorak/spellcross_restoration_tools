@@ -73,9 +73,12 @@ public:
 	SpellL2classes(FSarchive* fs,SpellSounds* sounds,std::function<void(std::string)> status_list=NULL,std::function<void(std::string)> status_item=NULL);
 	~SpellL2classes();
 	DestructibleRec GetClass(const char *sprite_name);
+
+	// === ADD PUBLIC GETTERS FOR WALL/BRIDGE/SPEC LISTS ===
+	const std::vector<SpellL2classRec*>& GetWallList() const { return wall_list; }
+	const std::vector<SpellL2classRec*>& GetBridgeList() const { return bridge_list; }
+	const std::vector<SpellL2classRec*>& GetSpecList() const { return spec_list; }
 };
-
-
 
 
 typedef struct {
