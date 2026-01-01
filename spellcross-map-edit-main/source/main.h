@@ -97,8 +97,6 @@ private:
 
 };
 
-
-
 // Main application frame
 class MainFrame : public wxFrame
 {
@@ -107,6 +105,9 @@ public:
     void StatusStringCallback(std::string info);
     void CreateHUDbuttons();
     bool LoadMapFromDefPath(const std::wstring& def_path);
+
+    // === Pøidejte tento øádek do public sekce ===
+    SpellData* spell_data;
 
 private:
     void OnViewLayer(wxCommandEvent& event);
@@ -193,7 +194,7 @@ private:
     wxRibbonBar* ribbonBar = NULL;
     
     // spellcross data object
-    SpellData* spell_data;
+    // SpellData* spell_data;
     // spellcross map object
     SpellMap* spell_map;
     // last selected tile pos

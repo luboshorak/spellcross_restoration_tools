@@ -27,6 +27,9 @@ wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
 wxEND_EVENT_TABLE()
 
+// UI-only: readonly text panel under the territory grid (instead of popups)
+static const int ID_TERRITORY_TEXTBOX = wxID_HIGHEST + 2201;
+
 static wxString fmt_int(const wxString& label, int v)
 {
     return wxString::Format("%s %d", label, v);
@@ -50,6 +53,92 @@ static std::string to_lower(std::string s)
 {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
     return s;
+}
+
+// --- TEXTS helper (disk based) -------------------------------------------------
+//
+// Per-mission texts live in DATA/TEXTS as:
+//   Txx_yyA            (briefing)
+//   Txx_yyA.OK         (victory)
+//   Txx_yyA.BAD        (defeat)
+//   Txx_yyA.S          (counter-attack)
+//
+// You said all FS archives are unpacked on program start. That means the plain
+// files should exist on disk, so we can load them directly here without needing
+// extra FSarchive plumbing.
+static std::string mission_to_text_base(std::string token)
+{
+    token = trim(token);
+    if(token.empty())
+        return token;
+    token = to_upper(token);
+    if(token[0] == 'M')
+        token[0] = 'T';
+    return token;
+}
+
+static bool read_text_file(const std::filesystem::path& p, std::string& out)
+{
+    std::ifstream f(p, std::ios::binary);
+    if(!f)
+        return false;
+    out.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return true;
+}
+
+static void append_text_snippet(wxString& info, const std::string& label, const std::string& raw)
+{
+    if(raw.empty())
+        return;
+
+    // Quick cleanup: remove CR and typical in-game control marks.
+    std::string s;
+    s.reserve(raw.size());
+    for(size_t i = 0; i < raw.size(); ++i)
+    {
+        unsigned char c = (unsigned char)raw[i];
+        if(c == '\r')
+            continue;
+        if(c == '~' || c == 0x1A)
+            continue;
+        s.push_back((char)c);
+    }
+
+    // Limit preview to keep messagebox readable.
+    const size_t kMax = 600;
+    if(s.size() > kMax)
+        s = s.substr(0, kMax) + "...";
+
+    info << "\n" << label << "\n";
+    info << wxString::From8BitData(s.c_str()) << "\n";
+}
+
+static void try_append_text_set(wxString& info, const std::filesystem::path& base_dir, std::string mission_token)
+{
+    if(mission_token.empty())
+        return;
+
+    std::string base = mission_to_text_base(mission_token);
+
+    // Best-effort: if token ends with digit (M02_02), try A (T02_02A)
+    if(!base.empty())
+    {
+        char last = base.back();
+        if(last >= '0' && last <= '9')
+            base.push_back('A');
+    }
+
+    auto load_and_append = [&](const std::string& suffix, const char* caption)
+    {
+        std::string raw;
+        if(read_text_file(base_dir / (base + suffix), raw))
+            append_text_snippet(info, wxString::Format("%s (%s%s)", caption, base, suffix).ToStdString(), raw);
+    };
+
+    load_and_append("",     "Briefing");
+    load_and_append(".OK",  "Victory");
+    load_and_append(".BAD", "Defeat");
+    load_and_append(".S",   "Counter-attack");
 }
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
@@ -134,6 +223,22 @@ void StrategicLevelFrame::BuildUI()
     }
 
     m_mapSizer->Add(grid, 1, wxALL | wxEXPAND, 8);
+
+    // Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
+    auto txtTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Territory / briefing text");
+    txtTitle->SetForegroundColour(*wxLIGHT_GREY);
+    m_mapSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+
+    auto txt = new wxTextCtrl(
+        m_mapPanel,
+        ID_TERRITORY_TEXTBOX,
+        "",
+        wxDefaultPosition,
+        wxDefaultSize,
+        wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2 | wxTE_DONTWRAP);
+    txt->SetMinSize(wxSize(-1, 220));
+    m_mapSizer->Add(txt, 0, wxALL | wxEXPAND, 8);
+
     m_mapPanel->SetSizer(m_mapSizer);
 
     // Right panel: roster + actions
@@ -221,7 +326,72 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
     if(itn != m_territoryLaunchCount.end())
         info << wxString::Format("Played: %d\n", itn->second);
 
-    wxMessageBox(info, "Territory", wxOK | wxICON_INFORMATION, this);
+    // --- Show per-mission texts from DATA/TEXTS (briefing + OK/BAD/S) ---
+    // You said all FS archives are unpacked on start, so these should exist as plain files.
+    // The only reason you'd see "nothing" is usually that the *working directory* isn't the
+    // game root. So we resolve DATA/TEXTS relative to the loaded LEVEL_XX.DEF path, with a
+    // fallback to current working directory.
+    std::filesystem::path texts_dir;
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+
+        auto try_dir = [&](const fs::path& p)
+        {
+            if(texts_dir.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
+                texts_dir = p;
+        };
+
+        // 1) Walk up from the level DEF location and try common layouts
+        fs::path base = fs::path(m_level.source_path).parent_path();
+        for(int i = 0; i < 8 && !base.empty() && texts_dir.empty(); ++i)
+        {
+            try_dir(base / "DATA" / "TEXTS");
+            try_dir(base / "DATA" / "texts");
+            try_dir(base / "TEXTS");
+            try_dir(base / "texts");
+
+            base = base.parent_path();
+        }
+
+        // 2) Fallback: current working directory
+        if(texts_dir.empty())
+        {
+            const fs::path cwd = fs::current_path(ec);
+            try_dir(cwd / "DATA" / "TEXTS");
+            try_dir(cwd / "DATA" / "texts");
+            try_dir(cwd / "TEXTS");
+            try_dir(cwd / "texts");
+        }
+    }
+
+    if(!texts_dir.empty())
+    {
+        // Use the *current* mission token (can change as you replay territories)
+        std::string cur = t.mission;
+        auto itc2 = m_territoryCurrentMission.find(t.id);
+        if(itc2 != m_territoryCurrentMission.end() && !itc2->second.empty())
+            cur = itc2->second;
+
+        try_append_text_set(info, texts_dir, cur);
+
+        // Also show intro (some territories use different intro token)
+        if(!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
+            try_append_text_set(info, texts_dir, t.intro_mission);
+    }
+    else
+    {
+        info << "\n(TEXTS) DATA/TEXTS not found.\n";
+        info << "Level path: " << m_level.source_path << "\n";
+        info << "Working dir: " << std::filesystem::current_path().string() << "\n";
+    }
+
+    // Show in the scrollbox under the map (no popup)
+    if(auto* box = wxDynamicCast(m_mapPanel->FindWindow(ID_TERRITORY_TEXTBOX), wxTextCtrl))
+    {
+        box->SetValue(info);
+        box->ShowPosition(0);
+    }
     RefreshUI();
 }
 
