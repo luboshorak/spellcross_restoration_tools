@@ -1,0 +1,133 @@
+{
+  "canvas": {
+    "w": 640,
+    "h": 480,
+    "color": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "background": {
+    "file": "BIG_MAP_640x480_raw.png",
+    "x": 0,
+    "y": 0,
+    "visible": true,
+    "opacity": 1.0
+  },
+  "layers": [
+    {
+      "name": "VMM_LST2_406x174_ascii6",
+      "file": "VMM_LST2_406x174_ascii6.png",
+      "x": 8,
+      "y": 302,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VMM_LST1_163x41_ascii6",
+      "file": "VMM_LST1_163x41_ascii6.png",
+      "x": 414,
+      "y": 435,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "SB_BG01_163x429_ascii6_transparent",
+      "file": "SB_BG01_163x429_ascii6_transparent.png",
+      "x": 414,
+      "y": 6,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VMM_FULL_575x480_ascii6_transparent",
+      "file": "VMM_FULL_575x480_ascii6_transparent.png",
+      "x": 2,
+      "y": 4,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "HMLA_indexed",
+      "file": "../../level_out/_backup/HMLA_indexed.png",
+      "x": 19,
+      "y": 23,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_MAP",
+      "file": "../VM_MAP.png",
+      "x": 592,
+      "y": 135,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_HIER",
+      "file": "../VM_HIER.png",
+      "x": 592,
+      "y": 164,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_UNIT",
+      "file": "../VM_UNIT.png",
+      "x": 596,
+      "y": 192,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_BUY",
+      "file": "../VM_BUY.png",
+      "x": 600,
+      "y": 214,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_RESEA",
+      "file": "../VM_RESEA.png",
+      "x": 595,
+      "y": 244,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_FACTO",
+      "file": "../VM_FACTO.png",
+      "x": 596,
+      "y": 268,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_INFO",
+      "file": "../VM_INFO.png",
+      "x": 600,
+      "y": 301,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_STATI",
+      "file": "../VM_STATI.png",
+      "x": 596,
+      "y": 330,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VM_OPTIO",
+      "file": "../VM_OPTIO.png",
+      "x": 596,
+      "y": 362,
+      "visible": true,
+      "opacity": 1.0
+    }
+  ]
+}

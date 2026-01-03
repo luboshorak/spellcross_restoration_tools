@@ -1,0 +1,53 @@
+{
+  "canvas": {
+    "w": 640,
+    "h": 480,
+    "color": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "background": {
+    "file": "main_game_screens_exports/BIG_MAP_640x480_raw.png",
+    "x": 0,
+    "y": 0,
+    "visible": true,
+    "opacity": 1.0
+  },
+  "layers": [
+    {
+      "name": "BUY_406x464_ascii6_transparent",
+      "file": "main_game_screens_exports/BUY_406x464_ascii6_transparent.png",
+      "x": 11,
+      "y": 14,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VMU_LST2_241x141_ascii6_transparent",
+      "file": "main_game_screens_exports/VMU_LST2_241x141_ascii6_transparent.png",
+      "x": 335,
+      "y": 301,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "SB_BG01_163x429_ascii6_transparent",
+      "file": "main_game_screens_exports/SB_BG01_163x429_ascii6_transparent.png",
+      "x": 414,
+      "y": 13,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VMB_LST1_163x41_ascii6_transparent",
+      "file": "main_game_screens_exports/VMB_LST1_163x41_ascii6_transparent.png",
+      "x": 414,
+      "y": 441,
+      "visible": true,
+      "opacity": 1.0
+    }
+  ]
+}

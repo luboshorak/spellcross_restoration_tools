@@ -1,0 +1,45 @@
+{
+  "canvas": {
+    "w": 640,
+    "h": 480,
+    "color": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "background": {
+    "file": "BIG_MAP_640x480_raw.png",
+    "x": 0,
+    "y": 0,
+    "visible": true,
+    "opacity": 1.0
+  },
+  "layers": [
+    {
+      "name": "HIERARCH_406x464_ascii6_transparent",
+      "file": "HIERARCH_406x464_ascii6_transparent.png",
+      "x": 4,
+      "y": 8,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "SB_BG01_163x429_ascii6_transparent",
+      "file": "SB_BG01_163x429_ascii6_transparent.png",
+      "x": 412,
+      "y": 8,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "VMH_FULL_575x480_ascii6_transparent",
+      "file": "VMH_FULL_575x480_ascii6_transparent.png",
+      "x": 0,
+      "y": 0,
+      "visible": true,
+      "opacity": 1.0
+    }
+  ]
+}

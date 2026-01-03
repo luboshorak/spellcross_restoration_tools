@@ -1,0 +1,48 @@
+================================================================================
+===                              Spell_extractfs                             ===
+================================================================================
+
+
+POPIS
+=====
+
+  "spell_extractfs.exe" by mìl rozbalit *.fs archivy do adresáøe data\ a vytvoøit *.lst se seznamem souborù. 
+
+  Program je napsán v prostøedí BDS2006 Turbo C++ a testován pouze v M$ Windows XP, take netuším, co bude dìlat v novìjších nebo starších OS. 
+
+
+
+POUITÍ
+=======
+
+spell_extractfs.exe source [-lh]
+
+source:
+ - cesta k "*.fs" archivu
+
+-lh (nepovinnı):
+ - vypsat dlouhou hlavièku
+
+
+
+FORMÁT LST SOUBORU
+==================
+
+Øádek 0:      "files: N", kde N je poèet souborù
+Øádek 1 a N: absolutní cesta k souboru
+
+
+
+LICENCE
+=======
+
+  Je to freeware, take mùe bıt libovolnì pouíván a šíøen, ale pouze se všemi pøiloenımi soubory, tj. "readme!eng.txt" a "ctime!cze.txt" bez úprav!
+  Autor nenese ádnou zodpovìdnost za pøípadné problémy vzniklé pouitím tohoto SW a u by byly jakékoliv.
+
+
+
+
+AUTOR
+=====
+
+Stanislav Maslan, s.maslan@seznam.cz

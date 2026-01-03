@@ -1,0 +1,6 @@
+Krok 1 - rozbalit fs soubory - utilitou spell_extract_fs_gui
+Krok 2 - neni nutne, ale pomuze to se orientovat - data_sorter.py - roztridi data do slozek podle typu/pripon
+Krok 3 - ve slozce ..\spell_decomp je spell_bulk_delz_gui.py - extraktovat LS a LS0 soubory - vytvoří se biny
+Krok 4 - bin_inspector pomuze identifikovat co v binech je a extrahovat
+Krok 5 - spellcross_level_tool_v5 - dokaze zpetne komponovat mapy z levelu 02 - 10
+Krok 6 - ve slozce bin_out je utilita spell_ui_builder - da se v ni zpetne sestavit jednotliva menu UI hry z vyextrahovanych grafickych podkladu

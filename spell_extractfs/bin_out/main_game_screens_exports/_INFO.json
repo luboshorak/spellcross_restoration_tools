@@ -1,0 +1,37 @@
+{
+  "canvas": {
+    "w": 640,
+    "h": 480,
+    "color": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "background": {
+    "file": "main_game_screens_exports/BIG_MAP_640x480_raw.png",
+    "x": 0,
+    "y": 0,
+    "visible": true,
+    "opacity": 1.0
+  },
+  "layers": [
+    {
+      "name": "STATS_569x464_ascii6_transparent_2",
+      "file": "STATS_569x464_ascii6_transparent_2.png",
+      "x": 6,
+      "y": 6,
+      "visible": true,
+      "opacity": 1.0
+    },
+    {
+      "name": "STATS_569x464_ascii6_transparent",
+      "file": "STATS_569x464_ascii6_transparent.png",
+      "x": 6,
+      "y": 6,
+      "visible": true,
+      "opacity": 1.0
+    }
+  ]
+}
