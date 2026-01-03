@@ -10,3 +10,17 @@ spellcross-map-edit-main/builds/
 spellcross-map-edit-main/data/
 
 # --- Custom ---
+# allow EXE in this repo (overrides global ignore)
+!*.exe
+
+# --- Python venvs ---
+.venv/
+venv/
+ENV/
+env/
+
+# venv kdekoliv v podadresářích (užitečné pro monorepo)
+**/.venv/
+**/venv/
+**/ENV/
+**/env/
