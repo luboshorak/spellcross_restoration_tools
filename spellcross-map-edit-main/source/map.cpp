@@ -2940,7 +2940,10 @@ bool SpellMap::IsDeploymentTile(const MapXY& pos) const
 {
 	if (!pos.IsSelected())
 		return false;
-	return std::find(start.begin(), start.end(), pos) != start.end();
+	return std::any_of(start.begin(), start.end(), [&](const MapXY& p) {
+		return p.x == pos.x && p.y == pos.y;
+		});
+
 }
 
 MapXY SpellMap::GetFirstDeploymentTile() const
@@ -2963,7 +2966,7 @@ void SpellMap::UpdateGameModeVisibility()
 		unit_view->ResultLock(true);
 		unit_view->view.assign(x_size * y_size, 0);
 		for (const auto& pos : start)
-			unit_view->view[ConvXY(pos)] = 2;
+			unit_view->view[ConvXY(const_cast<MapXY&>(pos))] = 2;
 		unit_view->ResultLock(false);
 	}
 	else
@@ -12848,7 +12851,13 @@ int SpellMap::PlaceStartEscape(vector<MapXY>& posxy, std::vector<MapXY>& start, 
 	{
 		if (new_pos.x < 0 || new_pos.y < 0 || new_pos.x >= x_size || new_pos.y >= y_size)
 			continue;
-		auto old_pos = std::find(new_list.begin(), new_list.end(), new_pos);
+		auto same_xy = [](const MapXY& a, const MapXY& b) {
+			return a.x == b.x && a.y == b.y;
+			};
+
+		auto old_pos = std::find_if(new_list.begin(), new_list.end(), [&](const MapXY& p) {
+			return same_xy(p, new_pos);
+			});
 		bool is_there = old_pos != new_list.end();
 		if (!is_there)
 		{
@@ -12858,7 +12867,9 @@ int SpellMap::PlaceStartEscape(vector<MapXY>& posxy, std::vector<MapXY>& start, 
 			// make sure the same tile is not in the other lists!
 			for (auto other_list : other_lists)
 			{
-				auto other_pos = std::find(other_list->begin(), other_list->end(), new_pos);
+				auto other_pos = std::find_if(other_list->begin(), other_list->end(), [&](const MapXY& p) {
+					return same_xy(p, new_pos);
+					});
 				if (other_pos != other_list->end())
 					other_list->erase(other_pos);
 			}
