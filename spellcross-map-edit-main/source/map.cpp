@@ -7877,6 +7877,15 @@ int SpellMap::ViewRange::AddViewUnitTask(MapUnit* unit, ClearMode clear, bool re
 //  with events new_contact waits to complete operation
 void SpellMap::ViewRange::AddUnitView(MapUnit* unit, ClearMode clear, int* new_contact, vector<SpellMapEventRec*>* events)
 {
+	if (map->IsDeploymentPlacementLimited())
+	{
+		if (events)
+			events->clear();
+		if (new_contact)
+			*new_contact = 0;
+		return;
+	}
+
 	// insert new task 	
 	AddViewUnitTask(unit, clear, !!events);
 
@@ -7934,6 +7943,12 @@ int SpellMap::ViewRange::WaitResults(std::vector<SpellMapEventRec*>* events)
 // add view range of all moved units of given type, clear moved flags (assynchronous), thread safe
 int SpellMap::ViewRange::AddUnitsView(int unit_type, int clear, MapUnit* except_unit)
 {
+	if (map->IsDeploymentPlacementLimited())
+	{
+		map->UpdateGameModeVisibility();
+		return(0);
+	}
+
 	for (auto& unit : map->units)
 	{
 		// filter unit types to view
