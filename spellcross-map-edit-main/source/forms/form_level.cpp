@@ -284,7 +284,7 @@ void StrategicLevelFrame::BuildUI()
 
     auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
     rosterTitle->SetForegroundColour(*wxWHITE);
-    // Pøed tímto øádkem pøidejte získání fontu z m_spellData
+    // Ped tmto dkem pidejte zskn fontu z m_spellData
     wxFont font = m_spellData && m_spellData->font ? wxFont(wxFontInfo(m_spellData->font->GetHeight())) : wxFont(wxFontInfo(12));
     rosterTitle->SetFont(font);
     rightSizer->Add(rosterTitle, 0, wxALL, 10);
@@ -506,15 +506,19 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
     std::string up = to_upper(mission_token);
 
     std::vector<fs::path> candidates;
-    for(const auto& ent : fs::directory_iterator(base))
+    std::error_code ec;
+    if(fs::exists(base, ec))
     {
-        if(!ent.is_regular_file()) continue;
-        auto ext = to_upper(ent.path().extension().string());
-        if(ext != ".DEF") continue;
+        for(fs::directory_iterator it(base, ec); !ec && it != fs::directory_iterator(); ++it)
+        {
+            if(!it->is_regular_file()) continue;
+            auto ext = to_upper(it->path().extension().string());
+            if(ext != ".DEF") continue;
 
-        std::string stem = to_upper(ent.path().stem().string());
-        if(stem.rfind(up, 0) == 0) // starts with
-            candidates.push_back(ent.path());
+            std::string stem = to_upper(it->path().stem().string());
+            if(stem.rfind(up, 0) == 0) // starts with
+                candidates.push_back(it->path());
+        }
     }
 
     if(candidates.empty())
