@@ -24,6 +24,7 @@
 #include <wx/filedlg.h>
 #include <wx/slider.h>
 #include <wx/stdpaths.h>
+#include <wx/event.h>
 
 #include <filesystem>
 #include <codecvt>

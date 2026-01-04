@@ -284,6 +284,8 @@ void StrategicLevelFrame::BuildUI()
 
     auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
     rosterTitle->SetForegroundColour(*wxWHITE);
+    // Pøed tímto øádkem pøidejte získání fontu z m_spellData
+    wxFont font = m_spellData && m_spellData->font ? wxFont(wxFontInfo(m_spellData->font->GetHeight())) : wxFont(wxFontInfo(12));
     rosterTitle->SetFont(font);
     rightSizer->Add(rosterTitle, 0, wxALL, 10);
 
