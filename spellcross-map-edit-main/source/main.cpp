@@ -52,9 +52,10 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
     if (!spell_map || !spell_data)
         return false;
 
-    // if (spell_map->Load(def_path, spell_data))
-
     auto busy = std::make_shared<wxBusyInfo>("Loading level DEF...\nPlease wait.", this);
+
+    const std::string path = std::filesystem::path(def_path).string();
+
     std::thread([this, path, busy]() {
         LevelData lvl;
         std::string err;
@@ -76,7 +77,7 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
             win->Raise();
         });
     }).detach();
-}
+
     spell_map->SetGamma(1.30);
 
     wxCommandEvent dummy;
