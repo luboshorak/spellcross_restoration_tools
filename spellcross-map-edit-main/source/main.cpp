@@ -63,20 +63,23 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
         LevelLoader loader;
         bool ok = loader.LoadLevelDef(path, lvl, &err);
 
-        wxCallAfter([this, busy, ok, err, lvl = std::move(lvl)]() mutable {
-            busy.reset();
-            if (!ok)
-            {
-                wxMessageBox("Failed to load level DEF:\\n" + err, "Error", wxOK | wxICON_ERROR, this);
-                return;
-            }
+        if (auto* app = wxApp::GetInstance())
+        {
+            app->CallAfter([this, busy, ok, err, lvl = std::move(lvl)]() mutable {
+                busy.reset();
+                if (!ok)
+                {
+                    wxMessageBox("Failed to load level DEF:\\n" + err, "Error", wxOK | wxICON_ERROR, this);
+                    return;
+                }
 
-            // otevri strategicke UI (window si zije samo, wxWidgets ho znici po zavreni)
-            auto* win = new StrategicLevelFrame(this, lvl);
-            win->CentreOnParent();
-            win->Show();
-            win->Raise();
-        });
+                // otevri strategicke UI (window si zije samo, wxWidgets ho znici po zavreni)
+                auto* win = new StrategicLevelFrame(this, lvl);
+                win->CentreOnParent();
+                win->Show();
+                win->Raise();
+            });
+        }
     }).detach();
 
     spell_map->SetGamma(1.30);
