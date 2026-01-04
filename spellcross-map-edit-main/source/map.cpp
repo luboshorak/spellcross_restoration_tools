@@ -73,7 +73,7 @@ namespace scsave
 		return bool(is);
 	}
 
-	// JSON-ish: "key": "VALUE" (hlavièka není strict JSON kvùli backslashùm)
+	// JSON-ish: "key": "VALUE" (hlaviÃ¨ka nenÃ­ strict JSON kvÃ¹li backslashÃ¹m)
 	inline bool ExtractQuotedField2(const std::string& text, const char* key, std::string& out)
 	{
 		std::string needle = std::string("\"") + key + "\"";
@@ -109,7 +109,7 @@ static MapUnitType MapUnitTypeFromString(const std::string& s)
 	if (s == "ArmyUnit")    return MapUnitType::ArmyUnit;
 	if (s == "SpecUnit")    return MapUnitType::SpecUnit;
 	if (s == "VoluntUnit")  return MapUnitType::VoluntUnit;
-	// SpecUnit1/SpecUnit2 fallback (používá se v event exportu)
+	// SpecUnit1/SpecUnit2 fallback (pouÅ¾Ã­vÃ¡ se v event exportu)
 	if (s == "SpecUnit1" || s == "SpecUnit2") return MapUnitType::SpecUnit;
 	return MapUnitType::Unknown;
 }
@@ -121,7 +121,7 @@ struct ScsaveUnitLink
 	int32_t creator_event_idx = -1;
 };
 
-// jednotný zápis/ètení MapUnit bez pointerù
+// jednotnÃ½ zÃ¡pis/Ã¨tenÃ­ MapUnit bez pointerÃ¹
 static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, SpellMapEvents* evt_ctx)
 {
 	scsave::write(os, (int32_t)u->id);
@@ -242,11 +242,11 @@ static bool scsave_read_unit(std::istream& is, SpellMap* map, SpellData* data, M
 	u->commander_id = commander_id;
 	u->is_commander = is_commander;
 
-	// Pùvodní kód (chybný):
+	// PÃ¹vodnÃ­ kÃ³d (chybnÃ½):
 	// std::memset(u->name, 0, sizeof(u->name));
 	// std::strncpy(u->name, name.c_str(), sizeof(u->name) - 1);
 
-	// Opravený kód pro std::string:
+	// OpravenÃ½ kÃ³d pro std::string:
 	u->name.clear();
 	u->name = name;
 
@@ -789,7 +789,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 
 static bool ExtractQuotedField(const std::string& text, const char* key, std::string& out)
 {
-	// hledá: "key": "VALUE"
+	// hledÃ¡: "key": "VALUE"
 	std::string needle = std::string("\"") + key + "\"";
 	size_t p = text.find(needle);
 	if (p == std::string::npos) return false;
@@ -797,7 +797,7 @@ static bool ExtractQuotedField(const std::string& text, const char* key, std::st
 	p = text.find(':', p);
 	if (p == std::string::npos) return false;
 
-	// najdi první uvozovku po dvojteèce
+	// najdi prvnÃ­ uvozovku po dvojteÃ¨ce
 	p = text.find('"', p);
 	if (p == std::string::npos) return false;
 	p++;
@@ -923,7 +923,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 			if ((int32_t)u->id == sel_id)
 				tmp.sel_unit = u;
 
-		// events container (potøebujeme kvùli creator_event relinku)
+		// events container (potÃ¸ebujeme kvÃ¹li creator_event relinku)
 		tmp.events = new SpellMapEvents(this);
 
 		// --- EVENTS ---
@@ -1008,7 +1008,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 			tmp.events->AddEvent(e);
 		}
 
-		// relink parent/child + creator_event u hlavních tmp.units
+		// relink parent/child + creator_event u hlavnÃ­ch tmp.units
 		for (size_t i = 0; i < tmp.units.size(); i++)
 		{
 			auto* u = tmp.units[i];
@@ -1115,6 +1115,7 @@ int SpellMap::SetGameMode(int new_mode)
 	}
 
 	// leaving game mode: nothing special right now
+	UpdateGameModeVisibility();
 	return(old_state);
 }
 
@@ -1145,6 +1146,7 @@ void SpellMap::Close()
 	LockMap();
 	HaltUnitRanging(true);
 	is_valid = false;
+	limit_game_mode_to_start_tiles = false;
 
 	// these must go before touching anything else as they are async!
 	if (unit_view)
@@ -2919,6 +2921,63 @@ int SpellMap::RenderPrepare(TScroll* scroll)
 
 	return(0);
 }
+bool SpellMap::HasPlayerUnits() const
+{
+	for (auto* unit : units)
+	{
+		if (unit && !unit->is_enemy)
+			return true;
+	}
+	return false;
+}
+
+bool SpellMap::IsDeploymentPlacementLimited() const
+{
+	return game_mode && limit_game_mode_to_start_tiles;
+}
+
+bool SpellMap::IsDeploymentTile(const MapXY& pos) const
+{
+	if (!pos.IsSelected())
+		return false;
+	return std::find(start.begin(), start.end(), pos) != start.end();
+}
+
+MapXY SpellMap::GetFirstDeploymentTile() const
+{
+	if (start.empty())
+		return MapXY();
+	return start.front();
+}
+
+void SpellMap::UpdateGameModeVisibility()
+{
+	if (!unit_view)
+		return;
+
+	const bool should_limit = game_mode && !start.empty() && !HasPlayerUnits();
+	if (should_limit)
+	{
+		limit_game_mode_to_start_tiles = true;
+		unit_view->ClearUnitsView(ViewRange::ClearMode::RESET, true);
+		unit_view->ResultLock(true);
+		unit_view->view.assign(x_size * y_size, 0);
+		for (const auto& pos : start)
+			unit_view->view[ConvXY(pos)] = 2;
+		unit_view->ResultLock(false);
+	}
+	else
+	{
+		const bool was_limited = limit_game_mode_to_start_tiles;
+		limit_game_mode_to_start_tiles = false;
+		if (game_mode && (was_limited || HasPlayerUnits()))
+		{
+			unit_view->ClearUnitsView(ViewRange::ClearMode::RESET, true);
+			unit_view->AddUnitsView();
+		}
+	}
+}
+
 // return true if surface was modified in last RenderPrepare()
 int SpellMap::isRenderSurfModified()
 {
@@ -3689,6 +3748,10 @@ vector<MapXY>& SpellMap::GetSelections(TScroll* scroll)
 					if (n + xs_ofs >= x_size)
 						break;
 					// --- for every valid tile ---
+
+					MapXY candidate(n + xs_ofs, m + ys_ofs * 2);
+					if (IsDeploymentPlacementLimited() && !IsDeploymentTile(candidate))
+						continue;
 
 					// get map tile
 					auto* tile = &tiles[(m + ys_ofs * 2) * x_size + n + xs_ofs];
@@ -9776,6 +9839,7 @@ int SpellMap::RemoveAllUnits()
 		delete unit;
 	units.clear();
 	unit_selection = NULL;
+	UpdateGameModeVisibility();
 	return(0);
 }
 
@@ -9824,6 +9888,7 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 
 	// resort units
 	SortUnits();
+	UpdateGameModeVisibility();
 
 	return(0);
 }
@@ -9918,6 +9983,7 @@ int SpellMap::AddUnit(MapUnit* unit)
 	units.push_back(unit);
 	ResumeUnitRanging(false);
 	ReleaseMap();
+	UpdateGameModeVisibility();
 	return(0);
 }
 
@@ -10004,6 +10070,7 @@ int SpellMap::PlaceUnit(MapUnit* unit)
 
 	// resort units map
 	SortUnits();
+	UpdateGameModeVisibility();
 	return(0);
 }
 
