@@ -1085,7 +1085,6 @@ int SpellMap::SetGameMode(int new_mode)
 {
 	int old_state = game_mode;
 	game_mode = new_mode;
-	limit_game_mode_to_start_tiles = game_mode;
 
         // entering game mode: ensure we are not in any editor "placement" state
         if (game_mode && !old_state)
@@ -3866,15 +3865,6 @@ MapXY SpellMap::GetSelection(TScroll* scroll)
 		return(MapXY());
 }
 
-bool SpellMap::IsStartTile(const MapXY& pos) const
-{
-	return (std::find(start.begin(), start.end(), pos) != start.end());
-}
-
-bool SpellMap::HasStartTiles() const
-{
-	return (!start.empty());
-}
 
 // get selection elevation
 int SpellMap::GetElevation(TScroll* scroll)
@@ -4549,17 +4539,6 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 	unit_range->ResultLock(true);
 	unit_view->ResultLock(true);
 
-	bool start_tiles_only = isGameMode() && limit_game_mode_to_start_tiles;
-	bool render_wL1 = wL1 && !start_tiles_only;
-	bool render_wL2 = wL2 && !start_tiles_only;
-	bool render_wL3 = wL3 && !start_tiles_only;
-	bool render_wL4 = wL4 && !start_tiles_only;
-	bool render_wSTCI = wSTCI || start_tiles_only;
-	bool render_wUnits = wUnits && !start_tiles_only;
-	bool render_wSound = wSound && !start_tiles_only;
-	bool render_wSoundLoop = wSoundLoop && !start_tiles_only;
-	bool render_wEvents = wEvents && !start_tiles_only;
-
 	// make local copies of layers so tools and clipboard can override'em (not very effective solution)
 	std::vector<MapSprite> tiles = this->tiles;
 	std::vector<MapLayer3> L3 = this->L3;
@@ -4644,7 +4623,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 			int sof = tiles[mxy].elev;
 
 			// override sprite by plain one?
-			if (!render_wL1)
+			if (!wL1)
 			{
 				// try get class glyph
 				sid = terrain->GetTileGlyph(sid);
@@ -4683,7 +4662,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 
 
 	// --- Render Layer 3 - ANM animations ---
-	if (render_wL3)
+	if (wL3)
 	{
 		for (i = 0; i < L3.size(); i++)
 		{
@@ -4720,15 +4699,13 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 	}
 
 	// --- Render special tiles - START/ESCAPE/TARGET---
-	if (render_wSTCI)
+	if (wSTCI)
 	{
 		// for each special sprite type
 		vector<MapXY>* spec[] = { &start, &escape, &targets };
 		Sprite* spec_sprite[] = { start_sprite, escape_sprite, target_sprite };
 		for (int sid = 0; sid < 3; sid++)
 		{
-			if (start_tiles_only && sid != 0)
-				continue;
 			if (!spec_sprite[sid])
 				continue;
 
@@ -4836,7 +4813,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 
 
 	// --- Render Layer 4 - PNM animations ---
-	if (render_wL4)
+	if (wL4)
 	{
 		for (i = 0; i < L4.size(); i++)
 		{
@@ -4924,7 +4901,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 			for (int pass = 0; pass < 3; pass++)
 			{
 				// units render:
-				while (render_wUnits && unit && !hide_units)
+				while (wUnits && unit && !hide_units)
 				{
 					if ((pass == 0 && unit->unit->isAir()) || pass == 2)
 					{
@@ -4983,7 +4960,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 				}
 
 				// object render:
-				if (render_wL2 && pass == 1 && sid2)
+				if (wL2 && pass == 1 && sid2)
 				{
 					auto filt = filter;
 					if (!use_view_mask && cursor == pos && wHighlight_obj)
@@ -4992,7 +4969,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 				}
 
 				// render tile/object hit PNM animation
-				if (render_wL2 && pass == 2 && tile->hit_pnm)
+				if (wL2 && pass == 2 && tile->hit_pnm)
 				{
 					auto* frame = tile->hit_pnm->frames[tile->hit_pnm_frame];
 					frame->Render(pic, pic_end, mxx, myy, pic_x_size, filter);
@@ -5059,7 +5036,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 	terrain->font->SetFilter(terrain->filter.darker);
 	for (auto& sound : sounds->sounds)
 	{
-		if (!(sound.GetType() == MapSound::SoundType::LOOP && render_wSoundLoop || sound.GetType() == MapSound::SoundType::RANDOM && render_wSound))
+		if (!(sound.GetType() == MapSound::SoundType::LOOP && wSoundLoop || sound.GetType() == MapSound::SoundType::RANDOM && wSound))
 			continue;
 		auto pos = sound.GetPosition();
 
@@ -5097,7 +5074,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 
 
 	// --- Events:
-	if (render_wEvents)
+	if (wEvents)
 	{
 		terrain->font->SetFilter(terrain->filter.darker);
 		terrain->font7->SetFilter(terrain->filter.darker);
@@ -9911,15 +9888,6 @@ MapUnit* SpellMap::CreateUnit(MapUnit* parent, SpellUnitRec* new_type)
 {
 	HaltUnitRanging(true);
 
-	MapXY placement_pos = GetSelection();
-	bool restrict_start_tile = isGameMode() && limit_game_mode_to_start_tiles && !parent;
-	if (restrict_start_tile && !IsStartTile(placement_pos))
-	{
-		last_error = "In game mode, new units can be placed only on start tiles.";
-		ResumeUnitRanging(false);
-		return(nullptr);
-	}
-
 	MapUnit* unit;
 	if (parent)
 	{
@@ -9941,7 +9909,7 @@ MapUnit* SpellMap::CreateUnit(MapUnit* parent, SpellUnitRec* new_type)
 		unit->unit = spelldata->units->GetUnit(type_id);
 
 		// default position
-		unit->coor = placement_pos;
+		unit->coor = GetSelection();
 
 		// default params
 		unit->morale = 100;

@@ -240,19 +240,21 @@ class SpellMap
 		int enemy_turn_prev_sel_mod = false;
 
 		// enemy turn helpers (implemented in map.cpp)
-		void StartEnemyTurn();
-		void EndEnemyTurn();
-		bool EnemyTurnStep();
-		bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
-		bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
-		bool IsUnitBusy(MapUnit* unit);
+                void StartEnemyTurn();
+                void EndEnemyTurn();
+                bool EnemyTurnStep();
+                bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
+                bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
+                bool IsUnitBusy(MapUnit* unit);
+                void BeginMissionPlay();
 		// map state
 		bool is_valid;
 		// last error string
 		std::string last_error;
-		// game mode
-		int game_mode;		
-		bool limit_game_mode_to_start_tiles = false;
+                // game mode
+                int game_mode;
+                bool mission_started = false;
+                bool limit_game_mode_to_start_tiles = false;
 		// render surface
 		int surf_x;
 		int surf_y;
@@ -683,14 +685,16 @@ class SpellMap
 			int SaveInitial();
 			int LoadInitial();
 		};
-		Saves *saves;
+                Saves *saves;
 
 		
-		SpellMap();
-		~SpellMap();
-		int SetGameMode(int new_mode);
-		int isGameMode();
-		void Close();
+                SpellMap();
+                ~SpellMap();
+                int SetGameMode(int new_mode);
+                void StartMission();
+                bool IsDeploymentPhase() const { return deployment_mode; }
+                int isGameMode();
+                void Close();
 		int Create(SpellData* spelldata,const char* terr_name,int x,int y);
 		int Load(wstring &path, SpellData* spelldata);
 		void RelinkUnit(MapUnit* u, MapXY oldPos, MapXY newPos);
@@ -702,10 +706,8 @@ class SpellMap
 
 		bool deployment_mode = false;
 		
-            MapXY GetSelection(TScroll* scroll=NULL);
-            vector<MapXY> &GetSelections(TScroll* scroll=NULL);
-            bool IsStartTile(const MapXY& pos) const;
-            bool HasStartTiles() const;
+		MapXY GetSelection(TScroll* scroll=NULL);
+		vector<MapXY> &GetSelections(TScroll* scroll=NULL);
 		std::vector<MapXY> GetRelSelection(TScroll* scroll=NULL);
 		void ClearSelections();
 		vector<Sprite*> GetL1sprites(vector<MapXY> &selection);
@@ -772,15 +774,16 @@ class SpellMap
 		void InvalidateHUDbuttons();
 		vector<SpellBtnHUD*> *GetHUDbuttons();
 		
-		void OnHUDnextUnit();
-		void OnHUDnextUnfinishedUnit();
-		void OnHUDswitchAirLand();
-		void OnHUDswitchUnitHUD();
-		void OnHUDswitchEndTurn();
-		void OnHUDhealUnit();
-		void OnHUDturretToggle();
-		void OnHUDradarToggle();
-		void OnHUDairLandTakeOff();
+            void OnHUDnextUnit();
+            void OnHUDnextUnfinishedUnit();
+            void OnHUDswitchAirLand();
+            void OnHUDswitchUnitHUD();
+            void OnHUDstartMission();
+            void OnHUDswitchEndTurn();
+            void OnHUDhealUnit();
+            void OnHUDturretToggle();
+            void OnHUDradarToggle();
+            void OnHUDairLandTakeOff();
 		void OnHUDfortresToggle();
 		void OnHUDcreateUnit();
 		
@@ -842,10 +845,9 @@ class SpellMap
 
 		// events stuff
 		SpellMapEventsList event_list; // pending events
-                SpellMapEventRec *selected_event; // currently selected event (only in placement)
+		SpellMapEventRec *selected_event; // currently selected event (only in placement)		
                 int ResetUnitEvents();
                 int MissionStartEvent();
-                void StartMission() { BeginMissionFromDeploy(); }
                 int BeginMissionFromDeploy();
                 int PrepareDeployView();
                 int ProcEventsList(SpellMapEventsList &list);
