@@ -21,7 +21,7 @@ class MapXY
 public:
 	int x;
 	int y;
-	int IsSelected() {return(x >= 0 && y >= 0);};
+	int IsSelected() const { return (x >= 0 && y >= 0); }
 	int IsEqual(int x, int y) {return(this->x == x && this->y == y);};
 	MapXY() {x=-1;y=-1;};
 	MapXY(int xpos, int ypos) { x=xpos;y=ypos; };
@@ -97,4 +97,3 @@ public:
 		return(pos);
 	}
 };
-
