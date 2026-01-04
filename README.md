@@ -43,6 +43,8 @@ Právě pro rekonstrukci UI a “asset pipeline” vznikla většina přiložen�
 
 - Drobné úpravy načítání dat
   - odstraněno pár bugů v načítání grafiky a `data/def` souborů
+  
+- Projekt se dá v pohodě zkompilovat ve Visual Studiu 2026, potřebuje knihovnu https://wxwidgets.org/
 
 ---
 
