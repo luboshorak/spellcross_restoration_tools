@@ -845,7 +845,7 @@ class SpellMap
                 SpellMapEventRec *selected_event; // currently selected event (only in placement)
                 int ResetUnitEvents();
                 int MissionStartEvent();
-                void StartMission() { BeginMissionFromDeploy(); };
+                void StartMission() { BeginMissionFromDeploy(); }
                 int BeginMissionFromDeploy();
                 int PrepareDeployView();
                 int ProcEventsList(SpellMapEventsList &list);
