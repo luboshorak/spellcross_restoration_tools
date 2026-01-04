@@ -1579,24 +1579,9 @@ void MainFrame::OnAddUnit(wxCommandEvent& event)
     if(!spell_map->IsLoaded())
         return;
 
-    if (spell_map->isGameMode())
-    {
-        auto pos = spell_map->GetSelection();
-        if (!spell_map->HasStartTiles())
-        {
-            wxMessageBox("Game mode nemá definovaná startovací políčka.", "Nelze přidat jednotku", wxICON_WARNING | wxOK, this);
-            return;
-        }
-        if (!spell_map->IsStartTile(pos))
-        {
-            wxMessageBox("V Game modu lze přidávat jednotky pouze na startovní políčka.", "Nelze přidat jednotku", wxICON_WARNING | wxOK, this);
-            return;
-        }
-    }
-
     if(!FindWindowById(ID_UNITS_WIN))
     {
-        // make new unit
+        // make new unit        
         /*MapUnit *new_unit = spell_map->CreateUnit();
         spell_map->SelectUnit(new_unit);
         new_unit->in_placement = true;

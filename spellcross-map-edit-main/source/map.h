@@ -706,10 +706,8 @@ class SpellMap
 
 		bool deployment_mode = false;
 		
-            MapXY GetSelection(TScroll* scroll=NULL);
-            vector<MapXY> &GetSelections(TScroll* scroll=NULL);
-            bool IsStartTile(const MapXY& pos) const;
-            bool HasStartTiles() const;
+		MapXY GetSelection(TScroll* scroll=NULL);
+		vector<MapXY> &GetSelections(TScroll* scroll=NULL);
 		std::vector<MapXY> GetRelSelection(TScroll* scroll=NULL);
 		void ClearSelections();
 		vector<Sprite*> GetL1sprites(vector<MapXY> &selection);

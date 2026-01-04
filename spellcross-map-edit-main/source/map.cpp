@@ -73,7 +73,7 @@ namespace scsave
 		return bool(is);
 	}
 
-	// JSON-ish: "key": "VALUE" (hlaviÃ¨ka nenÃ­ strict JSON kvÃ¹li backslashÃ¹m)
+	// JSON-ish: "key": "VALUE" (hlavièka není strict JSON kvùli backslashùm)
 	inline bool ExtractQuotedField2(const std::string& text, const char* key, std::string& out)
 	{
 		std::string needle = std::string("\"") + key + "\"";
@@ -109,7 +109,7 @@ static MapUnitType MapUnitTypeFromString(const std::string& s)
 	if (s == "ArmyUnit")    return MapUnitType::ArmyUnit;
 	if (s == "SpecUnit")    return MapUnitType::SpecUnit;
 	if (s == "VoluntUnit")  return MapUnitType::VoluntUnit;
-	// SpecUnit1/SpecUnit2 fallback (pouÅ¾Ã­vÃ¡ se v event exportu)
+	// SpecUnit1/SpecUnit2 fallback (používá se v event exportu)
 	if (s == "SpecUnit1" || s == "SpecUnit2") return MapUnitType::SpecUnit;
 	return MapUnitType::Unknown;
 }
@@ -121,7 +121,7 @@ struct ScsaveUnitLink
 	int32_t creator_event_idx = -1;
 };
 
-// jednotnÃ½ zÃ¡pis/Ã¨tenÃ­ MapUnit bez pointerÃ¹
+// jednotný zápis/ètení MapUnit bez pointerù
 static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, SpellMapEvents* evt_ctx)
 {
 	scsave::write(os, (int32_t)u->id);
@@ -242,11 +242,11 @@ static bool scsave_read_unit(std::istream& is, SpellMap* map, SpellData* data, M
 	u->commander_id = commander_id;
 	u->is_commander = is_commander;
 
-	// PÃ¹vodnÃ­ kÃ³d (chybnÃ½):
+	// Pùvodní kód (chybný):
 	// std::memset(u->name, 0, sizeof(u->name));
 	// std::strncpy(u->name, name.c_str(), sizeof(u->name) - 1);
 
-	// OpravenÃ½ kÃ³d pro std::string:
+	// Opravený kód pro std::string:
 	u->name.clear();
 	u->name = name;
 
@@ -640,8 +640,7 @@ SpellMap::SpellMap()
 {
 	is_valid = false;
 
-        game_mode = false;
-        mission_started = false;
+	game_mode = false;
 
 	pic = NULL;
 
@@ -790,7 +789,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 
 static bool ExtractQuotedField(const std::string& text, const char* key, std::string& out)
 {
-	// hledÃ¡: "key": "VALUE"
+	// hledá: "key": "VALUE"
 	std::string needle = std::string("\"") + key + "\"";
 	size_t p = text.find(needle);
 	if (p == std::string::npos) return false;
@@ -798,7 +797,7 @@ static bool ExtractQuotedField(const std::string& text, const char* key, std::st
 	p = text.find(':', p);
 	if (p == std::string::npos) return false;
 
-	// najdi prvnÃ­ uvozovku po dvojteÃ¨ce
+	// najdi první uvozovku po dvojteèce
 	p = text.find('"', p);
 	if (p == std::string::npos) return false;
 	p++;
@@ -924,7 +923,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 			if ((int32_t)u->id == sel_id)
 				tmp.sel_unit = u;
 
-		// events container (potÃ¸ebujeme kvÃ¹li creator_event relinku)
+		// events container (potøebujeme kvùli creator_event relinku)
 		tmp.events = new SpellMapEvents(this);
 
 		// --- EVENTS ---
@@ -1009,7 +1008,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 			tmp.events->AddEvent(e);
 		}
 
-		// relink parent/child + creator_event u hlavnÃ­ch tmp.units
+		// relink parent/child + creator_event u hlavních tmp.units
 		for (size_t i = 0; i < tmp.units.size(); i++)
 		{
 			auto* u = tmp.units[i];
@@ -1081,33 +1080,15 @@ void SpellMap::ResumeUnitRanging(bool resume)
 		unit_range->Resume(resume);
 }
 
-void SpellMap::BeginMissionPlay()
-{
-        mission_started = true;
-
-        // exec initial events
-        MissionStartEvent();
-
-        // reset units view/attack ranges
-        unit_view->ClearEvents();
-        unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
-        unit_view->AddUnitsView();
-
-        InvalidateHUDbuttons();
-}
-
 // switch game mode
 int SpellMap::SetGameMode(int new_mode)
 {
-        int old_state = game_mode;
-        game_mode = new_mode;
-        mission_started = false;
-        deployment_mode = game_mode && HasStartTiles();
-        limit_game_mode_to_start_tiles = deployment_mode;
+	int old_state = game_mode;
+	game_mode = new_mode;
 
 	// entering game mode: ensure we are not in any editor "placement" state
-        if (game_mode && !old_state)
-        {
+	if (game_mode && !old_state)
+	{
 		HaltUnitRanging(true);
 		LockMap();
 		for (auto* u : units)
@@ -1129,26 +1110,12 @@ int SpellMap::SetGameMode(int new_mode)
 		unit_selection_mod = true;
 		g_attack_map_dirty_for = unit_selection;
 
-                ReleaseMap();
-                ResumeUnitRanging(false);
-        }
+		ReleaseMap();
+		ResumeUnitRanging(false);
+	}
 
-        if (game_mode && !deployment_mode)
-                StartMission();
-
-        // leaving game mode: nothing special right now
-        return(old_state);
-}
-
-void SpellMap::StartMission()
-{
-        if (!isGameMode() || mission_started)
-                return;
-
-        deployment_mode = false;
-        limit_game_mode_to_start_tiles = false;
-
-        BeginMissionPlay();
+	// leaving game mode: nothing special right now
+	return(old_state);
 }
 
 // game mode
@@ -3875,15 +3842,6 @@ MapXY SpellMap::GetSelection(TScroll* scroll)
 		return(MapXY());
 }
 
-bool SpellMap::IsStartTile(const MapXY& pos) const
-{
-	return (std::find(start.begin(), start.end(), pos) != start.end());
-}
-
-bool SpellMap::HasStartTiles() const
-{
-	return (!start.empty());
-}
 
 // get selection elevation
 int SpellMap::GetElevation(TScroll* scroll)
@@ -4558,17 +4516,6 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 	unit_range->ResultLock(true);
 	unit_view->ResultLock(true);
 
-	bool start_tiles_only = isGameMode() && limit_game_mode_to_start_tiles;
-	bool render_wL1 = wL1 && !start_tiles_only;
-	bool render_wL2 = wL2 && !start_tiles_only;
-	bool render_wL3 = wL3 && !start_tiles_only;
-	bool render_wL4 = wL4 && !start_tiles_only;
-	bool render_wSTCI = wSTCI || start_tiles_only;
-	bool render_wUnits = wUnits && !start_tiles_only;
-	bool render_wSound = wSound && !start_tiles_only;
-	bool render_wSoundLoop = wSoundLoop && !start_tiles_only;
-	bool render_wEvents = wEvents && !start_tiles_only;
-
 	// make local copies of layers so tools and clipboard can override'em (not very effective solution)
 	std::vector<MapSprite> tiles = this->tiles;
 	std::vector<MapLayer3> L3 = this->L3;
@@ -4653,7 +4600,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 			int sof = tiles[mxy].elev;
 
 			// override sprite by plain one?
-			if (!render_wL1)
+			if (!wL1)
 			{
 				// try get class glyph
 				sid = terrain->GetTileGlyph(sid);
@@ -4692,7 +4639,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 
 
 	// --- Render Layer 3 - ANM animations ---
-	if (render_wL3)
+	if (wL3)
 	{
 		for (i = 0; i < L3.size(); i++)
 		{
@@ -4729,15 +4676,13 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 	}
 
 	// --- Render special tiles - START/ESCAPE/TARGET---
-	if (render_wSTCI)
+	if (wSTCI)
 	{
 		// for each special sprite type
 		vector<MapXY>* spec[] = { &start, &escape, &targets };
 		Sprite* spec_sprite[] = { start_sprite, escape_sprite, target_sprite };
 		for (int sid = 0; sid < 3; sid++)
 		{
-			if (start_tiles_only && sid != 0)
-				continue;
 			if (!spec_sprite[sid])
 				continue;
 
@@ -4845,7 +4790,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 
 
 	// --- Render Layer 4 - PNM animations ---
-	if (render_wL4)
+	if (wL4)
 	{
 		for (i = 0; i < L4.size(); i++)
 		{
@@ -4933,7 +4878,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 			for (int pass = 0; pass < 3; pass++)
 			{
 				// units render:
-				while (render_wUnits && unit && !hide_units)
+				while (wUnits && unit && !hide_units)
 				{
 					if ((pass == 0 && unit->unit->isAir()) || pass == 2)
 					{
@@ -4992,7 +4937,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 				}
 
 				// object render:
-				if (render_wL2 && pass == 1 && sid2)
+				if (wL2 && pass == 1 && sid2)
 				{
 					auto filt = filter;
 					if (!use_view_mask && cursor == pos && wHighlight_obj)
@@ -5001,7 +4946,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 				}
 
 				// render tile/object hit PNM animation
-				if (render_wL2 && pass == 2 && tile->hit_pnm)
+				if (wL2 && pass == 2 && tile->hit_pnm)
 				{
 					auto* frame = tile->hit_pnm->frames[tile->hit_pnm_frame];
 					frame->Render(pic, pic_end, mxx, myy, pic_x_size, filter);
@@ -5068,7 +5013,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 	terrain->font->SetFilter(terrain->filter.darker);
 	for (auto& sound : sounds->sounds)
 	{
-		if (!(sound.GetType() == MapSound::SoundType::LOOP && render_wSoundLoop || sound.GetType() == MapSound::SoundType::RANDOM && render_wSound))
+		if (!(sound.GetType() == MapSound::SoundType::LOOP && wSoundLoop || sound.GetType() == MapSound::SoundType::RANDOM && wSound))
 			continue;
 		auto pos = sound.GetPosition();
 
@@ -5106,7 +5051,7 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 
 
 	// --- Events:
-	if (render_wEvents)
+	if (wEvents)
 	{
 		terrain->font->SetFilter(terrain->filter.darker);
 		terrain->font7->SetFilter(terrain->filter.darker);
@@ -7037,20 +6982,17 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 		if (unit_selection)
 			CreateHUDbutton(gres.wm_glyph_heal, hud_origin, btn_top[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDhealUnit, this), NULL, !can_heal);
 
-                if (!cursor_unit && !destructible)
-                {
-                        // no unit under cursor: render 8 buttons in the right panel
-                        CreateHUDbutton(gres.wm_glyph_map, hud_origin, btn_right[0], buf, buf_end, buf_x_size, HUD_ACTION_MINIMAP, NULL, NULL);
-                        CreateHUDbutton((unit_sel_land_preference) ? (gres.wm_glyph_ground) : (gres.wm_glyph_air), hud_origin, btn_right[1], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchAirLand, this), NULL);
-                        CreateHUDbutton(gres.wm_glyph_goto_unit, hud_origin, btn_right[2], buf, buf_end, buf_x_size, HUD_ACTION_UNITS, NULL, NULL);
-                        if (start_tiles_only)
-                                CreateHUDbutton(gres.wm_glyph_end_placement, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDstartMission, this), NULL);
-                        else
-                                CreateHUDbutton(gres.wm_glyph_end_turn, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchEndTurn, this), NULL);
+		if (!cursor_unit && !destructible)
+		{
+			// no unit under cursor: render 8 buttons in the right panel
+			CreateHUDbutton(gres.wm_glyph_map, hud_origin, btn_right[0], buf, buf_end, buf_x_size, HUD_ACTION_MINIMAP, NULL, NULL);
+			CreateHUDbutton((unit_sel_land_preference) ? (gres.wm_glyph_ground) : (gres.wm_glyph_air), hud_origin, btn_right[1], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchAirLand, this), NULL);
+			CreateHUDbutton(gres.wm_glyph_goto_unit, hud_origin, btn_right[2], buf, buf_end, buf_x_size, HUD_ACTION_UNITS, NULL, NULL);
+			CreateHUDbutton(gres.wm_glyph_end_turn, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchEndTurn, this), NULL);
 
-                        CreateHUDbutton(gres.wm_glyph_unit_info, hud_origin, btn_right[4], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchUnitHUD, this), NULL);
-                        CreateHUDbutton(gres.wm_glyph_info, hud_origin, btn_right[5], buf, buf_end, buf_x_size, 0, NULL, NULL);
-                        CreateHUDbutton(gres.wm_glyph_options, hud_origin, btn_right[6], buf, buf_end, buf_x_size, HUD_ACTION_MAP_OPTIONS, NULL, NULL);
+			CreateHUDbutton(gres.wm_glyph_unit_info, hud_origin, btn_right[4], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchUnitHUD, this), NULL);
+			CreateHUDbutton(gres.wm_glyph_info, hud_origin, btn_right[5], buf, buf_end, buf_x_size, 0, NULL, NULL);
+			CreateHUDbutton(gres.wm_glyph_options, hud_origin, btn_right[6], buf, buf_end, buf_x_size, HUD_ACTION_MAP_OPTIONS, NULL, NULL);
 			CreateHUDbutton(gres.wm_glyph_retreat, hud_origin, btn_right[7], buf, buf_end, buf_x_size, 0, NULL, NULL);
 		}
 
@@ -7114,16 +7056,12 @@ void SpellMap::OnHUDswitchAirLand()
 }
 void SpellMap::OnHUDswitchUnitHUD()
 {
-        w_unit_hud = !w_unit_hud;
-        InvalidateHUDbuttons();
-}
-void SpellMap::OnHUDstartMission()
-{
-        StartMission();
+	w_unit_hud = !w_unit_hud;
+	InvalidateHUDbuttons();
 }
 void SpellMap::OnHUDswitchEndTurn()
 {
-        // End player turn and start enemy turn (game mode)
+	// End player turn and start enemy turn (game mode)
 
 	FinishUnits();
 
@@ -9919,15 +9857,6 @@ MapUnit* SpellMap::CreateUnit(MapUnit* parent, SpellUnitRec* new_type)
 {
 	HaltUnitRanging(true);
 
-	MapXY placement_pos = GetSelection();
-	bool restrict_start_tile = isGameMode() && limit_game_mode_to_start_tiles && !parent;
-	if (restrict_start_tile && !IsStartTile(placement_pos))
-	{
-		last_error = "In game mode, new units can be placed only on start tiles.";
-		ResumeUnitRanging(false);
-		return(nullptr);
-	}
-
 	MapUnit* unit;
 	if (parent)
 	{
@@ -9949,7 +9878,7 @@ MapUnit* SpellMap::CreateUnit(MapUnit* parent, SpellUnitRec* new_type)
 		unit->unit = spelldata->units->GetUnit(type_id);
 
 		// default position
-		unit->coor = placement_pos;
+		unit->coor = GetSelection();
 
 		// default params
 		unit->morale = 100;
