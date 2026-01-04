@@ -76,14 +76,14 @@ public:
 		}
 		return(res);
 	}
-	int operator == (MapXY par)
-	{		
-		return(this->x == par.x && this->y == par.y);
-	}
-	int operator != (MapXY par)
-	{
-		return(this->x != par.x || this->y != par.y);
-	}
+        int operator == (const MapXY &par) const
+        {
+                return(this->x == par.x && this->y == par.y);
+        }
+        int operator != (const MapXY &par) const
+        {
+                return(this->x != par.x || this->y != par.y);
+        }
 	MapXY Min(MapXY pos)
 	{
 		pos.x = (std::min)(this->x,pos.x);
