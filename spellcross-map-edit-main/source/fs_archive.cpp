@@ -352,9 +352,41 @@ std::string FSarchive::GetFSname(bool with_extension)
 // get wildcard filtered file names
 std::vector<std::string> FSarchive::GetFileNames(std::string wild)
 {
-	std::vector<std::string> list;
-	for(auto &file: m_files)
-		if(wildcmp(wild.c_str(),file->name.c_str()))
-			list.push_back(file->name);
-	return(list);
+        std::vector<std::string> list;
+        for(auto &file: m_files)
+                if(wildcmp(wild.c_str(),file->name.c_str()))
+                        list.push_back(file->name);
+        return(list);
+}
+
+// export archive content to a folder (per-archive subfolder), optionally skipping already existing files
+int FSarchive::DumpToFolder(const std::filesystem::path& folder, bool skip_existing)
+{
+        try
+        {
+                std::filesystem::create_directories(folder);
+                std::filesystem::path archive_dir = folder / GetFSname(false);
+                std::filesystem::create_directories(archive_dir);
+
+                for(auto &file : m_files)
+                {
+                        std::filesystem::path out_path = archive_dir / file->name;
+                        if(skip_existing && std::filesystem::exists(out_path))
+                                continue;
+
+                        if(!file->is_loaded && LoadFile(file))
+                                return(1);
+
+                        std::ofstream fw(out_path, std::ios::binary);
+                        if(!fw)
+                                return(1);
+                        fw.write(reinterpret_cast<const char*>(file->data.data()), file->data.size());
+                }
+        }
+        catch(const std::exception&)
+        {
+                return(1);
+        }
+
+        return(0);
 }

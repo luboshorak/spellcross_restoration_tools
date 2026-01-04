@@ -326,6 +326,9 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	this->data_path = data_path;
 	this->cd_data_path = cd_data_path;
 
+	// ensure persistent temp folder for extracted FS contents
+	const std::filesystem::path temp_root = std::filesystem::current_path() / "temp";
+
 	uint8_t* data;
 	int size;
 	
@@ -345,6 +348,17 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 		throw runtime_error(string_format("Loading COMMON.FS archive failed (%s)!",error.what()));
 	}
 		
+	// export COMMON.FS to temp folder (append-only)
+	if(status_list)
+		status_list("Exporting COMMON.FS to temp cache...");
+	if(common_fs->DumpToFolder(temp_root))
+	{
+		this->~SpellData();
+		if(status_list)
+			status_list(" - export failed!");
+		throw runtime_error("Caching COMMON.FS contents to temp folder failed!");
+	}
+
 	// load sound stuff
 	if(status_list)
 		status_list("Loading sound samples...");
@@ -465,6 +479,17 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 			// do nothing, optional data
 		};
 		
+		// export terrain FS to temp folder (append-only)
+		if(status_list)
+			status_list("   - caching terrain data to temp...");
+		if(terrain_fs->DumpToFolder(temp_root))
+		{
+			this->~SpellData();
+			if(status_list)
+				status_list("   - export failed!");
+			throw runtime_error(string_format("Caching terrain archive ''%s'' failed!",name.c_str()));
+		}
+
 		// make new terrain
 		Terrain* new_terrain = new Terrain();
 		if(new_terrain->Load(terrain_fs, map_pal, &gres, L2_classes, status_item))
@@ -595,7 +620,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	catch (const std::exception& error) {
 		font7 = nullptr; // fallback: no 7pix font
 		if (status_list) status_list(" - failed! (optional, continuing)");
-		// NEH¡ZET, jen log
+		// NEH√ÅZET, jen log
 	}
 
 	// load aux 14pix font and merge it to spellcross font (optional)
@@ -609,7 +634,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	}
 	catch (const std::exception& error) {
 		if (status_list) status_list(" - failed! (optional, continuing)");
-		// NEH¡ZET
+		// NEH√ÅZET
 	}
 
 	// copy fonts to terrains (guard font7)

@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <filesystem>
 #include "LZ_spell.h"
 
 class FSarchive
@@ -48,11 +49,12 @@ class FSarchive
 		std::string GetFile(std::string& name);
 		int FreeFileData(const char* name);
 		int FreeFileData(std::string name);
-		int FreeFileData(int id);
-		int Count();
-		const char *GetFileName(int id);
-		std::string GetFSname(bool with_extension=true);
-		std::vector<std::string> GetFileNames(std::string wild="*");
+                int FreeFileData(int id);
+                int Count();
+                const char *GetFileName(int id);
+                std::string GetFSname(bool with_extension=true);
+                std::vector<std::string> GetFileNames(std::string wild="*");
+                int DumpToFolder(const std::filesystem::path& folder, bool skip_existing=true);
 
 	private:			
 		
