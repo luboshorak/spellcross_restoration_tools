@@ -31,6 +31,8 @@
 #include <string>
 #include <chrono>
 #include <future>
+#include <thread>
+#include <memory>
 
 #include "resource.h"
 #include "main.h"
@@ -42,6 +44,7 @@
 #include "level.h"
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
+#include <wx/busyinfo.h>
 #include "forms/form_level.h"
 
 bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
@@ -51,19 +54,29 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
 
     // if (spell_map->Load(def_path, spell_data))
 
-    // Oprava: vytvo¯te kopii def_path, protoûe metoda oËek·v· std::wstring& (ne const std::wstring&)
-    std::wstring def_path_copy = def_path;
-    if (spell_map->Load(def_path_copy, spell_data))
-    {
-        wxMessageBox(
-            string_format("Loading Spellcross map file failed with error:\n%s", spell_map->GetLastError().c_str()),
-            "Error",
-            wxICON_ERROR
-        );
-        return false;
-    }
+    auto busy = std::make_shared<wxBusyInfo>("Loading level DEF...\nPlease wait.", this);
+    std::thread([this, path, busy]() {
+        LevelData lvl;
+        std::string err;
+        LevelLoader loader;
+        bool ok = loader.LoadLevelDef(path, lvl, &err);
 
-    // stejnÈ jako v OnOpenMap
+        wxCallAfter([this, busy, ok, err, lvl = std::move(lvl)]() mutable {
+            busy.reset();
+            if (!ok)
+            {
+                wxMessageBox("Failed to load level DEF:\\n" + err, "Error", wxOK | wxICON_ERROR, this);
+                return;
+            }
+
+            // otevri strategicke UI (window si zije samo, wxWidgets ho znici po zavreni)
+            auto* win = new StrategicLevelFrame(this, lvl);
+            win->CentreOnParent();
+            win->Show();
+            win->Raise();
+        });
+    }).detach();
+}
     spell_map->SetGamma(1.30);
 
     wxCommandEvent dummy;
@@ -99,7 +112,7 @@ void MainFrame::OnOpenLevelDef(wxCommandEvent& ev)
         return;
     }
 
-    // otev¯i strategickÈ UI (window si ûije samo, wxWidgets ho zniËÌ po zav¯enÌ)
+    // otev√∏i strategick√© UI (window si ≈æije samo, wxWidgets ho zni√®√≠ po zav√∏en√≠)
     auto* win = new StrategicLevelFrame(this, lvl);
     win->Show();
     win->Raise();
@@ -1430,8 +1443,8 @@ void MainFrame::OnViewMiniMap(wxCommandEvent& event)
     if (!spell_map || !spell_map->IsLoaded())
         return;
 
-    // TOGGLE: pokud minimapa existuje, zav¯i ji stejn˝m zp˘sobem jako jinde v kÛdu
-    // (tj. p¯es wxCloseEvent s ID_MINIMAP_WIN, aby se spustil spr·vn˝ cleanup:
+    // TOGGLE: pokud minimapa existuje, zav√∏i ji stejn√Ωm zp√πsobem jako jinde v k√≥du
+    // (tj. p√∏es wxCloseEvent s ID_MINIMAP_WIN, aby se spustil spr√°vn√Ω cleanup:
     //  delete form_minimap; form_minimap = NULL;)
     if (form_minimap)
     {
@@ -1442,7 +1455,7 @@ void MainFrame::OnViewMiniMap(wxCommandEvent& event)
         }
         else
         {
-            // fallback: kdyby wrapper existoval, ale okno uû ne
+            // fallback: kdyby wrapper existoval, ale okno u≈æ ne
             delete form_minimap;
             form_minimap = NULL;
         }
@@ -1457,9 +1470,9 @@ void MainFrame::OnViewMiniMap(wxCommandEvent& event)
     auto [pic_x, pic_y] = spell_map->GetMapSurfaceSize();
     int hud_state = spell_map->SetHUDstate(false);
 
-    // NOTE: tenhle 1x1 bitmap "buf" se tu jen vytv·¯Ì a hned maûe,
-    // ale render prepare ho re·lnÏ nepouûÌv· (RenderPrepare bere scroll, ne bitmap).
-    // Nech·v·m to tak, aby se nerozbilo nic nav·zanÈho.
+    // NOTE: tenhle 1x1 bitmap "buf" se tu jen vytv√°√∏√≠ a hned ma≈æe,
+    // ale render prepare ho re√°ln√¨ nepou≈æ√≠v√° (RenderPrepare bere scroll, ne bitmap).
+    // Nech√°v√°m to tak, aby se nerozbilo nic nav√°zan√©ho.
     wxBitmap* buf = new wxBitmap(1, 1, 24);
 
     scrl.SetPos(0, 0);
@@ -1687,7 +1700,7 @@ void MainFrame::OnCanvasPopupSelect(wxCommandEvent& event)
     }
     else if (menu_id == ID_POP_ADD_UNIT)
     {
-        // stejnÈ chov·nÌ jako Shift+Left Click: otev¯e editor a po zav¯enÌ se jednotka p¯id· na selection
+        // stejn√© chov√°n√≠ jako Shift+Left Click: otev√∏e editor a po zav√∏en√≠ se jednotka p√∏id√° na selection
         wxCommandEvent cmd;
         OnAddUnit(cmd);
     }
@@ -2156,11 +2169,11 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
             auto cur_anm = spell_map->CheckANM();
             auto sel_anm = spell_map->SelectedANM();
             // QUICK ADD UNIT:
-            // Shift + click na pr·zdnÈ polÌËko otev¯e Units editor pro p¯id·nÌ jednotky
-            // (po zav¯enÌ okna ID_UNITS_WIN se jednotka sama p¯id· na aktu·lnÌ selection)
+            // Shift + click na pr√°zdn√© pol√≠√®ko otev√∏e Units editor pro p√∏id√°n√≠ jednotky
+            // (po zav√∏en√≠ okna ID_UNITS_WIN se jednotka sama p√∏id√° na aktu√°ln√≠ selection)
             if (event.ShiftDown() && !spell_map->isGameMode())
             {
-                // p¯id·vej jen kdyû klik nenÌ na û·dnÈm "objektu" (aby se to netlouklo se select/move)
+                // p√∏id√°vej jen kdy≈æ klik nen√≠ na ≈æ√°dn√©m "objektu" (aby se to netlouklo se select/move)
                 if (!cur_unit && !cur_evt && !cur_sound && !cur_pnm && !cur_anm)
                 {
                     wxCommandEvent cmd;

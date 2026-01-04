@@ -30,9 +30,51 @@ wxEND_EVENT_TABLE()
 // UI-only: readonly text panel under the territory grid (instead of popups)
 static const int ID_TERRITORY_TEXTBOX = wxID_HIGHEST + 2201;
 
-static wxString fmt_int(const wxString& label, int v)
+static wxBitmap RenderSpellLabel(const SpellData* data, const std::string& text)
 {
-    return wxString::Format("%s %d", label, v);
+    if(!data || !data->font || text.empty())
+        return wxBitmap(1, 1);
+
+    SpellFont* font = data->font;
+
+    std::string tmp = text;
+    int w = font->GetTextWidth(tmp) + 8;
+    int h = font->GetHeight() + 6;
+    w = std::max(w, 8);
+    h = std::max(h, 8);
+
+    std::vector<uint8_t> buf((size_t)w * h, 0);
+    font->Render(buf.data(), buf.data() + buf.size(), w, 3, 2, w - 6, h - 4, tmp, 229, 254, SpellFont::FontShadow::DIAG3);
+
+    auto to8 = [](unsigned char v) -> unsigned char {
+        return (unsigned char)std::min(255, (int)v * 4);
+    };
+
+    wxImage img(w, h);
+    for(int y = 0; y < h; ++y)
+    for(int x = 0; x < w; ++x)
+    {
+        uint8_t idx = buf[(size_t)y * w + x];
+        unsigned char r = 0, g = 0, b = 0;
+        if(idx < 256)
+        {
+            r = to8(data->map_pal[idx][0]);
+            g = to8(data->map_pal[idx][1]);
+            b = to8(data->map_pal[idx][2]);
+        }
+        img.SetRGB(x, y, r, g, b);
+    }
+
+    return wxBitmap(img);
+}
+
+static void UpdateSpellLabel(wxStaticBitmap* target, const SpellData* data, const std::string& text)
+{
+    if(!target)
+        return;
+
+    if(auto bmp = RenderSpellLabel(data, text); bmp.IsOk())
+        target->SetBitmap(bmp);
 }
 
 static std::string trim(std::string s)
@@ -142,8 +184,10 @@ static void try_append_text_set(wxString& info, const std::filesystem::path& bas
 }
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
-    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1100, 700)),
+    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1100, 700),
+              wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
       m_main(parent),
+      m_spellData(parent ? parent->spell_data : nullptr),
       m_level(level)
 {
     m_money = 0;
@@ -159,6 +203,8 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     BuildUI();
     TryLoadBackground();
     RefreshUI();
+
+    Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
 }
 
 void StrategicLevelFrame::BuildUI()
@@ -170,20 +216,10 @@ void StrategicLevelFrame::BuildUI()
     topBar->SetBackgroundColour(wxColour(20, 70, 20));
     auto topSizer = new wxBoxSizer(wxHORIZONTAL);
 
-    m_lblMoney = new wxStaticText(topBar, wxID_ANY, "Money 0");
-    m_lblResearch = new wxStaticText(topBar, wxID_ANY, "Research 0");
-    m_lblTurn = new wxStaticText(topBar, wxID_ANY, "Turn 1");
-
-    auto font = m_lblMoney->GetFont();
-    font.SetPointSize(font.GetPointSize() + 3);
-    font.SetWeight(wxFONTWEIGHT_BOLD);
-    m_lblMoney->SetFont(font);
-    m_lblResearch->SetFont(font);
-    m_lblTurn->SetFont(font);
-
-    m_lblMoney->SetForegroundColour(*wxWHITE);
-    m_lblResearch->SetForegroundColour(*wxWHITE);
-    m_lblTurn->SetForegroundColour(*wxWHITE);
+    wxBitmap placeholder(1, 1);
+    m_lblMoney = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
+    m_lblResearch = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
+    m_lblTurn = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
 
     topSizer->AddStretchSpacer(1);
     topSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
@@ -282,9 +318,9 @@ void StrategicLevelFrame::BuildUI()
 
 void StrategicLevelFrame::RefreshUI()
 {
-    m_lblMoney->SetLabel(fmt_int("Money", m_money));
-    m_lblResearch->SetLabel(fmt_int("Research", m_research));
-    m_lblTurn->SetLabel(fmt_int("Turn", m_turn));
+    UpdateSpellLabel(m_lblMoney, m_spellData, wxString::Format("Money %d", m_money).ToStdString());
+    UpdateSpellLabel(m_lblResearch, m_spellData, wxString::Format("Research %d", m_research).ToStdString());
+    UpdateSpellLabel(m_lblTurn, m_spellData, wxString::Format("Turn %d", m_turn).ToStdString());
 
     m_roster->DeleteAllItems();
     for(size_t i = 0; i < m_level.start_units.size(); ++i)
@@ -682,4 +718,11 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
         const int y = (ph - dh) / 2;
         dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
     }
+}
+
+void StrategicLevelFrame::OnActivate(wxActivateEvent& ev)
+{
+    if(ev.GetActive())
+        Raise();
+    ev.Skip();
 }
