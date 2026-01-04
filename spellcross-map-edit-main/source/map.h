@@ -842,14 +842,17 @@ class SpellMap
 
 		// events stuff
 		SpellMapEventsList event_list; // pending events
-		SpellMapEventRec *selected_event; // currently selected event (only in placement)		
-		int ResetUnitEvents();
-		int MissionStartEvent();
-		int ProcEventsList(SpellMapEventsList &list);
-		SpellMapEventRec *GetCursorEvent(TScroll* scroll=NULL);
-		int SelectEvent(SpellMapEventRec *evt);
-		SpellMapEventRec* GetSelectEvent();
-		int UpdateEventUnit(SpellMapEventRec *evt, MapUnit* unit);
+                SpellMapEventRec *selected_event; // currently selected event (only in placement)
+                int ResetUnitEvents();
+                int MissionStartEvent();
+                void StartMission();
+                int BeginMissionFromDeploy();
+                int PrepareDeployView();
+                int ProcEventsList(SpellMapEventsList &list);
+                SpellMapEventRec *GetCursorEvent(TScroll* scroll=NULL);
+                int SelectEvent(SpellMapEventRec *evt);
+                SpellMapEventRec* GetSelectEvent();
+                int UpdateEventUnit(SpellMapEventRec *evt, MapUnit* unit);
 		
 		
 

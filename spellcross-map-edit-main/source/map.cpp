@@ -1087,11 +1087,11 @@ int SpellMap::SetGameMode(int new_mode)
 	game_mode = new_mode;
 	limit_game_mode_to_start_tiles = game_mode;
 
-	// entering game mode: ensure we are not in any editor "placement" state
-	if (game_mode && !old_state)
-	{
-		HaltUnitRanging(true);
-		LockMap();
+        // entering game mode: ensure we are not in any editor "placement" state
+        if (game_mode && !old_state)
+        {
+                HaltUnitRanging(true);
+                LockMap();
 		for (auto* u : units)
 		{
 			// placement dragging must never be possible in game mode
@@ -1108,12 +1108,14 @@ int SpellMap::SetGameMode(int new_mode)
 			u->was_moved = true;
 		}
 		// refresh selection/range maps
-		unit_selection_mod = true;
-		g_attack_map_dirty_for = unit_selection;
+                unit_selection_mod = true;
+                g_attack_map_dirty_for = unit_selection;
 
-		ReleaseMap();
-		ResumeUnitRanging(false);
-	}
+                ReleaseMap();
+                ResumeUnitRanging(false);
+
+                PrepareDeployView();
+        }
 
 	// leaving game mode: nothing special right now
 	return(old_state);
@@ -1122,7 +1124,28 @@ int SpellMap::SetGameMode(int new_mode)
 // game mode
 int SpellMap::isGameMode()
 {
-	return(game_mode);
+        return(game_mode);
+}
+
+// initialize deploy stage visibility (only start tiles visible)
+int SpellMap::PrepareDeployView()
+{
+        if (!isGameMode() || !unit_view)
+                return(1);
+
+        unit_view->ClearUnitsView(ViewRange::ClearMode::RESET, true);
+
+        if (unit_view->view.size() != x_size * y_size)
+                unit_view->view.assign(x_size * y_size, 0);
+
+        for (auto& pos : start)
+        {
+                auto idx = ConvXY(pos);
+                if (idx >= 0 && idx < unit_view->view.size())
+                        unit_view->view[idx] = 2;
+        }
+
+        return(0);
 }
 
 // returns path to DEF file or DTA file if DEF was not used
@@ -7008,10 +7031,12 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 		if (!cursor_unit && !destructible)
 		{
 			// no unit under cursor: render 8 buttons in the right panel
-			CreateHUDbutton(gres.wm_glyph_map, hud_origin, btn_right[0], buf, buf_end, buf_x_size, HUD_ACTION_MINIMAP, NULL, NULL);
-			CreateHUDbutton((unit_sel_land_preference) ? (gres.wm_glyph_ground) : (gres.wm_glyph_air), hud_origin, btn_right[1], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchAirLand, this), NULL);
-			CreateHUDbutton(gres.wm_glyph_goto_unit, hud_origin, btn_right[2], buf, buf_end, buf_x_size, HUD_ACTION_UNITS, NULL, NULL);
-			CreateHUDbutton(gres.wm_glyph_end_turn, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchEndTurn, this), NULL);
+                        CreateHUDbutton(gres.wm_glyph_map, hud_origin, btn_right[0], buf, buf_end, buf_x_size, HUD_ACTION_MINIMAP, NULL, NULL);
+                        CreateHUDbutton((unit_sel_land_preference) ? (gres.wm_glyph_ground) : (gres.wm_glyph_air), hud_origin, btn_right[1], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchAirLand, this), NULL);
+                        CreateHUDbutton(gres.wm_glyph_goto_unit, hud_origin, btn_right[2], buf, buf_end, buf_x_size, HUD_ACTION_UNITS, NULL, NULL);
+
+                        auto* end_turn_glyph = limit_game_mode_to_start_tiles ? gres.wm_glyph_end_placement : gres.wm_glyph_end_turn;
+                        CreateHUDbutton(end_turn_glyph, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchEndTurn, this), NULL);
 
 			CreateHUDbutton(gres.wm_glyph_unit_info, hud_origin, btn_right[4], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchUnitHUD, this), NULL);
 			CreateHUDbutton(gres.wm_glyph_info, hud_origin, btn_right[5], buf, buf_end, buf_x_size, 0, NULL, NULL);
@@ -7084,9 +7109,15 @@ void SpellMap::OnHUDswitchUnitHUD()
 }
 void SpellMap::OnHUDswitchEndTurn()
 {
-	// End player turn and start enemy turn (game mode)
+        if (limit_game_mode_to_start_tiles)
+        {
+                BeginMissionFromDeploy();
+                return;
+        }
 
-	FinishUnits();
+        // End player turn and start enemy turn (game mode)
+
+        FinishUnits();
 
 	// start scripted enemy phase
 	StartEnemyTurn();
@@ -10200,13 +10231,15 @@ int SpellMap::ResetUnitEvents()
 // place mission start event units (if not done yet)
 int SpellMap::MissionStartEvent()
 {
-	if (!isGameMode())
-		return(1);
+        if (!isGameMode())
+                return(1);
 
-	// get list of events
-	auto list = events->GetMissionStartEvent(true);
-	if (list.empty())
-		return(0);
+        limit_game_mode_to_start_tiles = false;
+
+        // get list of events
+        auto list = events->GetMissionStartEvent(true);
+        if (list.empty())
+                return(0);
 
 	// process all events:
 	int is_selected = false;
@@ -10295,7 +10328,32 @@ int SpellMap::ProcEventsList(SpellMapEventsList& list)
 			break;
 	}
 
-	return(0);
+        return(0);
+}
+
+// switch from deploy to full gameplay in game mode
+int SpellMap::BeginMissionFromDeploy()
+{
+        if (!isGameMode())
+                return(1);
+
+        if (!limit_game_mode_to_start_tiles)
+                return(0);
+
+        HaltUnitRanging(true);
+        unit_view->ClearEvents();
+        unit_view->ClearUnitsView(ViewRange::ClearMode::RESET);
+        unit_view->AddUnitsView();
+        MissionStartEvent();
+        ResumeUnitRanging(false);
+        InvalidateHUDbuttons();
+        return(0);
+}
+
+// compat helper for external callers expecting a mission start entry point
+void SpellMap::StartMission()
+{
+        BeginMissionFromDeploy();
 }
 
 // get first event at cursor position or NULL if not found

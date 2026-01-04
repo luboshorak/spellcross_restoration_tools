@@ -787,13 +787,10 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
         // reset map
         spell_map->saves->Clear();
         spell_map->events->ResetEvents();
-        spell_map->saves->SaveInitial();        
-        // exec initial events
-        spell_map->MissionStartEvent();
-        // reset units view/attack ranges
+        spell_map->saves->SaveInitial();
+        // reset units view/attack ranges for deploy stage
         spell_map->unit_view->ClearEvents();
-        spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
-        spell_map->unit_view->AddUnitsView();
+        spell_map->PrepareDeployView();
     }
     else
     {
