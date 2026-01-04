@@ -640,7 +640,8 @@ SpellMap::SpellMap()
 {
 	is_valid = false;
 
-	game_mode = false;
+        game_mode = false;
+        mission_started = false;
 
 	pic = NULL;
 
@@ -1080,16 +1081,33 @@ void SpellMap::ResumeUnitRanging(bool resume)
 		unit_range->Resume(resume);
 }
 
+void SpellMap::BeginMissionPlay()
+{
+        mission_started = true;
+
+        // exec initial events
+        MissionStartEvent();
+
+        // reset units view/attack ranges
+        unit_view->ClearEvents();
+        unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
+        unit_view->AddUnitsView();
+
+        InvalidateHUDbuttons();
+}
+
 // switch game mode
 int SpellMap::SetGameMode(int new_mode)
 {
-	int old_state = game_mode;
-	game_mode = new_mode;
-	limit_game_mode_to_start_tiles = game_mode;
+        int old_state = game_mode;
+        game_mode = new_mode;
+        mission_started = false;
+        deployment_mode = game_mode && HasStartTiles();
+        limit_game_mode_to_start_tiles = deployment_mode;
 
 	// entering game mode: ensure we are not in any editor "placement" state
-	if (game_mode && !old_state)
-	{
+        if (game_mode && !old_state)
+        {
 		HaltUnitRanging(true);
 		LockMap();
 		for (auto* u : units)
@@ -1111,12 +1129,26 @@ int SpellMap::SetGameMode(int new_mode)
 		unit_selection_mod = true;
 		g_attack_map_dirty_for = unit_selection;
 
-		ReleaseMap();
-		ResumeUnitRanging(false);
-	}
+                ReleaseMap();
+                ResumeUnitRanging(false);
+        }
 
-	// leaving game mode: nothing special right now
-	return(old_state);
+        if (game_mode && !deployment_mode)
+                StartMission();
+
+        // leaving game mode: nothing special right now
+        return(old_state);
+}
+
+void SpellMap::StartMission()
+{
+        if (!isGameMode() || mission_started)
+                return;
+
+        deployment_mode = false;
+        limit_game_mode_to_start_tiles = false;
+
+        BeginMissionPlay();
 }
 
 // game mode
@@ -7005,17 +7037,20 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 		if (unit_selection)
 			CreateHUDbutton(gres.wm_glyph_heal, hud_origin, btn_top[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDhealUnit, this), NULL, !can_heal);
 
-		if (!cursor_unit && !destructible)
-		{
-			// no unit under cursor: render 8 buttons in the right panel
-			CreateHUDbutton(gres.wm_glyph_map, hud_origin, btn_right[0], buf, buf_end, buf_x_size, HUD_ACTION_MINIMAP, NULL, NULL);
-			CreateHUDbutton((unit_sel_land_preference) ? (gres.wm_glyph_ground) : (gres.wm_glyph_air), hud_origin, btn_right[1], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchAirLand, this), NULL);
-			CreateHUDbutton(gres.wm_glyph_goto_unit, hud_origin, btn_right[2], buf, buf_end, buf_x_size, HUD_ACTION_UNITS, NULL, NULL);
-			CreateHUDbutton(gres.wm_glyph_end_turn, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchEndTurn, this), NULL);
+                if (!cursor_unit && !destructible)
+                {
+                        // no unit under cursor: render 8 buttons in the right panel
+                        CreateHUDbutton(gres.wm_glyph_map, hud_origin, btn_right[0], buf, buf_end, buf_x_size, HUD_ACTION_MINIMAP, NULL, NULL);
+                        CreateHUDbutton((unit_sel_land_preference) ? (gres.wm_glyph_ground) : (gres.wm_glyph_air), hud_origin, btn_right[1], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchAirLand, this), NULL);
+                        CreateHUDbutton(gres.wm_glyph_goto_unit, hud_origin, btn_right[2], buf, buf_end, buf_x_size, HUD_ACTION_UNITS, NULL, NULL);
+                        if (start_tiles_only)
+                                CreateHUDbutton(gres.wm_glyph_end_placement, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDstartMission, this), NULL);
+                        else
+                                CreateHUDbutton(gres.wm_glyph_end_turn, hud_origin, btn_right[3], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchEndTurn, this), NULL);
 
-			CreateHUDbutton(gres.wm_glyph_unit_info, hud_origin, btn_right[4], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchUnitHUD, this), NULL);
-			CreateHUDbutton(gres.wm_glyph_info, hud_origin, btn_right[5], buf, buf_end, buf_x_size, 0, NULL, NULL);
-			CreateHUDbutton(gres.wm_glyph_options, hud_origin, btn_right[6], buf, buf_end, buf_x_size, HUD_ACTION_MAP_OPTIONS, NULL, NULL);
+                        CreateHUDbutton(gres.wm_glyph_unit_info, hud_origin, btn_right[4], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchUnitHUD, this), NULL);
+                        CreateHUDbutton(gres.wm_glyph_info, hud_origin, btn_right[5], buf, buf_end, buf_x_size, 0, NULL, NULL);
+                        CreateHUDbutton(gres.wm_glyph_options, hud_origin, btn_right[6], buf, buf_end, buf_x_size, HUD_ACTION_MAP_OPTIONS, NULL, NULL);
 			CreateHUDbutton(gres.wm_glyph_retreat, hud_origin, btn_right[7], buf, buf_end, buf_x_size, 0, NULL, NULL);
 		}
 
@@ -7079,12 +7114,16 @@ void SpellMap::OnHUDswitchAirLand()
 }
 void SpellMap::OnHUDswitchUnitHUD()
 {
-	w_unit_hud = !w_unit_hud;
-	InvalidateHUDbuttons();
+        w_unit_hud = !w_unit_hud;
+        InvalidateHUDbuttons();
+}
+void SpellMap::OnHUDstartMission()
+{
+        StartMission();
 }
 void SpellMap::OnHUDswitchEndTurn()
 {
-	// End player turn and start enemy turn (game mode)
+        // End player turn and start enemy turn (game mode)
 
 	FinishUnits();
 
