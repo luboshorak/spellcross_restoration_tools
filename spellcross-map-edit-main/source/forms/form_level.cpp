@@ -201,7 +201,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     }
 
     BuildUI();
-    TryLoadBackground();
+    //TryLoadBackground();
     RefreshUI();
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
@@ -601,93 +601,93 @@ static bool LoadFileBytes(const std::filesystem::path& p, std::vector<unsigned c
     return (bool)f.read((char*)out.data(), n);
 }
 
-void StrategicLevelFrame::TryLoadBackground()
-{
-    m_hasBg = false;
-    m_bgBitmap = wxBitmap();
-    m_bgBitmapScaled = wxBitmap();
-    m_bgScaledW = -1;
-    m_bgScaledH = -1;
-
-    namespace fs = std::filesystem;
-
-    fs::path base = fs::path(m_level.source_path);
-    base.replace_extension();
-
-    fs::path lz = base;  lz.replace_extension(".LZ");
-    fs::path pal = base; pal.replace_extension(".PAL");
-
-    std::vector<unsigned char> lzBytes, palBytes;
-    if(!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
-        return;
-
-    // Spellcross palettes are commonly 64*3 = 192 bytes
-    if(palBytes.size() != 192 || lzBytes.size() < 4)
-        return;
-
-    // Best-effort:
-    //  - Some .LZ are already raw (header w/h + pixels)
-    //  - Some .LZ are compressed with Spellcross LZW; for those, first deLZ then read header
-    const uint8_t* src = (const uint8_t*)lzBytes.data();
-    size_t srcLen = lzBytes.size();
-
-    auto rd16 = [&](const uint8_t* p, size_t off) -> unsigned {
-        return (unsigned)p[off] | ((unsigned)p[off + 1] << 8);
-    };
-
-    unsigned w = 0, h = 0;
-    const uint8_t* pix = nullptr;
-    std::vector<uint8_t> raw;
-
-    auto try_parse_raw = [&](const uint8_t* p, size_t len) -> bool {
-        if(len < 4) return false;
-        unsigned tw = rd16(p, 0);
-        unsigned th = rd16(p, 2);
-        if(tw == 0 || th == 0) return false;
-        const size_t need = 4ull + (size_t)tw * (size_t)th;
-        if(need > len) return false;
-        w = tw; h = th;
-        pix = p + 4;
-        return true;
-    };
-
-    // 1) try direct/raw first (keeps old behavior)
-    if(!try_parse_raw(src, srcLen))
-    {
-        // 2) try Spellcross LZW decode (only if LZ_spell.cpp is linked in)
-        LZWexpand delz(256 * 1024);
-        raw = delz.Decode((uint8_t*)src, (uint8_t*)src + srcLen);
-        if(raw.empty() || !try_parse_raw(raw.data(), raw.size()))
-            return;
-    }
-
-    // Palette is typically 6-bit VGA (0..63). Scale up for proper colors.
-    auto vga6_to_8 = [](unsigned char v) -> unsigned char {
-        // 0..63 -> 0..252 (classic VGA6 scaling)
-        return (unsigned char)std::min(255, (int)v * 4);
-    };
-
-    wxImage img((int)w, (int)h);
-    unsigned char* rgb = img.GetData();
-
-    for(unsigned y = 0; y < h; ++y)
-    for(unsigned x = 0; x < w; ++x)
-    {
-        unsigned idx = pix[y * w + x] & 0x3F;
-        unsigned char r = vga6_to_8(palBytes[idx * 3 + 0]);
-        unsigned char g = vga6_to_8(palBytes[idx * 3 + 1]);
-        unsigned char b = vga6_to_8(palBytes[idx * 3 + 2]);
-
-        size_t o = ((size_t)y * w + x) * 3;
-        rgb[o + 0] = r;
-        rgb[o + 1] = g;
-        rgb[o + 2] = b;
-    }
-
-    m_bgBitmap = wxBitmap(img);
-    m_hasBg = m_bgBitmap.IsOk();
-    if(m_mapPanel) m_mapPanel->Refresh();
-}
+//void StrategicLevelFrame::TryLoadBackground()
+//{
+//    m_hasBg = false;
+//    m_bgBitmap = wxBitmap();
+//    m_bgBitmapScaled = wxBitmap();
+//    m_bgScaledW = -1;
+//    m_bgScaledH = -1;
+//
+//    namespace fs = std::filesystem;
+//
+//    fs::path base = fs::path(m_level.source_path);
+//    base.replace_extension();
+//
+//    fs::path lz = base;  lz.replace_extension(".LZ");
+//    fs::path pal = base; pal.replace_extension(".PAL");
+//
+//    std::vector<unsigned char> lzBytes, palBytes;
+//    if(!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
+//        return;
+//
+//    // Spellcross palettes are commonly 64*3 = 192 bytes
+//    if(palBytes.size() != 192 || lzBytes.size() < 4)
+//        return;
+//
+//    // Best-effort:
+//    //  - Some .LZ are already raw (header w/h + pixels)
+//    //  - Some .LZ are compressed with Spellcross LZW; for those, first deLZ then read header
+//    const uint8_t* src = (const uint8_t*)lzBytes.data();
+//    size_t srcLen = lzBytes.size();
+//
+//    auto rd16 = [&](const uint8_t* p, size_t off) -> unsigned {
+//        return (unsigned)p[off] | ((unsigned)p[off + 1] << 8);
+//    };
+//
+//    unsigned w = 0, h = 0;
+//    const uint8_t* pix = nullptr;
+//    std::vector<uint8_t> raw;
+//
+//    auto try_parse_raw = [&](const uint8_t* p, size_t len) -> bool {
+//        if(len < 4) return false;
+//        unsigned tw = rd16(p, 0);
+//        unsigned th = rd16(p, 2);
+//        if(tw == 0 || th == 0) return false;
+//        const size_t need = 4ull + (size_t)tw * (size_t)th;
+//        if(need > len) return false;
+//        w = tw; h = th;
+//        pix = p + 4;
+//        return true;
+//    };
+//
+//    // 1) try direct/raw first (keeps old behavior)
+//    if(!try_parse_raw(src, srcLen))
+//    {
+//        // 2) try Spellcross LZW decode (only if LZ_spell.cpp is linked in)
+//        LZWexpand delz(256 * 1024);
+//        raw = delz.Decode((uint8_t*)src, (uint8_t*)src + srcLen);
+//        if(raw.empty() || !try_parse_raw(raw.data(), raw.size()))
+//            return;
+//    }
+//
+//    // Palette is typically 6-bit VGA (0..63). Scale up for proper colors.
+//    auto vga6_to_8 = [](unsigned char v) -> unsigned char {
+//        // 0..63 -> 0..252 (classic VGA6 scaling)
+//        return (unsigned char)std::min(255, (int)v * 4);
+//    };
+//
+//    wxImage img((int)w, (int)h);
+//    unsigned char* rgb = img.GetData();
+//
+//    for(unsigned y = 0; y < h; ++y)
+//    for(unsigned x = 0; x < w; ++x)
+//    {
+//        unsigned idx = pix[y * w + x] & 0x3F;
+//        unsigned char r = vga6_to_8(palBytes[idx * 3 + 0]);
+//        unsigned char g = vga6_to_8(palBytes[idx * 3 + 1]);
+//        unsigned char b = vga6_to_8(palBytes[idx * 3 + 2]);
+//
+//        size_t o = ((size_t)y * w + x) * 3;
+//        rgb[o + 0] = r;
+//        rgb[o + 1] = g;
+//        rgb[o + 2] = b;
+//    }
+//
+//    m_bgBitmap = wxBitmap(img);
+//    m_hasBg = m_bgBitmap.IsOk();
+//    if(m_mapPanel) m_mapPanel->Refresh();
+//}
 
 void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 {
