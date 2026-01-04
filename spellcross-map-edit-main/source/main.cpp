@@ -682,8 +682,6 @@ void MainFrame::OnClose(wxCloseEvent& ev)
             new_unit->is_active = true;
             new_unit->ResetAP();
             auto pos = spell_map->GetSelection();
-            if(spell_map->IsDeploymentPlacementLimited() && !spell_map->IsDeploymentTile(pos))
-                pos = spell_map->GetFirstDeploymentTile();
             if(pos.IsSelected())
                 new_unit->coor = pos;
             else
@@ -796,7 +794,6 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
         spell_map->unit_view->ClearEvents();
         spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
         spell_map->unit_view->AddUnitsView();
-        spell_map->UpdateGameModeVisibility();
     }
     else
     {
