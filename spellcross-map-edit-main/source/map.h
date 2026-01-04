@@ -252,6 +252,7 @@ class SpellMap
 		std::string last_error;
 		// game mode
 		int game_mode;		
+		bool limit_game_mode_to_start_tiles = false;
 		// render surface
 		int surf_x;
 		int surf_y;
@@ -384,10 +385,10 @@ class SpellMap
 
 		std::string GetLastError() {return last_error;};
 
-		// Pøidejte deklaraci metody do veøejné sekce tøídy SpellMap:
+		// PÃ¸idejte deklaraci metody do veÃ¸ejnÃ© sekce tÃ¸Ã­dy SpellMap:
 		void SetDeploymentMode(bool on);
 
-		// Pøidejte deklaraci metody do veøejné sekce tøídy SpellMap:
+		// PÃ¸idejte deklaraci metody do veÃ¸ejnÃ© sekce tÃ¸Ã­dy SpellMap:
 		bool IsDeploymentMode() const;
 
 		// message box stuff
@@ -740,6 +741,11 @@ class SpellMap
 		void SelectTiles(int mode);
 		int IvalidateTiles(vector<MapXY> tiles,std::function<void(std::string)> status_cb=NULL);
 		int RenderPrepare(TScroll* scroll=NULL);
+		void UpdateGameModeVisibility();
+		bool HasPlayerUnits() const;
+		bool IsDeploymentPlacementLimited() const;
+		bool IsDeploymentTile(const MapXY& pos) const;
+		MapXY GetFirstDeploymentTile() const;
 		vector<MapXY> GetVisibleTiles();
 		tuple<int,int> GetMapSurfaceSize();
 		int isRenderSurfModified();
