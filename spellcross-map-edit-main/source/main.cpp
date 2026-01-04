@@ -778,7 +778,7 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
     if(is_game)
     {
         // switch to game mode
-        ribbonBar->HidePanels();        
+        ribbonBar->HidePanels();
         menuView->FindItem(ID_ViewSoundLoops)->Check(false);
         menuView->FindItem(ID_ViewSounds)->Check(false);
         menuView->FindItem(ID_ViewEvents)->Check(false);
@@ -787,13 +787,11 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
         // reset map
         spell_map->saves->Clear();
         spell_map->events->ResetEvents();
-        spell_map->saves->SaveInitial();        
-        // exec initial events
-        spell_map->MissionStartEvent();
-        // reset units view/attack ranges
-        spell_map->unit_view->ClearEvents();
-        spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
-        spell_map->unit_view->AddUnitsView();
+        spell_map->saves->SaveInitial();
+
+        // if there is no deployment phase, start the mission right away
+        if (!spell_map->IsDeploymentPhase())
+            spell_map->StartMission();
     }
     else
     {
