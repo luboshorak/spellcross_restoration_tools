@@ -10,6 +10,8 @@
 
 #include <wx/rawbmp.h>
 
+#include <wx/button.h>
+
 ///////////////////////////////////////////////////////////////////////////
 
 FormUnits::FormUnits( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
@@ -68,6 +70,13 @@ FormUnits::FormUnits( wxWindow* parent, wxWindowID id, const wxString& title, co
 	lboxUnits->SetMaxSize(wxSize(180,-1));
 
 	szList->Add(lboxUnits,1,wxBOTTOM|wxRIGHT|wxLEFT|wxEXPAND,5);
+
+	// Add Unit button: behaves like Enter (same action as menu item wxID_MM_SET)
+	// Reuse wxID_MM_SET so existing 'Enter' accelerator and handler logic stays consistent.
+	wxButton* btnAddUnit = new wxButton(this, wxID_MM_SET, wxT("Add unit"));
+	btnAddUnit->SetToolTip(wxT("Same action as Enter (Update/Add unit)"));
+	btnAddUnit->SetDefault();
+	szList->Add(btnAddUnit, 0, wxRIGHT|wxLEFT|wxBOTTOM|wxEXPAND, 5);
 
 
 	szMain->Add(szList,0,wxEXPAND,5);
@@ -367,12 +376,17 @@ FormUnits::FormUnits( wxWindow* parent, wxWindowID id, const wxString& title, co
 	m_spell_data = NULL;
 	m_unit = NULL;
 	m_update = false;
+
+	// No map unit attached by default -> disable 'Add unit' until SetMapUnit() is called
+	if (auto* btn = wxDynamicCast(FindWindow(wxID_MM_SET), wxButton))
+		btn->Enable(false);
 	
 	// close
 	Bind(wxEVT_CLOSE_WINDOW,&FormUnits::OnClose,this,this->m_windowId);
 	Bind(wxEVT_MENU,&FormUnits::OnSaveAuxClick,this,wxID_MM_SAVE_AUX);
 	Bind(wxEVT_MENU,&FormUnits::OnCloseClick,this,wxID_MM_EXIT);
 	Bind(wxEVT_MENU,&FormUnits::OnCloseClick,this,wxID_MM_SET);
+	Bind(wxEVT_BUTTON,&FormUnits::OnCloseClick,this,wxID_MM_SET);
 
 	Bind(wxEVT_COMMAND_LISTBOX_SELECTED,&FormUnits::OnSelectUnit,this,wxID_LB_UNITS);
 	Bind(wxEVT_COMMAND_LISTBOX_SELECTED,&FormUnits::OnSelectArt,this,wxID_LB_ART);
@@ -539,6 +553,13 @@ void FormUnits::OnSelectSpecUnit(wxCommandEvent& event)
 // fill form stuff when unit selected
 void FormUnits::SelectUnit(MapUnit *unit)
 {
+	// Update Add/Update button label to match current mode (new unit vs edit existing).
+	if (auto* btn = wxDynamicCast(FindWindow(wxID_MM_SET), wxButton))
+	{
+		btn->SetLabel(m_new_unit ? wxT("Add unit") : wxT("Update unit"));
+		btn->Enable(m_unit != NULL);
+	}
+
 	if(unit)
 	{
 		// search map unit in list and select it:
