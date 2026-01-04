@@ -5,10 +5,12 @@
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
+#include <wx/statbmp.h>
 
 #include "level.h"
 
 class MainFrame;
+class SpellData;
 
 class StrategicLevelFrame : public wxFrame
 {
@@ -22,6 +24,7 @@ private:
     // background (LEVEL_XX.LZ + LEVEL_XX.PAL) - best effort
     void TryLoadBackground();
     void OnMapPaint(wxPaintEvent& ev);
+    void OnActivate(wxActivateEvent& ev);
 
     // actions
     void OnTerritory(wxCommandEvent& ev);
@@ -37,6 +40,7 @@ private:
 
 private:
     MainFrame* m_main = nullptr;
+    SpellData* m_spellData = nullptr;
     LevelData m_level;
 
     // simple strategic state (in-memory for now)
@@ -54,9 +58,9 @@ private:
     bool m_hasBg = false;
 
     // widgets
-    wxStaticText* m_lblMoney = nullptr;
-    wxStaticText* m_lblResearch = nullptr;
-    wxStaticText* m_lblTurn = nullptr;
+    wxStaticBitmap* m_lblMoney = nullptr;
+    wxStaticBitmap* m_lblResearch = nullptr;
+    wxStaticBitmap* m_lblTurn = nullptr;
 
     wxPanel* m_mapPanel = nullptr;
     wxBoxSizer* m_mapSizer = nullptr;
