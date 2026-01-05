@@ -24,6 +24,6 @@ So far the tool can do following:
 <img src="./doc/spell_map_edit_v3.png">
                                  
 ## License
-The tool is distributed under [`LICENSE`](LICENSE). 
+The tool is distributed under [MIT license](./LICENSE.txt). 
   
   
