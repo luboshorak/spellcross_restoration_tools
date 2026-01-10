@@ -59,7 +59,7 @@ public:
 
 	//MapSprite(Sprite* sprite);
 	MapSprite();
-	virtual ~MapSprite();
+	~MapSprite();
 
 	void SetL1(Sprite* sprite,int elev=-1);
 	void SetL2(Sprite* sprite,int flags=-1);
@@ -405,7 +405,6 @@ class SpellMap
 		void HaltUnitRanging(bool clear_tasks=false);
 		void ResumeUnitRanging(bool resume=true);
 
-		void AggroEnemiesAround(MapXY center, MapXY attacker_pos, int attacker_id, int radius, int ttl);
 
 		// default scroller
 		TScroll scroller;

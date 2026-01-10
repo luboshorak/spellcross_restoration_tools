@@ -51,19 +51,19 @@ SpellVideoResources::SpellVideoResources(std::vector<std::wstring> folders)
 		list = fs->GetFileNames("*.CAN");
 		for(auto &vid: list)
 			vid_list.emplace_back(vid, fs);
-		fs_used += list.size();
+		fs_used += static_cast<int>(list.size());
 
 		// scan for DPK videos
 		list = fs->GetFileNames("*.DPK");
 		for(auto& vid: list)
 			vid_list.emplace_back(vid,fs);
-		fs_used += list.size();
+		fs_used += static_cast<int>(list.size());
 
 		// scan for DP2 videos
 		list = fs->GetFileNames("*.DP2");
 		for(auto& vid: list)
 			vid_list.emplace_back(vid,fs);
-		fs_used += list.size();
+		fs_used += static_cast<int>(list.size());
 
 		// get rid of fs archive if nothing in there
 		if(fs_used)

@@ -24,3 +24,7 @@ env/
 **/venv/
 **/ENV/
 **/env/
+
+echo spellcross-map-edit-main.7z>> .gitignore
+echo *.7z>> .gitignore
+echo *.zip>> .gitignore

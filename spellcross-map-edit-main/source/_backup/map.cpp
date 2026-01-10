@@ -6723,7 +6723,7 @@ int SpellMap::Attack(MapXY pos, int prefer_air)
 		MapXY center = target->coor;
 
 		// aggro all nearby enemy units (including the target itself)
-		for (auto* u : units)   // pokud se ten seznam u tebe nejmenuje "units", dej sem sprï¿½vnï¿½ (napï¿½. m_units)
+		for (auto* u : units)   // pokud se ten seznam u tebe nejmenuje "units", dej sem správný (napø. m_units)
 		{
 			if (!u) continue;
 			if (!u->is_enemy) continue;
@@ -8071,58 +8071,6 @@ int SpellMap::ViewRange::ClearUnitsViewCore(ClearMode clear, std::vector<int>* p
 				unit->is_visible = 1;
 	}
 
-	
-
-	// keep deployed radar vision visible even after CLEAR/HIDE (prevents "re-darkening" after unit changes)
-	if (clear == ClearMode::HIDE || clear == ClearMode::HIDE_ALL ||
-		clear == ClearMode::HIDE_UNITS || clear == ClearMode::HIDE_ENEMY)
-	{
-		for (auto& radar : map->units)
-		{
-			if (!radar || !radar->unit)
-				continue;
-			if (!radar->isActive())
-				continue;
-			if (!radar->radar_up || !radar->unit->isActionToggleRadar())
-				continue;
-
-			int rr = radar->unit->action_params[2]; // par3 = radar sight radius
-			if (rr <= 0)
-				continue;
-
-			MapXY ref = radar->coor;
-
-			// reveal tiles in radar radius (no LoS)
-			int y_min = (std::max)(0, ref.y - rr - 4);
-			int y_max = (std::min)(map->y_size - 1, ref.y + rr + 4);
-			for (int y = y_min; y <= y_max; y++)
-			{
-				for (int x = 0; x < map->x_size; x++)
-				{
-					MapXY p(x, y);
-					if ((p.Distance(ref) - 0.5) > rr)
-						continue;
-					int idx = map->ConvXY(p);
-					if (idx >= 0 && idx < (int)p_view->size())
-						(*p_view)[idx] = (std::max)((*p_view)[idx], 2);
-				}
-			}
-
-			// reveal units too
-			for (auto& u : map->units)
-			{
-				if (!u)
-					continue;
-				if (u->is_enemy == radar->is_enemy)
-					continue;
-				if ((u->coor.Distance(ref) - 0.5) > rr)
-					continue;
-				u->is_visible = 2;
-				u->was_seen = true;
-			}
-		}
-	}
-
 	return(0);
 }
 
@@ -9184,7 +9132,7 @@ int SpellMap::Tick()
 	}
 
 	// FIX: EndEnemyTurn() changes selection, but local 'unit' can still point to an enemy.
-	// Refresh it so player can act immediately without ï¿½reclickï¿½.
+	// Refresh it so player can act immediately without “reclick”.
 	unit = GetSelectedUnit();
 
 
@@ -9629,17 +9577,12 @@ int SpellMap::Tick()
 				// start projectile flight
 				unit->attack_proj_step = 0;
 				if ((target && unit->unit->hasProjectile(target->unit)) || unit->unit->hasProjectile())
-				{
 					unit->attack_proj_delay = (int)(0.04 * unit->attack_dist / 0.02);
-				}
-				else
-				{
+									if (unit->attack_proj_delay <= 0) unit->attack_proj_delay = 1;
+else
 					unit->attack_proj_delay = (int)(0.01 * unit->attack_dist / 0.02);
-				}
-				if (unit->attack_proj_delay <= 0)
-					unit->attack_proj_delay = 1;
-
-				unit->attack_state = MapUnit::ATTACK_STATE::FLIGHT;
+									if (unit->attack_proj_delay <= 0) unit->attack_proj_delay = 1;
+unit->attack_state = MapUnit::ATTACK_STATE::FLIGHT;
 			}
 
 			update = true;

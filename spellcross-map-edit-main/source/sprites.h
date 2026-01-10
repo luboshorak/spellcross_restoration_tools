@@ -280,11 +280,20 @@ class Sprite
 		// tile projection angle (degrees)
 		static constexpr double PROJECTION_ANGLE = 37.0;
 
+		class WallParams
+		{
+		public:
+			int class_id = -1; // matches MURY.DEF numbers
+			int type_id = -1; // unique type id per wall type
+			bool damage = false; // is damaged?
+			bool q[4] = { false, false, false, false }; // continues to quadrants?
+		};
+
+		WallParams wall_params;
+
 	private:
 		int MaskHasTransp(uint8_t* mask);
 		
-		
-
 		// sprite context stuff:
 		// quadrant lists of allowed tile neighbors [quadrant, tile_type]
 		std::vector<Sprite*> quad[4]['M'-'A'+1];

@@ -204,7 +204,7 @@ void* PlayerAsync::PlayerLoop(void* caller) {
         return 0;
       }
 
-      unsigned int wait = partial / speed;
+      unsigned int wait = static_cast<unsigned int>(partial / speed);
       std::this_thread::sleep_for(std::chrono::microseconds(wait));
       {
         // cppcheck-suppress unreadVariable RAII
@@ -215,9 +215,9 @@ void* PlayerAsync::PlayerLoop(void* caller) {
       if (clbk_fun_heartbeat) clbk_fun_heartbeat();
     }
 
-    unsigned int wait = us.count() / speed;
+    unsigned int wait = static_cast<unsigned int>(static_cast<double>(us.count()) / static_cast<double>(speed));
     std::this_thread::sleep_for(std::chrono::microseconds(wait));
-    that->heartbeat_helper_ += us.count();
+    that->heartbeat_helper_ += static_cast<int>(us.count());
 
     {
       // cppcheck-suppress unreadVariable RAII

@@ -154,7 +154,7 @@ void File::SaveTrackChunk(std::ofstream &output_file,
 
 uint32_t File::SaveEvent(std::ofstream &output_file, const Event &event,
                          uint8_t *last_cmd) const {
-  uint32_t r = utils::SaveVlq(output_file, event.Dt());
+   uint32_t r = static_cast<uint32_t>(utils::SaveVlq(output_file, event.Dt()));
 
   int skip_data_bytes;
   if (event.IsSysex()) {

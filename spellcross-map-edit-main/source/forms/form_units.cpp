@@ -766,7 +766,7 @@ void FormUnits::SelectUnit(MapUnit *unit)
 		}
 	}
 	chbGrpType->Thaw();
-	if(chbGrpType->GetCount() && chbGrpType->GetSelection() < 0 || chbGrpType->GetSelection() >= chbGrpType->GetCount())
+	if (chbGrpType->GetCount() && (chbGrpType->GetSelection() < 0 || static_cast<unsigned int>(chbGrpType->GetSelection()) >= static_cast<unsigned int>(chbGrpType->GetCount())))
 		chbGrpType->Select(0);
 	ChangeGrpResource();
 }

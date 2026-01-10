@@ -253,79 +253,43 @@ class SpellUnitRec
 			EXPLODE = 2
 		};
 
-		// special actions
-		static constexpr int SPEC_ACT_TOGGLE_RADAR = 1; // 1  - enable/disable radar (par3-radar indirect sight range)
-		static constexpr int SPEC_ACT_SHOW_TURRET = 2; // 2  - show tank turret (UDES) (par3-unit to transform to)
-		static constexpr int SPEC_ACT_HIDE_TURRET = 3; // 3  - hide tank turret (UDES) (par3-unit to transform to)
-		static constexpr int SPEC_ACT_FIRE_TELEPORT = 4; // 4  - fire teleport movement (hell cavalery/demon)
-		static constexpr int SPEC_ACT_CREATE_UNIT = 5; // 5  - create unit (par3-unit to create)
-		static constexpr int SPEC_ACT_LOWER_MORALE = 6; // 6  - lower enemy morale (undead) (par1-range, par2-level, par3-range)
-		static constexpr int SPEC_ACT_AIRCRAFT_UP = 7; // 7  - aircraft up (par3-unit to transform to)
-		static constexpr int SPEC_ACT_AIRCRAFT_DOWN = 8; // 8  - aircraft land (par3-unit to transform to)
-		static constexpr int SPEC_ACT_PARALYZE = 9; // 9  - paralyze enemy (harpya) (par1-range, par2-???, par3-???)
-		static constexpr int SPEC_ACT_FREEZE = 11; // 11 - freeze enemy units (par1-range, par2-???, par3-???)
-		static constexpr int SPEC_ACT_DRAGON_FEAR = 12; // 12 - dragons fear (par1-range, par2-???, par3-???)
-		static constexpr int SPEC_ACT_AUTODESTRUCT = 13; // 13 - autodestruction (par1-range, par2-intensity, par3-???)
-		static constexpr int SPEC_ACT_BREORN_SCREAM = 14; // 14 - breorns scream (par1-range, par2-???, par3-???)
-		static constexpr int SPEC_ACT_KAMIZAZE = 15; // 15 - kamize attack
-		static constexpr int SPEC_ACT_TRANSFORM_TO_FORTRES = 16; // 16 - transform to fortres (par3-unit to transform to)
-		static constexpr int SPEC_ACT_TRANSFORM_FROM_FORTRES = 17; // 17 - transform from fortres (par3-unit to transfrom to)
-
-		// multiple man in unit placement diameter in tile (pixels)
-		static constexpr double MAN_RING_DIAMETER = 15.0;
-
-		static constexpr int UTYPE_TYPE_MASK = 0x30;
-		static constexpr int UTYPE_TYPE_AIR = 0x00;
-		static constexpr int UTYPE_TYPE_LIGHT = 0x10;
-		static constexpr int UTYPE_TYPE_ARMORED = 0x20;
-		static constexpr int UTYPE_TURRET = 0x01;
-		static constexpr int UTYPE_WALK = 0x02;
-		static constexpr int UTYPE_FLY = 0x04;
-		static constexpr int UTYPE_HOVER = 0x08;
-		static constexpr int UTYPE_FLAHS = 0x40;
-		static constexpr int UTYPE_DEMON = 0x80;
-
-		static constexpr int PROJECTILE_LIGHT = 0x01;
-		static constexpr int PROJECTILE_ARMOR = 0x02;
-		static constexpr int PROJECTILE_AIR = 0x04;
-
 private:	
 
-	//// special actions
-	//static constexpr int SPEC_ACT_TOGGLE_RADAR = 1; // 1  - enable/disable radar (par3-radar indirect sight range)
-	//static constexpr int SPEC_ACT_SHOW_TURRET = 2; // 2  - show tank turret (UDES) (par3-unit to transform to)
-	//static constexpr int SPEC_ACT_HIDE_TURRET = 3; // 3  - hide tank turret (UDES) (par3-unit to transform to)
-	//static constexpr int SPEC_ACT_FIRE_TELEPORT = 4; // 4  - fire teleport movement (hell cavalery/demon)
-	//static constexpr int SPEC_ACT_CREATE_UNIT = 5; // 5  - create unit (par3-unit to create)
-	//static constexpr int SPEC_ACT_LOWER_MORALE = 6; // 6  - lower enemy morale (undead) (par1-range, par2-level, par3-range)
-	//static constexpr int SPEC_ACT_AIRCRAFT_UP = 7; // 7  - aircraft up (par3-unit to transform to)
-	//static constexpr int SPEC_ACT_AIRCRAFT_DOWN = 8; // 8  - aircraft land (par3-unit to transform to)
-	//static constexpr int SPEC_ACT_PARALYZE = 9; // 9  - paralyze enemy (harpya) (par1-range, par2-???, par3-???)
-	//static constexpr int SPEC_ACT_FREEZE = 11; // 11 - freeze enemy units (par1-range, par2-???, par3-???)
-	//static constexpr int SPEC_ACT_DRAGON_FEAR = 12; // 12 - dragons fear (par1-range, par2-???, par3-???)
-	//static constexpr int SPEC_ACT_AUTODESTRUCT = 13; // 13 - autodestruction (par1-range, par2-intensity, par3-???)
-	//static constexpr int SPEC_ACT_BREORN_SCREAM = 14; // 14 - breorns scream (par1-range, par2-???, par3-???)
-	//static constexpr int SPEC_ACT_KAMIZAZE = 15; // 15 - kamize attack
-	//static constexpr int SPEC_ACT_TRANSFORM_TO_FORTRES = 16; // 16 - transform to fortres (par3-unit to transform to)
-	//static constexpr int SPEC_ACT_TRANSFORM_FROM_FORTRES = 17; // 17 - transform from fortres (par3-unit to transfrom to)
-	//
-	//// multiple man in unit placement diameter in tile (pixels)
-	//static constexpr double MAN_RING_DIAMETER = 15.0;
-	//
-	//static constexpr int UTYPE_TYPE_MASK = 0x30;
-	//static constexpr int UTYPE_TYPE_AIR = 0x00;
-	//static constexpr int UTYPE_TYPE_LIGHT = 0x10;
-	//static constexpr int UTYPE_TYPE_ARMORED = 0x20;
-	//static constexpr int UTYPE_TURRET = 0x01;
-	//static constexpr int UTYPE_WALK = 0x02;
-	//static constexpr int UTYPE_FLY = 0x04;
-	//static constexpr int UTYPE_HOVER = 0x08;
-	//static constexpr int UTYPE_FLAHS = 0x40;
-	//static constexpr int UTYPE_DEMON = 0x80;
+	// special actions
+	static constexpr int SPEC_ACT_TOGGLE_RADAR = 1; // 1  - enable/disable radar (par3-radar indirect sight range)
+	static constexpr int SPEC_ACT_SHOW_TURRET = 2; // 2  - show tank turret (UDES) (par3-unit to transform to)
+	static constexpr int SPEC_ACT_HIDE_TURRET = 3; // 3  - hide tank turret (UDES) (par3-unit to transform to)
+	static constexpr int SPEC_ACT_FIRE_TELEPORT = 4; // 4  - fire teleport movement (hell cavalery/demon)
+	static constexpr int SPEC_ACT_CREATE_UNIT = 5; // 5  - create unit (par3-unit to create)
+	static constexpr int SPEC_ACT_LOWER_MORALE = 6; // 6  - lower enemy morale (undead) (par1-range, par2-level, par3-range)
+	static constexpr int SPEC_ACT_AIRCRAFT_UP = 7; // 7  - aircraft up (par3-unit to transform to)
+	static constexpr int SPEC_ACT_AIRCRAFT_DOWN = 8; // 8  - aircraft land (par3-unit to transform to)
+	static constexpr int SPEC_ACT_PARALYZE = 9; // 9  - paralyze enemy (harpya) (par1-range, par2-???, par3-???)
+	static constexpr int SPEC_ACT_FREEZE = 11; // 11 - freeze enemy units (par1-range, par2-???, par3-???)
+	static constexpr int SPEC_ACT_DRAGON_FEAR = 12; // 12 - dragons fear (par1-range, par2-???, par3-???)
+	static constexpr int SPEC_ACT_AUTODESTRUCT = 13; // 13 - autodestruction (par1-range, par2-intensity, par3-???)
+	static constexpr int SPEC_ACT_BREORN_SCREAM = 14; // 14 - breorns scream (par1-range, par2-???, par3-???)
+	static constexpr int SPEC_ACT_KAMIZAZE = 15; // 15 - kamize attack
+	static constexpr int SPEC_ACT_TRANSFORM_TO_FORTRES = 16; // 16 - transform to fortres (par3-unit to transform to)
+	static constexpr int SPEC_ACT_TRANSFORM_FROM_FORTRES = 17; // 17 - transform from fortres (par3-unit to transfrom to)
+	
+	// multiple man in unit placement diameter in tile (pixels)
+	static constexpr double MAN_RING_DIAMETER = 15.0;
+	
+	static constexpr int UTYPE_TYPE_MASK = 0x30;
+	static constexpr int UTYPE_TYPE_AIR = 0x00;
+	static constexpr int UTYPE_TYPE_LIGHT = 0x10;
+	static constexpr int UTYPE_TYPE_ARMORED = 0x20;
+	static constexpr int UTYPE_TURRET = 0x01;
+	static constexpr int UTYPE_WALK = 0x02;
+	static constexpr int UTYPE_FLY = 0x04;
+	static constexpr int UTYPE_HOVER = 0x08;
+	static constexpr int UTYPE_FLAHS = 0x40;
+	static constexpr int UTYPE_DEMON = 0x80;
 
-	//static constexpr int PROJECTILE_LIGHT = 0x01;
-	//static constexpr int PROJECTILE_ARMOR = 0x02;
-	//static constexpr int PROJECTILE_AIR = 0x04;
+	static constexpr int PROJECTILE_LIGHT = 0x01;
+	static constexpr int PROJECTILE_ARMOR = 0x02;
+	static constexpr int PROJECTILE_AIR = 0x04;
 
 };
 
@@ -554,12 +518,6 @@ public:
 	// list of other units in view range
 	std::vector<int> units_in_view;
 
-
-
-	// --- AI aggro memory (runtime only; not serialized) ---
-	MapXY ai_aggro_pos;          // last known attacker position
-	int ai_aggro_ttl;            // enemy turns to keep chasing (0 = inactive)
-	int ai_aggro_attacker_id;    // attacker unit id if known, otherwise -1
 
 	// pointer to next unit to draw (for correct render order)
 	MapUnit* next;
