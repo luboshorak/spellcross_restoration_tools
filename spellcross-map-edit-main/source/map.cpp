@@ -6298,11 +6298,70 @@ void SpellMap::EndEnemyTurn()
 		}
 	}
 
+	// === PANIC: player units with morale==0 flee uncontrollably for one player phase ===
+	// panic_turns meanings: 2=pending flee (execute now), 1=panicking (cannot be controlled), 0=normal
+	for (auto* u : units)
+	{
+		if (!u || u->is_enemy) continue;
+		if (u->panic_turns != 2) continue;
+
+		// Try to move as far as possible in a random direction. Use StartMove_NoRangeCheck (sync) to respect AP/path rules.
+		int start_angle = rand() & 7;
+		bool moved = false;
+		for (int pass = 0; pass < 8 && !moved; pass++)
+		{
+			int angle = (start_angle + pass) & 7;
+
+			MapXY farPos = u->coor;
+			MapXY cur = u->coor;
+			for (int step = 0; step < 40; step++)
+			{
+				MapXY nxt = GetNeighborTile8D(cur, angle);
+				if (!nxt.IsSelected()) break;
+				cur = nxt;
+				farPos = cur;
+			}
+
+			MapXY trypos = farPos;
+			for (int back = 0; back < 40; back++)
+			{
+				// skip if occupied by same movement class
+				int idx = ConvXY(trypos);
+				bool blocked = false;
+				for (auto* other = Lunit[idx]; other; other = other->next)
+				{
+					if (!other || other == u) continue;
+					if ((u->unit->isAir() && other->unit->isAir()) || (u->unit->isLand() && other->unit->isLand()))
+					{ blocked = true; break; }
+				}
+				if (!blocked && StartMove_NoRangeCheck(u, trypos))
+				{ moved = true; break; }
+
+				MapXY prev = GetNeighborTile8D(trypos, (angle + 4) & 7);
+				if (!prev.IsSelected()) break;
+				trypos = prev;
+			}
+		}
+
+		u->panic_turns = 1; // panicking for this whole player phase (cannot be selected)
+	}
+
+
+
 	// If player has no units left -> end game mode
 	if (!has_alliance)
 	{
 		unit_selection = nullptr;
 		unit_selection_mod = true;
+
+	// if restored selection is panicking, pick first controllable unit
+	if (unit_selection && unit_selection->panic_turns > 0)
+	{
+		for (auto* u : units)
+		{
+			if (u && !u->is_enemy && u->panic_turns <= 0) { unit_selection = u; break; }
+		}
+	}
 		enemy_turn_prev_selection = nullptr;
 		enemy_turn_prev_sel_mod = false;
 		ReleaseMap();
@@ -6789,9 +6848,9 @@ MapUnit* SpellMap::CanSelectUnit(MapXY pos)
 	auto unit = Lunit[pxy];
 	while (unit)
 	{
-		if (unit->unit->isLand() && !unit->is_enemy && unit != unit_selection)
+		if (unit->unit->isLand() && !unit->is_enemy && unit != unit_selection && unit->panic_turns <= 0)
 			land_unit = unit;
-		if (unit->unit->isAir() && !unit->is_enemy && unit != unit_selection)
+		if (unit->unit->isAir() && !unit->is_enemy && unit != unit_selection && unit->panic_turns <= 0)
 			air_unit = unit;
 		unit = unit->next;
 	}

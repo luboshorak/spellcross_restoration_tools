@@ -543,6 +543,8 @@ public:
 	int is_event;
 	// morale level
 	double morale;
+	// panic state: 0=none, 2=pending flee at start of player phase, 1=panicking (cannot be controlled)
+	int panic_turns;
 	// unit in placement (selected and moving)
 	int in_placement;
 	// unit moved flag (cleared when rendered)

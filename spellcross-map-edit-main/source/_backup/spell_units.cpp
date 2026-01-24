@@ -579,6 +579,15 @@ SpellGraphicItem *SpellUnitRec::GetActionBtnGlyph(int alt)
 // can unit attack target?
 int SpellUnitRec::canAttack(SpellUnitRec* target)
 {
+	if(!target)
+		return(false);
+
+	// special attackers that only apply morale/fear/paralyze should still be able to "attack"
+	if(action_id == SPEC_ACT_LOWER_MORALE ||
+		action_id == SPEC_ACT_DRAGON_FEAR ||
+		action_id == SPEC_ACT_PARALYZE)
+		return(true);
+
 	if(target->isLight() && !attack_light)
 		return(false);
 	if(target->isArmored() && !attack_armored)
@@ -1015,15 +1024,22 @@ MapUnit::MapUnit(SpellMap *map)
 	coor = MapXY();
 	// experience
 	experience = 0;
+	experience_init = 0;
 	experience_level = 1;
 	// man count
 	man = 1;
+	// health (wounded men)
+	wounded = 0;
+	// morale (default full)
+	morale = 100.0;
+	// panic (runtime only)
+	panic_turns = 0;
 	// spec unit type
 	spec_type = MapUnitType::Unknown;
 	// unit behave
 	behave = MapUnitType::NormalUnit;
 	// custom name
-	name[0] = '\0';
+	name.clear();
 	// commander id or zero	
 	commander_id = 0;
 	is_commander = 0;
@@ -1230,8 +1246,8 @@ void MapUnit::ClearDigLevel()
 
 void MapUnit::ResetTurnsCounter()
 {
-	// -1 je úmyslnì: v End-of-turn se vždy inkrementuje,
-	// takže jednotka co nìco dìlala skonèí po inkrementu na 0 (ne na 1).
+	// -1 je ï¿½myslnï¿½: v End-of-turn se vï¿½dy inkrementuje,
+	// takï¿½e jednotka co nï¿½co dï¿½lala skonï¿½ï¿½ po inkrementu na 0 (ne na 1).
 	dig_turns = -1;
 	idle_turns = -1;
 }
@@ -1424,7 +1440,13 @@ int MapUnit::AddExperience(MapUnit* target,int killed)
 // update morale level with limits protection
 int MapUnit::UpdateModale(double points)
 {
+	const double old = morale;
 	morale = max(min(morale + points,100.0),0.0);
+
+	// when morale drops to 0, unit panics for the next phase
+	if (old > 0.0 && morale <= 0.0)
+		panic_turns = 1;
+
 	// flee level?
 	return(morale < 25.0);
 }
@@ -1680,11 +1702,14 @@ FSU_resource *MapUnit::GetShotAnim(MapUnit *target, int *frame_stop)
 		fsu_anim = unit->gr_attack_air;
 		frames = unit->anim_atack_air_frames;
 	}
+	// if unit-def frame count is missing/zero, fall back to actual resource frames
+	if (fsu_anim && frames <= 0)
+		frames = fsu_anim->anim.frames;
+
 	if(frame_stop)
 		*frame_stop = frames;
 	return(fsu_anim);
 }
-
 // return target hit animation if exist
 AnimPNM *MapUnit::GetTargetHitPNM(MapUnit *target)
 {
@@ -1987,11 +2012,58 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 	// randomize attack
 	double rng_attack = randgman(3.5,2.0,3.0/morale,0.7*morale)*attack*bonus;
 
+
+	// special (morale / fear / paralyze) can work even with zero/low damage
+	const int act = unit->action_id;
+	const bool has_morale_spec =
+		(act == SpellUnitRec::SPEC_ACT_LOWER_MORALE ||
+		 act == SpellUnitRec::SPEC_ACT_DRAGON_FEAR ||
+		 act == SpellUnitRec::SPEC_ACT_PARALYZE);
+
+	auto apply_morale_spec = [&]()
+	{
+		if (!has_morale_spec)
+			return;
+
+		int radius = unit->action_params[0];   // par1 = range (if >1 we do small AoE)
+		int level = unit->action_params[1];    // par2 = intensity/level
+
+		if (radius <= 0) radius = 1;
+
+		// intensity tuning: kdyÅ¾ majÃ­ data malÃ© ÄÃ­slo, udÄ›lÃ¡ to smysluplnÃ½ drop
+		double drop = (level > 0) ? (level * 5.0) : 15.0;
+
+		if (!map || radius <= 1)
+		{
+			// conservative: affect only the primary target
+			target->UpdateModale(-drop);
+		}
+		else
+		{
+			// optional AoE around the struck target (fear-like behavior)
+			for (auto* u : map->units)
+			{
+				if (!u) continue;
+				if (u->is_enemy == this->is_enemy) continue;
+				if (u->coor.Distance(target->coor) > radius) continue;
+				u->UpdateModale(-drop);
+			}
+		}
+	};
+
+
 	// damage model
 	double wound = (int)(rng_attack - 0.7*defence);
 	double kill = (int)(rng_attack - defence);
 	if(wound < 0.0 && kill < 0.0)
+	{
+		if (has_morale_spec)
+		{
+			apply_morale_spec();
+			return(AttackResult::Hit);
+		}
 		return(AttackResult::Missed);
+	}
 
 	// reduce dig level of target
 	target->dig_level = max(target->dig_level - 1, 0);
@@ -2051,40 +2123,8 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 	if(level_up)
 		PlayLevelUp();
 
-	// --- special on-hit effects (Harpye/Undead/Fear etc.) ---
-	// --- on-hit special: lower morale / fear / harpye "paralyze" (treated as morale drop) ---
-	{
-		int act = unit->action_id;
-		if (act == SpellUnitRec::SPEC_ACT_LOWER_MORALE ||
-			act == SpellUnitRec::SPEC_ACT_DRAGON_FEAR ||
-			act == SpellUnitRec::SPEC_ACT_PARALYZE)
-		{
-			int radius = unit->action_params[0];   // par1 = range (if >1 we do small AoE)
-			int level = unit->action_params[1];   // par2 = intensity/level
-
-			if (radius <= 0) radius = 1;
-
-			// intensity tuning: když mají data malé èíslo, udìlá to smysluplný drop
-			double drop = (level > 0) ? (level * 5.0) : 15.0;
-
-			if (!map || radius <= 1)
-			{
-				// conservative: affect only the target
-				target->UpdateModale(-drop);
-			}
-			else
-			{
-				// optional AoE around the struck target (fear-like behavior)
-				for (auto* u : map->units)
-				{
-					if (!u) continue;
-					if (u->is_enemy == this->is_enemy) continue;
-					if (u->coor.Distance(target->coor) > radius) continue;
-					u->UpdateModale(-drop);
-				}
-			}
-		}
-	}
+	// apply special morale/fear/paralyze (also for special-only attackers)
+	apply_morale_spec();
 
 	if(!target->man)
 		return(AttackResult::Kill);

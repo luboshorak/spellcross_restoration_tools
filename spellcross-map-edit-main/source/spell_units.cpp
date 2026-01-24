@@ -1024,15 +1024,22 @@ MapUnit::MapUnit(SpellMap *map)
 	coor = MapXY();
 	// experience
 	experience = 0;
+	experience_init = 0;
 	experience_level = 1;
 	// man count
 	man = 1;
+	// health (wounded men)
+	wounded = 0;
+	// morale (default full)
+	morale = 100.0;
+	// panic
+	panic_turns = 0;
 	// spec unit type
 	spec_type = MapUnitType::Unknown;
 	// unit behave
 	behave = MapUnitType::NormalUnit;
 	// custom name
-	name[0] = '\0';
+	name.clear();
 	// commander id or zero	
 	commander_id = 0;
 	is_commander = 0;
@@ -1433,7 +1440,13 @@ int MapUnit::AddExperience(MapUnit* target,int killed)
 // update morale level with limits protection
 int MapUnit::UpdateModale(double points)
 {
+	double old = morale;
 	morale = max(min(morale + points,100.0),0.0);
+
+	// Arm panic only on transition from >0 to 0 (so it happens once)
+	if (old > 0.0 && morale <= 0.0)
+		panic_turns = 2;
+
 	// flee level?
 	return(morale < 25.0);
 }
@@ -1689,6 +1702,10 @@ FSU_resource *MapUnit::GetShotAnim(MapUnit *target, int *frame_stop)
 		fsu_anim = unit->gr_attack_air;
 		frames = unit->anim_atack_air_frames;
 	}
+	// if unit-def frame count is missing/zero, fall back to actual resource frames
+	if (fsu_anim && frames <= 0)
+		frames = fsu_anim->anim.frames;
+
 	if(frame_stop)
 		*frame_stop = frames;
 	return(fsu_anim);
