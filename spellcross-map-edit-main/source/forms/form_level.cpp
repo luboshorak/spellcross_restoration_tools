@@ -1,9 +1,11 @@
 #include "form_level.h"
 
 #include "main.h"
+#include "other.h"
 
 #include <wx/dcbuffer.h>
 #include <wx/choicdlg.h>
+#include <wx/spinctrl.h>
 
 #include <filesystem>
 #include <fstream>
@@ -12,6 +14,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cmath>
+#include <regex>
 #include "LZ_spell.h"
 
 // Best-effort background decoding.
@@ -152,7 +155,7 @@ static void append_text_snippet(wxString& info, const std::string& label, const 
         s = s.substr(0, kMax) + "...";
 
     info << "\n" << label << "\n";
-    info << wxString::From8BitData(s.c_str()) << "\n";
+    info << wxString(char2wstringCP895(s.c_str())) << "\n";
 }
 
 static void try_append_text_set(wxString& info, const std::filesystem::path& base_dir, std::string mission_token)
@@ -192,6 +195,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 {
     m_money = 0;
     m_research = 0;
+    m_playerUnits = m_level.start_units;
 
     // init territory mission state from LevelData
     for(const auto& t : m_level.territories)
@@ -200,6 +204,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
         m_territoryLaunchCount[t.id] = 0;
     }
 
+    LoadStrategicState();
     BuildUI();
     //TryLoadBackground();
     RefreshUI();
@@ -325,10 +330,10 @@ void StrategicLevelFrame::RefreshUI()
     UpdateSpellLabel(m_lblTurn, m_spellData, wxString::Format("Turn %d", m_turn).ToStdString());
 
     m_roster->DeleteAllItems();
-    for(size_t i = 0; i < m_level.start_units.size(); ++i)
+    for(size_t i = 0; i < m_playerUnits.size(); ++i)
     {
-        const auto& u = m_level.start_units[i];
-        long idx = m_roster->InsertItem((long)i, wxString::Format("%d", u.unit_id));
+        const auto& u = m_playerUnits[i];
+        long idx = m_roster->InsertItem((long)i, GetUnitDisplayName(u.unit_id));
         m_roster->SetItem(idx, 1, wxString::Format("%d", u.count));
         m_roster->SetItem(idx, 2, wxString::Format("%d", u.health));
     }
@@ -441,13 +446,82 @@ void StrategicLevelFrame::OnResearch(wxCommandEvent&)
     } else {
         wxMessageBox("Not enough money for research (demo cost 100).", "Research", wxOK | wxICON_WARNING, this);
     }
+    SaveStrategicState();
     RefreshUI();
 }
 
 void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
 {
-    wxMessageBox("Unit shop stub.\n\nSem pozdeji napojime ceny a availability podle research flagu.",
-                 "Buy units", wxOK | wxICON_INFORMATION, this);
+    if(!m_spellData || !m_spellData->units)
+    {
+        wxMessageBox("Units data not loaded.", "Buy units", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    wxDialog dlg(this, wxID_ANY, "Buy units", wxDefaultPosition, wxSize(420, 480));
+    auto* rootSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* lbl = new wxStaticText(&dlg, wxID_ANY, "Select unit:");
+    rootSizer->Add(lbl, 0, wxLEFT | wxRIGHT | wxTOP, 10);
+
+    auto* list = new wxListBox(&dlg, wxID_ANY);
+    std::vector<int> unit_ids;
+    unit_ids.reserve(m_spellData->units->GetUnits().size());
+    for(const auto* unit : m_spellData->units->GetUnits())
+    {
+        if(!unit)
+            continue;
+        unit_ids.push_back(unit->type_id);
+        list->Append(wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name))));
+    }
+    if(!unit_ids.empty())
+        list->SetSelection(0);
+    rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
+
+    auto* countSizer = new wxBoxSizer(wxHORIZONTAL);
+    countSizer->Add(new wxStaticText(&dlg, wxID_ANY, "Count:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    auto* spinCount = new wxSpinCtrl(&dlg, wxID_ANY, "1", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 99, 1);
+    countSizer->Add(spinCount, 0);
+    rootSizer->Add(countSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+    auto* btnSizer = new wxBoxSizer(wxHORIZONTAL);
+    auto* btnBuy = new wxButton(&dlg, wxID_OK, "Buy");
+    auto* btnCancel = new wxButton(&dlg, wxID_CANCEL, "Cancel");
+    btnSizer->AddStretchSpacer(1);
+    btnSizer->Add(btnBuy, 0, wxRIGHT, 8);
+    btnSizer->Add(btnCancel, 0);
+    rootSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    dlg.SetSizerAndFit(rootSizer);
+
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    int sel = list->GetSelection();
+    if(sel == wxNOT_FOUND || sel >= (int)unit_ids.size())
+    {
+        wxMessageBox("No unit selected.", "Buy units", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    LevelData::PlayerUnitAdd add;
+    add.unit_id = unit_ids[sel];
+    add.count = spinCount->GetValue();
+    add.health = 100;
+    add.extra = "-";
+
+    auto it = std::find_if(m_playerUnits.begin(), m_playerUnits.end(),
+        [&](const LevelData::PlayerUnitAdd& u)
+        {
+            return u.unit_id == add.unit_id && u.health == add.health;
+        });
+    if(it != m_playerUnits.end())
+        it->count += add.count;
+    else
+        m_playerUnits.push_back(add);
+
+    SaveStrategicState();
+    RefreshUI();
 }
 
 const LevelMission* StrategicLevelFrame::FindMissionByNameUpper(const std::string& name_upper) const
@@ -492,6 +566,23 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
 
     namespace fs = std::filesystem;
     fs::path base = fs::path(m_level.source_path).parent_path();
+
+    // 0) prefer "A" variant when base token ends with digit (m02_02 -> m02_02a.def)
+    if(!mission_token.empty())
+    {
+        char last = mission_token.back();
+        if(last >= '0' && last <= '9')
+        {
+            const std::string token_lower = to_lower(mission_token) + "a";
+            const std::string token_upper = to_upper(mission_token) + "A";
+            fs::path pVar1 = base / (token_lower + ".def");
+            fs::path pVar2 = base / (token_lower + ".DEF");
+            fs::path pVar3 = base / (token_upper + ".DEF");
+            if(fs::exists(pVar1)) return pVar1.wstring();
+            if(fs::exists(pVar2)) return pVar2.wstring();
+            if(fs::exists(pVar3)) return pVar3.wstring();
+        }
+    }
 
     // 1) exact match (preferred)
     fs::path pExact1 = base / (to_upper(mission_token) + ".DEF");
@@ -561,7 +652,7 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         return;
     }
 
-    if(!m_main->LoadMapFromDefPath(defPath))
+    if(!m_main->LoadMapFromDefPath(defPath, m_playerUnits))
         return;
 
     // update launch count
@@ -585,7 +676,104 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {
     m_turn += 1;
     m_money += 250;
+    SaveStrategicState();
     RefreshUI();
+}
+
+static std::filesystem::path GetStrategicStatePath(const LevelData& level)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path base = fs::path(level.source_path).parent_path();
+    if(base.empty() || !fs::exists(base, ec))
+        base = fs::current_path(ec);
+    return base / "strategic_state.json";
+}
+
+static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money, std::vector<LevelData::PlayerUnitAdd>& units)
+{
+    units.clear();
+    money = 0;
+
+    std::ifstream f(path);
+    if(!f)
+        return false;
+
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if(data.empty())
+        return false;
+
+    std::regex money_re("\"money\"\\s*:\\s*(-?\\d+)");
+    std::smatch m;
+    if(std::regex_search(data, m, money_re) && m.size() > 1)
+        money = std::stoi(m[1].str());
+
+    std::regex unit_re("\\{\\s*\"unit_id\"\\s*:\\s*(\\d+)\\s*,\\s*\"count\"\\s*:\\s*(\\d+)\\s*,\\s*\"health\"\\s*:\\s*(\\d+)\\s*\\}");
+    auto begin = std::sregex_iterator(data.begin(), data.end(), unit_re);
+    auto end = std::sregex_iterator();
+    for(auto it = begin; it != end; ++it)
+    {
+        const auto& match = *it;
+        if(match.size() < 4)
+            continue;
+        LevelData::PlayerUnitAdd entry;
+        entry.unit_id = std::stoi(match[1].str());
+        entry.count = std::stoi(match[2].str());
+        entry.health = std::stoi(match[3].str());
+        entry.extra = "-";
+        units.push_back(entry);
+    }
+
+    return true;
+}
+
+static void SaveStrategicStateFile(const std::filesystem::path& path, int money, const std::vector<LevelData::PlayerUnitAdd>& units)
+{
+    std::ofstream f(path);
+    if(!f)
+        return;
+
+    f << "{\n";
+    f << "  \"money\": " << money << ",\n";
+    f << "  \"units\": [\n";
+    for(size_t i = 0; i < units.size(); ++i)
+    {
+        const auto& u = units[i];
+        f << "    {\"unit_id\": " << u.unit_id << ", \"count\": " << u.count << ", \"health\": " << u.health << "}";
+        if(i + 1 < units.size())
+            f << ",";
+        f << "\n";
+    }
+    f << "  ]\n";
+    f << "}\n";
+}
+
+void StrategicLevelFrame::LoadStrategicState()
+{
+    int money = 0;
+    std::vector<LevelData::PlayerUnitAdd> units;
+    const auto path = GetStrategicStatePath(m_level);
+    if(LoadStrategicStateFile(path, money, units))
+    {
+        m_money = money;
+        m_playerUnits = std::move(units);
+    }
+}
+
+void StrategicLevelFrame::SaveStrategicState() const
+{
+    const auto path = GetStrategicStatePath(m_level);
+    SaveStrategicStateFile(path, m_money, m_playerUnits);
+}
+
+wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
+{
+    if(m_spellData && m_spellData->units)
+    {
+        if(auto* unit = m_spellData->units->GetUnit(unit_id))
+            return wxString(char2wstringCP895(unit->name));
+    }
+    return wxString::Format("%d", unit_id);
 }
 
 static bool LoadFileBytes(const std::filesystem::path& p, std::vector<unsigned char>& out)

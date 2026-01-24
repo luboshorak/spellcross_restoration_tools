@@ -340,7 +340,7 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         return;
     }
 
-    if(!m_main->LoadMapFromDefPath(defPath))
+    if(!m_main->LoadMapFromDefPath(defPath, {}))
         return;
 
     // update launch count

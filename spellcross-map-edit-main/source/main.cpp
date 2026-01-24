@@ -27,6 +27,7 @@
 #include <wx/event.h>
 
 #include <filesystem>
+#include <algorithm>
 #include <codecvt>
 #include <tuple>
 #include <string>
@@ -48,39 +49,17 @@
 #include <wx/busyinfo.h>
 #include "forms/form_level.h"
 
-bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
+bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)
 {
     if (!spell_map || !spell_data)
         return false;
 
-    auto busy = std::make_shared<wxBusyInfo>("Loading level DEF...\nPlease wait.", this);
-
-    const std::string path = std::filesystem::path(def_path).string();
-
-    std::thread([this, path, busy]() {
-        LevelData lvl;
-        std::string err;
-        LevelLoader loader;
-        bool ok = loader.LoadLevelDef(path, lvl, &err);
-
-        if (auto* app = wxApp::GetInstance())
-        {
-            app->CallAfter([this, busy, ok, err, lvl = std::move(lvl)]() mutable {
-                busy.reset();
-                if (!ok)
-                {
-                    wxMessageBox("Failed to load level DEF:\\n" + err, "Error", wxOK | wxICON_ERROR, this);
-                    return;
-                }
-
-                // otevri strategicke UI (window si zije samo, wxWidgets ho znici po zavreni)
-                auto* win = new StrategicLevelFrame(this, lvl);
-                win->CentreOnParent();
-                win->Show();
-                win->Raise();
-            });
-        }
-    }).detach();
+    wstring path = def_path;
+    if (spell_map->Load(path, spell_data))
+    {
+        wxMessageBox(string_format("Loading Spellcross map file failed with error:\n%s", spell_map->GetLastError().c_str()), "Error", wxOK | wxICON_ERROR, this);
+        return false;
+    }
 
     spell_map->SetGamma(1.30);
 
@@ -89,6 +68,52 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path)
 
     LoadToolsetRibbon();
     Refresh();
+
+    if (player_units.empty())
+        return true;
+
+    if (spell_map->start.empty())
+    {
+        wxMessageBox("No start positions found (layer 6).", "Launch", wxOK | wxICON_WARNING, this);
+        return true;
+    }
+
+    size_t start_idx = 0;
+    for (const auto& entry : player_units)
+    {
+        int count = std::max(0, entry.count);
+        for (int i = 0; i < count; ++i)
+        {
+            SpellUnitRec* unit_rec = spell_data->units ? spell_data->units->GetUnit(entry.unit_id) : nullptr;
+            if (!unit_rec)
+                continue;
+
+            MapUnit* unit = new MapUnit(spell_map);
+            unit->unit = unit_rec;
+            unit->coor = spell_map->start[start_idx % spell_map->start.size()];
+            unit->spec_type = MapUnitType::NormalUnit;
+            unit->behave = MapUnitType::NormalUnit;
+            unit->is_enemy = 0;
+            unit->experience_init = 0;
+            unit->experience_level = 1;
+            unit->ResetAP();
+            unit->man = entry.health > 0 ? entry.health : unit_rec->cnt;
+            unit->wounded = 0;
+
+            if (spell_map->PlaceUnit(unit))
+            {
+                delete unit;
+                continue;
+            }
+
+            spell_map->AssignUnitID(unit);
+            start_idx++;
+        }
+    }
+
+    spell_map->SortUnits();
+    spell_map->InvalidateUnitsView();
+
     return true;
 }
 

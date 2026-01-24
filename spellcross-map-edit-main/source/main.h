@@ -38,6 +38,7 @@
 #include "forms/form_about.h"
 #include "forms/form_sound.h"
 #include "forms/form_flags.h"
+#include "level.h"
 
 #include <wx/ribbon/buttonbar.h>
 #include <wx/ribbon/panel.h>
@@ -104,9 +105,9 @@ public:
     MainFrame(SpellMap* map,SpellData* spelldata);      
     void StatusStringCallback(std::string info);
     void CreateHUDbuttons();
-    bool LoadMapFromDefPath(const std::wstring& def_path);
+    bool LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units);
 
-    // === Pøidejte tento øádek do public sekce ===
+    // === PÃ¸idejte tento Ã¸Ã¡dek do public sekce ===
     SpellData* spell_data;
 
 private:
