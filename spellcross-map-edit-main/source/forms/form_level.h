@@ -33,6 +33,10 @@ private:
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
 
+    void LoadStrategicState();
+    void SaveStrategicState() const;
+    wxString GetUnitDisplayName(int unit_id) const;
+
     // mission selection / progression
     std::string ResolveMissionTokenForTerritory(int territory_id) const;
     std::wstring ResolveMapDefPathForMissionToken(const std::string& mission_token) const;
@@ -52,6 +56,8 @@ private:
     // per-territory state: current mission token + number of launches
     std::unordered_map<int, std::string> m_territoryCurrentMission;
     std::unordered_map<int, int> m_territoryLaunchCount;
+
+    std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
 
     // background bitmap
     wxBitmap m_bgBitmap;
