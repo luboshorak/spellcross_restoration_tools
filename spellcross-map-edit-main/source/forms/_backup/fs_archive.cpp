@@ -14,18 +14,8 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
-#include <algorithm>
-#include <cctype>
 
 using namespace std;
-
-
-static std::string str_to_lower(std::string s)
-{
-	std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
-	return s;
-}
-
 
 // Heuristic check whether a buffer looks like Spellcross LZ (LZW) stream.
 // Spellcross LZ starts with:
@@ -69,7 +59,6 @@ static bool looks_like_spellcross_lz(const uint8_t* buf, size_t len)
 FSarchive::FSarchive(wstring path, int options)
 {
 	m_lzw = NULL;
-	m_options = 0;
 	m_fs_name = std::filesystem::path(path).filename().string();
 	Append(path, options);
 }
@@ -83,12 +72,9 @@ void FSarchive::Append(wstring path,int options)
 	if(!fr)
 		throw runtime_error(string_format("Cannot open \"%ls\"!",path.c_str()));
 
-	// init options + LZW decoder
-	// NOTE: Options may vary between Append() calls (different FS archives). We keep a UNION of options
-	// for later lazy loading (LoadFile), otherwise a later Append(NO_LOAD) could accidentally disable deLZ.
-	int append_options = options;
-	m_options |= options;
-	if((m_options & (Options::DELZ_ALL | Options::DELZ_LZ | Options::DELZ_LZ0)) && !m_lzw)
+	// init LZW decoder?
+	m_options = options;
+	if(options & Options::DELZ_ALL && !m_lzw)
 	{
 		m_lzw = new LZWexpand(1000000);
 		if(!m_lzw)
@@ -125,7 +111,7 @@ void FSarchive::Append(wstring path,int options)
 		file->file_size = aflen;
 		file->file_pos = afofs;
 
-		if(append_options & FSarchive::Options::NO_LOAD)
+		if(options & FSarchive::Options::NO_LOAD)
 		{
 			// no load data mode - just store file params:
 			file->is_loaded = false;
@@ -142,12 +128,12 @@ void FSarchive::Append(wstring path,int options)
 			fr.read((char*)file->data.data(),aflen);
 			fr.seekg(next);
 
-	// optional deLZ of known types
+			// optional deLZ of known types
 			if(m_lzw)
 			{
-				std::string ext = str_to_lower(std::filesystem::path(name).extension().string());
-				if(((m_options & (Options::DELZ_ALL | Options::DELZ_LZ)) && ext == ".lz")
-					|| ((m_options & (Options::DELZ_ALL | Options::DELZ_LZ0)) && ext == ".lz0"))
+				std::string ext = std::filesystem::path(name).extension().string();
+				if(options & Options::DELZ_LZ && ext.compare(".LZ") == 0 
+					|| options & Options::DELZ_LZ0 && ext.compare(".LZ0") == 0)
 				{				
 					// Some assets may be nested/double-packed: FS contains *.LZ, first
 					// deLZ produces another Spellcross LZ stream (often without the .LZ extension).
@@ -196,20 +182,12 @@ int FSarchive::LoadFile(FSfile *fsfile)
 	fr.read((char*)fsfile->data.data(),fsfile->file_size);
 	fr.close();
 	
-	// Ensure LZW decoder for lazy deLZ
-	if(!m_lzw && (m_options & (Options::DELZ_ALL | Options::DELZ_LZ | Options::DELZ_LZ0)))
-	{
-		m_lzw = new LZWexpand(1000000);
-		if(!m_lzw)
-			return(1);
-	}
-
 	// optional deLZ of known types
 	if(m_lzw)
 	{
-		std::string ext = str_to_lower(std::filesystem::path(fsfile->name).extension().string());
-		if(((m_options & (Options::DELZ_ALL | Options::DELZ_LZ)) && ext == ".lz")
-			|| ((m_options & (Options::DELZ_ALL | Options::DELZ_LZ0)) && ext == ".lz0"))
+		std::string ext = std::filesystem::path(fsfile->name).extension().string();
+		if(m_options & Options::DELZ_LZ && ext.compare(".LZ") == 0
+			|| m_options & Options::DELZ_LZ0 && ext.compare(".LZ0") == 0)
 		{
 			std::vector<uint8_t> cur = fsfile->data;
 			const int kMaxDepth = 4;
