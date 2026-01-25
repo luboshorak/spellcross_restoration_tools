@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <cmath>
 #include <regex>
+#include <optional>
+#include <map>
 #include "LZ_spell.h"
 
 // Best-effort background decoding.
@@ -100,6 +102,62 @@ static std::string to_lower(std::string s)
 {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
     return s;
+}
+
+static std::vector<int> parse_int_list(const std::string& value)
+{
+    std::vector<int> out;
+    int cur = 0;
+    bool in_num = false;
+    bool neg = false;
+    for(char c : value)
+    {
+        if(c == '-' && !in_num)
+        {
+            neg = true;
+            continue;
+        }
+        if(std::isdigit(static_cast<unsigned char>(c)))
+        {
+            cur = cur * 10 + (c - '0');
+            in_num = true;
+            continue;
+        }
+        if(in_num)
+        {
+            out.push_back(neg ? -cur : cur);
+            cur = 0;
+            in_num = false;
+            neg = false;
+        }
+    }
+    if(in_num)
+        out.push_back(neg ? -cur : cur);
+    return out;
+}
+
+static int parse_first_int(const std::string& value, int fallback = -1)
+{
+    auto nums = parse_int_list(value);
+    if(nums.empty())
+        return fallback;
+    return nums.front();
+}
+
+static std::optional<int> extract_id_from_section(const std::string& section)
+{
+    auto nums = parse_int_list(section);
+    if(nums.empty())
+        return std::nullopt;
+    return nums.front();
+}
+
+static std::optional<int> extract_id_from_filename(const std::filesystem::path& path)
+{
+    auto nums = parse_int_list(path.stem().string());
+    if(nums.empty())
+        return std::nullopt;
+    return nums.front();
 }
 
 // --- TEXTS helper (disk based) -------------------------------------------------
@@ -207,6 +265,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     }
 
     LoadStrategicState();
+    LoadResearchData();
     BuildUI();
     //TryLoadBackground();
     RefreshUI();
@@ -434,6 +493,8 @@ void StrategicLevelFrame::RefreshUI()
     m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
 
     m_btnLaunch->Enable(m_selectedTerritory >= 0);
+
+    UpdateHierarchyList();
 }
 
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
@@ -543,14 +604,138 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
 void StrategicLevelFrame::OnResearch(wxCommandEvent&)
 {
-    if(m_money >= 100) {
-        m_money -= 100;
-        m_research += 1;
-    } else {
-        wxMessageBox("Not enough money for research (demo cost 100).", "Research", wxOK | wxICON_WARNING, this);
+    if(m_researchItems.empty())
+    {
+        wxMessageBox("Research data not found. Ensure RESEARCH/*.ini files exist near the level files.", "Research", wxOK | wxICON_WARNING, this);
+        return;
     }
-    SaveStrategicState();
-    RefreshUI();
+
+    wxDialog dlg(this, wxID_ANY, "Research", wxDefaultPosition, wxSize(520, 520));
+    auto* rootSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* lbl = new wxStaticText(&dlg, wxID_ANY, "Available research:");
+    rootSizer->Add(lbl, 0, wxLEFT | wxRIGHT | wxTOP, 10);
+
+    auto* list = new wxListBox(&dlg, wxID_ANY);
+    rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
+
+    auto* info = new wxStaticText(&dlg, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
+    info->SetMinSize(wxSize(-1, 120));
+    rootSizer->Add(info, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    auto* btnSizer = new wxBoxSizer(wxHORIZONTAL);
+    auto* btnUnlock = new wxButton(&dlg, wxID_OK, "Unlock");
+    auto* btnClose = new wxButton(&dlg, wxID_CANCEL, "Close");
+    btnSizer->AddStretchSpacer(1);
+    btnSizer->Add(btnUnlock, 0, wxRIGHT, 8);
+    btnSizer->Add(btnClose, 0);
+    rootSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    std::vector<size_t> visibleItems;
+    visibleItems.reserve(m_researchItems.size());
+
+    auto rebuild_list = [&]() {
+        list->Clear();
+        visibleItems.clear();
+        for(size_t i = 0; i < m_researchItems.size(); ++i)
+        {
+            const auto& item = m_researchItems[i];
+            if(!IsResearchAvailableInLevel(item.id) && m_researchUnlocked.find(item.id) == m_researchUnlocked.end())
+                continue;
+
+            bool unlocked = m_researchUnlocked.find(item.id) != m_researchUnlocked.end();
+            wxString label = wxString::Format("[%s] %03d - %s",
+                                              unlocked ? "OK" : "  ",
+                                              item.id,
+                                              item.name.empty() ? "Unknown" : wxString(item.name));
+            list->Append(label);
+            visibleItems.push_back(i);
+        }
+        if(!visibleItems.empty())
+            list->SetSelection(0);
+    };
+
+    auto update_info = [&]() {
+        int sel = list->GetSelection();
+        if(sel == wxNOT_FOUND || sel >= (int)visibleItems.size())
+        {
+            info->SetLabel("No research selected.");
+            btnUnlock->Enable(false);
+            return;
+        }
+
+        const auto& item = m_researchItems[visibleItems[sel]];
+        bool unlocked = m_researchUnlocked.find(item.id) != m_researchUnlocked.end();
+        bool prereq_ok = AreResearchPrerequisitesMet(item.prerequisites);
+        bool available = IsResearchAvailableInLevel(item.id);
+        bool can_unlock = !unlocked && prereq_ok && available && m_money >= item.cost;
+
+        wxString details;
+        details << wxString::Format("ID: %d\n", item.id);
+        details << "Name: " << (item.name.empty() ? "Unknown" : wxString(item.name)) << "\n";
+        details << wxString::Format("Cost: %d\n", item.cost);
+        details << "Status: " << (unlocked ? "Unlocked" : "Locked") << "\n";
+
+        if(!item.prerequisites.empty())
+        {
+            wxString req;
+            for(size_t i = 0; i < item.prerequisites.size(); ++i)
+            {
+                if(i) req << ", ";
+                req << item.prerequisites[i];
+            }
+            details << "Prerequisites: " << req << "\n";
+        }
+
+        if(!item.unlock_units.empty())
+        {
+            wxString units;
+            for(size_t i = 0; i < item.unlock_units.size(); ++i)
+            {
+                if(i) units << ", ";
+                units << item.unlock_units[i];
+            }
+            details << "Unlocks units: " << units << "\n";
+        }
+
+        if(!available && !unlocked)
+            details << "\nUnlock the previous research from LEVEL_DEF first.";
+        else if(!prereq_ok && !unlocked)
+            details << "\nUnlock required research first.";
+        else if(m_money < item.cost && !unlocked)
+            details << "\nNot enough money.";
+
+        info->SetLabel(details);
+        btnUnlock->Enable(can_unlock);
+    };
+
+    list->Bind(wxEVT_LISTBOX, [&](wxCommandEvent&){ update_info(); });
+
+    btnUnlock->Bind(wxEVT_BUTTON, [&](wxCommandEvent&){
+        int sel = list->GetSelection();
+        if(sel == wxNOT_FOUND || sel >= (int)visibleItems.size())
+            return;
+        const auto& item = m_researchItems[visibleItems[sel]];
+        if(m_researchUnlocked.find(item.id) != m_researchUnlocked.end())
+            return;
+        if(!IsResearchAvailableInLevel(item.id) || !AreResearchPrerequisitesMet(item.prerequisites))
+            return;
+        if(m_money < item.cost)
+            return;
+        m_money -= item.cost;
+        m_researchUnlocked.insert(item.id);
+        m_research = (int)m_researchUnlocked.size();
+        SaveStrategicState();
+        RefreshUI();
+        rebuild_list();
+        update_info();
+    });
+
+    rebuild_list();
+    update_info();
+
+    dlg.SetSizerAndFit(rootSizer);
+    dlg.ShowModal();
 }
 
 void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
@@ -568,12 +753,29 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     rootSizer->Add(lbl, 0, wxLEFT | wxRIGHT | wxTOP, 10);
 
     auto* list = new wxListBox(&dlg, wxID_ANY);
+    std::unordered_set<int> unlocked_units = CollectUnlockedUnits();
+    std::unordered_set<int> gated_units;
+    for(const auto& item : m_researchItems)
+    {
+        if(!IsResearchAvailableInLevel(item.id))
+            continue;
+        for(int unit_id : item.unlock_units)
+            gated_units.insert(unit_id);
+    }
+
     std::vector<int> unit_ids;
     unit_ids.reserve(m_spellData->units->GetUnits().size());
     for(const auto* unit : m_spellData->units->GetUnits())
     {
         if(!unit)
             continue;
+        if(!gated_units.empty())
+        {
+            bool is_gated = gated_units.find(unit->type_id) != gated_units.end();
+            bool is_unlocked = unlocked_units.find(unit->type_id) != unlocked_units.end();
+            if(is_gated && !is_unlocked)
+                continue;
+        }
         unit_ids.push_back(unit->type_id);
         list->Append(wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name))));
     }
@@ -793,10 +995,12 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level)
     return base / "strategic_state.json";
 }
 
-static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money, std::vector<LevelData::PlayerUnitAdd>& units)
+static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money, int& research, std::vector<LevelData::PlayerUnitAdd>& units, std::vector<int>& unlocked)
 {
     units.clear();
     money = 0;
+    research = 0;
+    unlocked.clear();
 
     std::ifstream f(path);
     if(!f)
@@ -810,6 +1014,17 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
     std::smatch m;
     if(std::regex_search(data, m, money_re) && m.size() > 1)
         money = std::stoi(m[1].str());
+
+    std::regex research_re("\"research\"\\s*:\\s*(-?\\d+)");
+    if(std::regex_search(data, m, research_re) && m.size() > 1)
+        research = std::stoi(m[1].str());
+
+    std::regex unlocked_re("\"research_unlocked\"\\s*:\\s*\\[([^\\]]*)\\]");
+    if(std::regex_search(data, m, unlocked_re) && m.size() > 1)
+    {
+        auto list = parse_int_list(m[1].str());
+        unlocked.insert(unlocked.end(), list.begin(), list.end());
+    }
 
     std::regex unit_re("\\{\\s*\"unit_id\"\\s*:\\s*(\\d+)\\s*,\\s*\"count\"\\s*:\\s*(\\d+)\\s*,\\s*\"health\"\\s*:\\s*(\\d+)\\s*\\}");
     auto begin = std::sregex_iterator(data.begin(), data.end(), unit_re);
@@ -830,7 +1045,7 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
     return true;
 }
 
-static void SaveStrategicStateFile(const std::filesystem::path& path, int money, const std::vector<LevelData::PlayerUnitAdd>& units)
+static void SaveStrategicStateFile(const std::filesystem::path& path, int money, int research, const std::vector<LevelData::PlayerUnitAdd>& units, const std::vector<int>& unlocked)
 {
     std::ofstream f(path);
     if(!f)
@@ -838,6 +1053,15 @@ static void SaveStrategicStateFile(const std::filesystem::path& path, int money,
 
     f << "{\n";
     f << "  \"money\": " << money << ",\n";
+    f << "  \"research\": " << research << ",\n";
+    f << "  \"research_unlocked\": [";
+    for(size_t i = 0; i < unlocked.size(); ++i)
+    {
+        f << unlocked[i];
+        if(i + 1 < unlocked.size())
+            f << ", ";
+    }
+    f << "],\n";
     f << "  \"units\": [\n";
     for(size_t i = 0; i < units.size(); ++i)
     {
@@ -854,19 +1078,26 @@ static void SaveStrategicStateFile(const std::filesystem::path& path, int money,
 void StrategicLevelFrame::LoadStrategicState()
 {
     int money = 0;
+    int research = 0;
     std::vector<LevelData::PlayerUnitAdd> units;
+    std::vector<int> unlocked;
     const auto path = GetStrategicStatePath(m_level);
-    if(LoadStrategicStateFile(path, money, units))
+    if(LoadStrategicStateFile(path, money, research, units, unlocked))
     {
         m_money = money;
         m_playerUnits = std::move(units);
+        m_researchUnlocked.clear();
+        m_researchUnlocked.insert(unlocked.begin(), unlocked.end());
+        m_research = research > 0 ? research : (int)m_researchUnlocked.size();
     }
 }
 
 void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
-    SaveStrategicStateFile(path, m_money, m_playerUnits);
+    std::vector<int> unlocked(m_researchUnlocked.begin(), m_researchUnlocked.end());
+    std::sort(unlocked.begin(), unlocked.end());
+    SaveStrategicStateFile(path, m_money, m_research, m_playerUnits, unlocked);
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
@@ -877,6 +1108,282 @@ wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
             return wxString(char2wstringCP895(unit->name));
     }
     return wxString::Format("%d", unit_id);
+}
+
+static std::filesystem::path FindResearchDir(const LevelData& level)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path base = fs::path(level.source_path).parent_path();
+    for(int i = 0; i < 8 && !base.empty(); ++i)
+    {
+        fs::path research = base / "RESEARCH";
+        if(fs::exists(research, ec) && fs::is_directory(research, ec))
+            return research;
+        research = base / "research";
+        if(fs::exists(research, ec) && fs::is_directory(research, ec))
+            return research;
+        base = base.parent_path();
+    }
+
+    fs::path cwd = fs::current_path(ec);
+    fs::path research = cwd / "RESEARCH";
+    if(fs::exists(research, ec) && fs::is_directory(research, ec))
+        return research;
+    research = cwd / "research";
+    if(fs::exists(research, ec) && fs::is_directory(research, ec))
+        return research;
+
+    return {};
+}
+
+void StrategicLevelFrame::LoadResearchData()
+{
+    m_researchItems.clear();
+    auto research_dir = FindResearchDir(m_level);
+    if(research_dir.empty())
+        return;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::unordered_map<int, ResearchItem> items;
+    for(fs::directory_iterator it(research_dir, ec); !ec && it != fs::directory_iterator(); ++it)
+    {
+        if(!it->is_regular_file())
+            continue;
+        auto ext = to_lower(it->path().extension().string());
+        if(ext != ".ini")
+            continue;
+
+        std::ifstream f(it->path());
+        if(!f)
+            continue;
+
+        std::optional<int> default_id = extract_id_from_filename(it->path());
+        std::optional<int> current_id = default_id;
+        std::string line;
+        while(std::getline(f, line))
+        {
+            line = trim(line);
+            if(line.empty())
+                continue;
+            if(line.rfind(";", 0) == 0 || line.rfind("#", 0) == 0)
+                continue;
+
+            if(line.front() == '[' && line.back() == ']')
+            {
+                std::string section = line.substr(1, line.size() - 2);
+                current_id = extract_id_from_section(section);
+                if(!current_id && default_id)
+                    current_id = default_id;
+                continue;
+            }
+
+            auto eq = line.find('=');
+            if(eq == std::string::npos)
+                continue;
+
+            std::string key = trim(line.substr(0, eq));
+            std::string value = trim(line.substr(eq + 1));
+            if(key.empty())
+                continue;
+
+            if(std::all_of(key.begin(), key.end(), [](unsigned char c){ return std::isdigit(c); }))
+            {
+                int id = parse_first_int(key, -1);
+                if(id >= 0)
+                {
+                    current_id = id;
+                    auto& item = items[id];
+                    item.id = id;
+                    if(item.name.empty())
+                        item.name = value;
+                }
+                continue;
+            }
+
+            if(!current_id)
+                continue;
+
+            int id = *current_id;
+            auto& item = items[id];
+            item.id = id;
+
+            std::string key_upper = to_upper(key);
+            if(key_upper == "ID" || key_upper == "NUMBER" || key_upper == "INDEX")
+            {
+                int parsed = parse_first_int(value, id);
+                if(parsed >= 0 && parsed != id)
+                {
+                    items[parsed] = item;
+                    items.erase(id);
+                    current_id = parsed;
+                }
+                continue;
+            }
+            if(key_upper == "NAME" || key_upper == "TITLE" || key_upper == "DESC")
+            {
+                item.name = value;
+                continue;
+            }
+            if(key_upper == "COST" || key_upper == "PRICE" || key_upper == "RESEARCH")
+            {
+                item.cost = parse_first_int(value, item.cost);
+                continue;
+            }
+            if(key_upper == "REQUIRES" || key_upper == "PREREQ" || key_upper == "PREREQUISITE")
+            {
+                item.prerequisites = parse_int_list(value);
+                continue;
+            }
+            if(key_upper == "UNITS" || key_upper == "UNIT")
+            {
+                item.unlock_units = parse_int_list(value);
+                continue;
+            }
+        }
+    }
+
+    m_researchItems.reserve(items.size());
+    for(auto& [id, item] : items)
+        m_researchItems.push_back(std::move(item));
+
+    std::sort(m_researchItems.begin(), m_researchItems.end(),
+              [](const ResearchItem& a, const ResearchItem& b){ return a.id < b.id; });
+
+    if(!m_researchUnlocked.empty())
+        m_research = (int)m_researchUnlocked.size();
+}
+
+bool StrategicLevelFrame::IsResearchAvailableInLevel(int research_id) const
+{
+    if(m_level.research_flags.empty())
+        return true;
+
+    auto it = std::find(m_level.research_flags.begin(), m_level.research_flags.end(), research_id);
+    if(it == m_level.research_flags.end())
+        return false;
+
+    if(m_researchUnlocked.find(research_id) != m_researchUnlocked.end())
+        return true;
+
+    for(auto jt = m_level.research_flags.begin(); jt != it; ++jt)
+    {
+        if(m_researchUnlocked.find(*jt) == m_researchUnlocked.end())
+            return false;
+    }
+    return true;
+}
+
+bool StrategicLevelFrame::AreResearchPrerequisitesMet(const std::vector<int>& prereq) const
+{
+    for(int id : prereq)
+    {
+        if(m_researchUnlocked.find(id) == m_researchUnlocked.end())
+            return false;
+    }
+    return true;
+}
+
+std::unordered_set<int> StrategicLevelFrame::CollectUnlockedUnits() const
+{
+    std::unordered_set<int> out;
+    for(const auto& item : m_researchItems)
+    {
+        if(m_researchUnlocked.find(item.id) == m_researchUnlocked.end())
+            continue;
+        for(int unit_id : item.unlock_units)
+            out.insert(unit_id);
+    }
+    return out;
+}
+
+void StrategicLevelFrame::UpdateHierarchyList()
+{
+    if(!m_hierarchyList)
+        return;
+
+    m_hierarchyList->DeleteAllItems();
+
+    auto is_commander_name = [&](const wxString& name) {
+        wxString lower = name.Lower();
+        return lower.Contains("velitel") || lower.Contains("commander");
+    };
+
+    struct GroupInfo {
+        wxString key;
+        wxString commander;
+        int battalions = 0;
+        std::vector<wxString> units;
+    };
+
+    std::map<std::string, GroupInfo> groups;
+    for(const auto& unit : m_playerUnits)
+    {
+        std::string raw_key = unit.extra;
+        if(raw_key.empty() || raw_key == "-")
+            raw_key = "Neza\u0159azeno";
+
+        auto& group = groups[raw_key];
+        group.key = wxString(raw_key);
+
+        wxString name = GetUnitDisplayName(unit.unit_id);
+        wxString label = wxString::Format("%s x%d", name, unit.count);
+        group.units.push_back(label);
+
+        if(is_commander_name(name))
+        {
+            if(group.commander.empty())
+                group.commander = name;
+            continue;
+        }
+
+        group.battalions += 1;
+    }
+
+    long row = 0;
+    for(const auto& [raw_key, group] : groups)
+    {
+        wxString formation;
+        if(group.key == "Neza\u0159azeno")
+        {
+            formation = "Neza\u0159azeno";
+        }
+        else if(group.battalions >= 4)
+        {
+            formation = "Brig\u00e1da " + group.key;
+        }
+        else if(group.battalions >= 2)
+        {
+            formation = "Pluk " + group.key;
+        }
+        else if(group.battalions >= 1)
+        {
+            formation = "Prapor " + group.key;
+        }
+        else
+        {
+            formation = "Odd\u00edl " + group.key;
+        }
+
+        wxString units;
+        for(size_t i = 0; i < group.units.size(); ++i)
+        {
+            if(i) units << ", ";
+            units << group.units[i];
+        }
+        if(units.empty())
+            units = "-";
+
+        long idx = m_hierarchyList->InsertItem(row, formation);
+        m_hierarchyList->SetItem(idx, 1, group.commander.empty() ? "-" : group.commander);
+        m_hierarchyList->SetItem(idx, 2, units);
+        ++row;
+    }
+
+    m_hierarchyList->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
+    m_hierarchyList->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
+    m_hierarchyList->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
 }
 
 static bool LoadFileBytes(const std::filesystem::path& p, std::vector<unsigned char>& out)

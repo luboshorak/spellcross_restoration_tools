@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 
 #include <wx/wx.h>
@@ -39,6 +40,11 @@ private:
     void LoadStrategicState();
     void SaveStrategicState() const;
     wxString GetUnitDisplayName(int unit_id) const;
+    void LoadResearchData();
+    void UpdateHierarchyList();
+    bool IsResearchAvailableInLevel(int research_id) const;
+    bool AreResearchPrerequisitesMet(const std::vector<int>& prereq) const;
+    std::unordered_set<int> CollectUnlockedUnits() const;
 
     // mission selection / progression
     std::string ResolveMissionTokenForTerritory(int territory_id) const;
@@ -61,6 +67,16 @@ private:
     std::unordered_map<int, int> m_territoryLaunchCount;
 
     std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
+
+    struct ResearchItem {
+        int id = -1;
+        std::string name;
+        int cost = 100;
+        std::vector<int> prerequisites;
+        std::vector<int> unlock_units;
+    };
+    std::vector<ResearchItem> m_researchItems;
+    std::unordered_set<int> m_researchUnlocked;
 
     // background bitmap
     wxBitmap m_bgBitmap;
