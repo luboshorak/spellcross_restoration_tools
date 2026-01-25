@@ -255,47 +255,7 @@ void StrategicLevelFrame::BuildUI()
     m_mapCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_mapCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
     m_mapCanvas->SetMinSize(wxSize(640, 360));
-    m_mapSizer->Add(m_mapCanvas, 1, wxALL | wxEXPAND, 8);
-
-    auto controls = new wxPanel(m_mapPanel);
-    controls->SetBackgroundColour(wxColour(20, 20, 20));
-    auto controlsSizer = new wxBoxSizer(wxVERTICAL);
-
-    auto mapTitle = new wxStaticText(controls, wxID_ANY, "Strategic map (click territory)");
-    mapTitle->SetForegroundColour(*wxLIGHT_GREY);
-    controlsSizer->Add(mapTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
-
-    // Territory buttons (temporary UI)
-    auto grid = new wxGridSizer(0, 4, 6, 6);
-    for(size_t i = 0; i < m_level.territories.size(); ++i)
-    {
-        const auto& t = m_level.territories[i];
-        auto id = ID_TERRITORY_BASE + (int)i;
-
-        wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
-        auto btn = new wxButton(controls, id, label, wxDefaultPosition, wxSize(140, 60));
-        btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
-        grid->Add(btn, 0, wxEXPAND);
-    }
-    controlsSizer->Add(grid, 0, wxALL | wxEXPAND, 6);
-
-    // Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
-    auto txtTitle = new wxStaticText(controls, wxID_ANY, "Territory / briefing text");
-    txtTitle->SetForegroundColour(*wxLIGHT_GREY);
-    controlsSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
-
-    auto txt = new wxTextCtrl(
-        controls,
-        ID_TERRITORY_TEXTBOX,
-        "",
-        wxDefaultPosition,
-        wxDefaultSize,
-        wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2 | wxTE_DONTWRAP);
-    txt->SetMinSize(wxSize(-1, 180));
-    controlsSizer->Add(txt, 0, wxALL | wxEXPAND, 6);
-
-    controls->SetSizer(controlsSizer);
-    m_mapSizer->Add(controls, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    m_mapSizer->Add(m_mapCanvas, 1, wxEXPAND, 0);
 
     m_mapPanel->SetSizer(m_mapSizer);
 
@@ -1005,6 +965,18 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     // Compose like python tool:
     //  out = fog (darkened), then LEVEL where (clk==0), plus optional region outline.
     const float fog_darken = 0.82f;
+    bool hasZero = false;
+    bool hasNonZero = false;
+    for(unsigned char v : clkValues)
+    {
+        if(v == 0)
+            hasZero = true;
+        else
+            hasNonZero = true;
+        if(hasZero && hasNonZero)
+            break;
+    }
+    const bool clkUsable = hasZero && hasNonZero;
 
     wxImage img(W, H, true);
     img.InitAlpha();
@@ -1013,7 +985,7 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     for(int x = 0; x < W; ++x)
     {
         const size_t i = (size_t)y * W + (size_t)x;
-        const bool inside = (clkValues[i] == 0);
+        const bool inside = clkUsable ? (clkValues[i] == 0) : (levelBytes[i] != 0);
         const unsigned char idx = inside ? levelBytes[i] : fogBytes[i];
 
         unsigned char r = pal256[(size_t)idx * 3 + 0];
@@ -1031,21 +1003,24 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
         img.SetAlpha(x, y, 255);
     }
 
-    // Outline (white) where neighboring CLK values differ, limited to inside area.
-    for(int y = 0; y < H; ++y)
-    for(int x = 0; x < W; ++x)
+    if(clkUsable)
     {
-        const size_t i = (size_t)y * W + (size_t)x;
-        if(clkValues[i] != 0)
-            continue;
-
-        bool edge = false;
-        if(x > 0 && clkValues[i] != clkValues[i - 1]) edge = true;
-        if(y > 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
-        if(edge)
+        // Outline (white) where neighboring CLK values differ, limited to inside area.
+        for(int y = 0; y < H; ++y)
+        for(int x = 0; x < W; ++x)
         {
-            img.SetRGB(x, y, 255, 255, 255);
-            img.SetAlpha(x, y, 255);
+            const size_t i = (size_t)y * W + (size_t)x;
+            if(clkValues[i] != 0)
+                continue;
+
+            bool edge = false;
+            if(x > 0 && clkValues[i] != clkValues[i - 1]) edge = true;
+            if(y > 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
+            if(edge)
+            {
+                img.SetRGB(x, y, 255, 255, 255);
+                img.SetAlpha(x, y, 255);
+            }
         }
     }
 
