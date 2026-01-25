@@ -6,6 +6,7 @@
 #include <wx/wx.h>
 #include <wx/listctrl.h>
 #include <wx/statbmp.h>
+#include <wx/simplebook.h>
 
 #include "level.h"
 
@@ -32,6 +33,8 @@ private:
     void OnBuyUnits(wxCommandEvent& ev);
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
+    void OnShowStrategicMap(wxCommandEvent& ev);
+    void OnShowHierarchy(wxCommandEvent& ev);
 
     void LoadStrategicState();
     void SaveStrategicState() const;
@@ -71,11 +74,15 @@ private:
     wxPanel* m_mapPanel = nullptr;
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_roster = nullptr;
+    wxListCtrl* m_hierarchyList = nullptr;
+    wxSimplebook* m_rightBook = nullptr;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnBuy = nullptr;
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
+    wxButton* m_btnStrategicMap = nullptr;
+    wxButton* m_btnHierarchy = nullptr;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
@@ -87,7 +94,9 @@ private:
         ID_BTN_RESEARCH,
         ID_BTN_BUY,
         ID_BTN_ENDTURN,
-        ID_BTN_LAUNCH
+        ID_BTN_LAUNCH,
+        ID_BTN_STRATEGIC_MAP,
+        ID_BTN_HIERARCHY
     };
 
     wxDECLARE_EVENT_TABLE();
