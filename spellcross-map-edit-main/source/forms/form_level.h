@@ -35,8 +35,6 @@ private:
     void OnLaunch(wxCommandEvent& ev);
     void OnShowStrategicMap(wxCommandEvent& ev);
     void OnShowHierarchy(wxCommandEvent& ev);
-    void OnAssignCommander(wxCommandEvent& ev);
-    void OnRemoveCommander(wxCommandEvent& ev);
 
     void LoadStrategicState();
     void SaveStrategicState() const;
@@ -85,8 +83,6 @@ private:
     wxButton* m_btnLaunch = nullptr;
     wxButton* m_btnStrategicMap = nullptr;
     wxButton* m_btnHierarchy = nullptr;
-    wxButton* m_btnAssignCommander = nullptr;
-    wxButton* m_btnRemoveCommander = nullptr;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
@@ -108,9 +104,7 @@ private:
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
-        ID_BTN_HIERARCHY,
-        ID_BTN_ASSIGN_COMMANDER,
-        ID_BTN_REMOVE_COMMANDER
+        ID_BTN_HIERARCHY
     };
 
     wxDECLARE_EVENT_TABLE();

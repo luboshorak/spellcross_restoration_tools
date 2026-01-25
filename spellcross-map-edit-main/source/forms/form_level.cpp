@@ -30,8 +30,6 @@ wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_ASSIGN_COMMANDER, StrategicLevelFrame::OnAssignCommander)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_REMOVE_COMMANDER, StrategicLevelFrame::OnRemoveCommander)
 wxEND_EVENT_TABLE()
 
 // UI-only: readonly text panel under the territory grid (instead of popups)
@@ -291,6 +289,13 @@ void StrategicLevelFrame::BuildUI()
     right->SetBackgroundColour(wxColour(10, 50, 10));
     auto rightSizer = new wxBoxSizer(wxVERTICAL);
 
+    auto rightNavSizer = new wxBoxSizer(wxHORIZONTAL);
+    m_btnStrategicMap = new wxButton(right, ID_BTN_STRATEGIC_MAP, "Strategick\u00e1 mapa");
+    m_btnHierarchy = new wxButton(right, ID_BTN_HIERARCHY, "Hierarchie");
+    rightNavSizer->Add(m_btnStrategicMap, 1, wxRIGHT, 6);
+    rightNavSizer->Add(m_btnHierarchy, 1);
+    rightSizer->Add(rightNavSizer, 0, wxALL | wxEXPAND, 10);
+
     auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
     rosterTitle->SetForegroundColour(*wxWHITE);
     // Ped tmto dkem pidejte zskn fontu z m_spellData
@@ -324,17 +329,10 @@ void StrategicLevelFrame::BuildUI()
     hierarchySizer->Add(hierarchyIntro, 0, wxBOTTOM | wxEXPAND, 10);
 
     m_hierarchyList = new wxListCtrl(hierarchyPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-    m_hierarchyList->InsertColumn(0, "Jednotka");
-    m_hierarchyList->InsertColumn(1, "Velitel");
-    m_hierarchyList->InsertColumn(2, "Formace");
+    m_hierarchyList->InsertColumn(0, "Formation");
+    m_hierarchyList->InsertColumn(1, "Commander");
+    m_hierarchyList->InsertColumn(2, "Units");
     hierarchySizer->Add(m_hierarchyList, 1, wxEXPAND);
-
-    auto hierarchyBtnSizer = new wxBoxSizer(wxHORIZONTAL);
-    m_btnAssignCommander = new wxButton(hierarchyPage, ID_BTN_ASSIGN_COMMANDER, "P\u0159i\u0159adit velitele");
-    m_btnRemoveCommander = new wxButton(hierarchyPage, ID_BTN_REMOVE_COMMANDER, "Odebrat velitele");
-    hierarchyBtnSizer->Add(m_btnAssignCommander, 1, wxRIGHT, 6);
-    hierarchyBtnSizer->Add(m_btnRemoveCommander, 1);
-    hierarchySizer->Add(hierarchyBtnSizer, 0, wxTOP | wxEXPAND, 10);
     hierarchyPage->SetSizer(hierarchySizer);
 
     m_rightBook->AddPage(rosterPage, "Strategick\u00e1 mapa", true);
@@ -510,6 +508,18 @@ void StrategicLevelFrame::OnRemoveCommander(wxCommandEvent&)
 
     cmdIt->assigned_unit_index = -1;
     RefreshUI();
+}
+
+void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
+{
+    if(m_rightBook)
+        m_rightBook->SetSelection(0);
+}
+
+void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
+{
+    if(m_rightBook)
+        m_rightBook->SetSelection(1);
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
