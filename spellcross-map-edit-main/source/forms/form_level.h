@@ -6,6 +6,7 @@
 #include <wx/wx.h>
 #include <wx/listctrl.h>
 #include <wx/statbmp.h>
+#include <wx/simplebook.h>
 
 #include "level.h"
 
@@ -32,6 +33,10 @@ private:
     void OnBuyUnits(wxCommandEvent& ev);
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
+    void OnShowStrategicMap(wxCommandEvent& ev);
+    void OnShowHierarchy(wxCommandEvent& ev);
+    void OnAssignCommander(wxCommandEvent& ev);
+    void OnRemoveCommander(wxCommandEvent& ev);
 
     void LoadStrategicState();
     void SaveStrategicState() const;
@@ -71,23 +76,41 @@ private:
     wxPanel* m_mapPanel = nullptr;
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_roster = nullptr;
+    wxListCtrl* m_hierarchyList = nullptr;
+    wxSimplebook* m_rightBook = nullptr;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnBuy = nullptr;
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
+    wxButton* m_btnStrategicMap = nullptr;
+    wxButton* m_btnHierarchy = nullptr;
+    wxButton* m_btnAssignCommander = nullptr;
+    wxButton* m_btnRemoveCommander = nullptr;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
     int m_bgScaledH = -1;
 
+    struct Commander {
+        int id = 0;
+        wxString name;
+        int rank = 0; // 0 = battalion, 1 = regiment, 2 = brigade
+        int assigned_unit_index = -1;
+    };
+    std::vector<Commander> m_commanders;
+    int m_nextCommanderId = 1;
 
     enum : int {
         ID_TERRITORY_BASE = 20000,
         ID_BTN_RESEARCH,
         ID_BTN_BUY,
         ID_BTN_ENDTURN,
-        ID_BTN_LAUNCH
+        ID_BTN_LAUNCH,
+        ID_BTN_STRATEGIC_MAP,
+        ID_BTN_HIERARCHY,
+        ID_BTN_ASSIGN_COMMANDER,
+        ID_BTN_REMOVE_COMMANDER
     };
 
     wxDECLARE_EVENT_TABLE();

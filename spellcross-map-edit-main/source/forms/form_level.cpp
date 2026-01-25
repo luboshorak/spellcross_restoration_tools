@@ -28,6 +28,10 @@ wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY,      StrategicLevelFrame::OnBuyUnits)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN,  StrategicLevelFrame::OnEndTurn)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_ASSIGN_COMMANDER, StrategicLevelFrame::OnAssignCommander)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_REMOVE_COMMANDER, StrategicLevelFrame::OnRemoveCommander)
 wxEND_EVENT_TABLE()
 
 // UI-only: readonly text panel under the territory grid (instead of popups)
@@ -294,18 +298,59 @@ void StrategicLevelFrame::BuildUI()
     rosterTitle->SetFont(font);
     rightSizer->Add(rosterTitle, 0, wxALL, 10);
 
-    m_roster = new wxListCtrl(right, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_rightBook = new wxSimplebook(right, wxID_ANY);
+    auto rosterPage = new wxPanel(m_rightBook);
+    auto rosterSizer = new wxBoxSizer(wxVERTICAL);
+    m_roster = new wxListCtrl(rosterPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->InsertColumn(0, "Unit");
     m_roster->InsertColumn(1, "Count");
     m_roster->InsertColumn(2, "HP");
-    rightSizer->Add(m_roster, 1, wxALL | wxEXPAND, 10);
+    rosterSizer->Add(m_roster, 1, wxEXPAND);
+    rosterPage->SetSizer(rosterSizer);
+
+    auto hierarchyPage = new wxPanel(m_rightBook);
+    auto hierarchySizer = new wxBoxSizer(wxVERTICAL);
+    auto hierarchyIntro = new wxStaticText(
+        hierarchyPage,
+        wxID_ANY,
+        "P\u0159ehled hierarchie\n\n"
+        "- Z\u00e1kladn\u00ed formac\u00ed je prapor.\n"
+        "- 2 prapory tvo\u0159\u00ed pluk.\n"
+        "- 2 pluky (4 prapory) tvo\u0159\u00ed brig\u00e1du.\n\n"
+        "Velitel\u00e9 jsou vz\u00e1cn\u00e9 jednotky ur\u010den\u00e9 pro formace.\n"
+        "Vy\u0161\u0161\u00ed hodnosti umo\u017e\u0148uj\u00ed vy\u0161\u0161\u00ed formace.\n"
+        "Pokud je jednotka s velitelem zni\u010dena, velitel je ztracen.");
+    hierarchyIntro->SetForegroundColour(*wxWHITE);
+    hierarchySizer->Add(hierarchyIntro, 0, wxBOTTOM | wxEXPAND, 10);
+
+    m_hierarchyList = new wxListCtrl(hierarchyPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_hierarchyList->InsertColumn(0, "Jednotka");
+    m_hierarchyList->InsertColumn(1, "Velitel");
+    m_hierarchyList->InsertColumn(2, "Formace");
+    hierarchySizer->Add(m_hierarchyList, 1, wxEXPAND);
+
+    auto hierarchyBtnSizer = new wxBoxSizer(wxHORIZONTAL);
+    m_btnAssignCommander = new wxButton(hierarchyPage, ID_BTN_ASSIGN_COMMANDER, "P\u0159i\u0159adit velitele");
+    m_btnRemoveCommander = new wxButton(hierarchyPage, ID_BTN_REMOVE_COMMANDER, "Odebrat velitele");
+    hierarchyBtnSizer->Add(m_btnAssignCommander, 1, wxRIGHT, 6);
+    hierarchyBtnSizer->Add(m_btnRemoveCommander, 1);
+    hierarchySizer->Add(hierarchyBtnSizer, 0, wxTOP | wxEXPAND, 10);
+    hierarchyPage->SetSizer(hierarchySizer);
+
+    m_rightBook->AddPage(rosterPage, "Strategick\u00e1 mapa", true);
+    m_rightBook->AddPage(hierarchyPage, "Hierarchie", false);
+    rightSizer->Add(m_rightBook, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
 
     auto btnSizer = new wxBoxSizer(wxVERTICAL);
+    m_btnStrategicMap = new wxButton(right, ID_BTN_STRATEGIC_MAP, "Strategick\u00e1 mapa");
+    m_btnHierarchy = new wxButton(right, ID_BTN_HIERARCHY, "Hierarchie");
     m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
     m_btnBuy      = new wxButton(right, ID_BTN_BUY, "Buy units");
     m_btnLaunch   = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
     m_btnEndTurn  = new wxButton(right, ID_BTN_ENDTURN, "End turn");
 
+    btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnBuy,      0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 12);
@@ -333,7 +378,12 @@ void StrategicLevelFrame::RefreshUI()
     for(size_t i = 0; i < m_playerUnits.size(); ++i)
     {
         const auto& u = m_playerUnits[i];
-        long idx = m_roster->InsertItem((long)i, GetUnitDisplayName(u.unit_id));
+        wxString name = GetUnitDisplayName(u.unit_id);
+        auto cmdIt = std::find_if(m_commanders.begin(), m_commanders.end(),
+            [&](const Commander& cmd) { return cmd.assigned_unit_index == (int)i; });
+        if(cmdIt != m_commanders.end())
+            name << " \u2691";
+        long idx = m_roster->InsertItem((long)i, name);
         m_roster->SetItem(idx, 1, wxString::Format("%d", u.count));
         m_roster->SetItem(idx, 2, wxString::Format("%d", u.health));
     }
@@ -343,6 +393,123 @@ void StrategicLevelFrame::RefreshUI()
     m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
 
     m_btnLaunch->Enable(m_selectedTerritory >= 0);
+
+    if(m_hierarchyList)
+    {
+        m_hierarchyList->DeleteAllItems();
+        for(size_t i = 0; i < m_playerUnits.size(); ++i)
+        {
+            const auto& u = m_playerUnits[i];
+            long row = m_hierarchyList->InsertItem((long)i, GetUnitDisplayName(u.unit_id));
+            m_hierarchyList->SetItemData(row, (long)i);
+
+            auto cmdIt = std::find_if(m_commanders.begin(), m_commanders.end(),
+                [&](const Commander& cmd) { return cmd.assigned_unit_index == (int)i; });
+            if(cmdIt != m_commanders.end())
+            {
+                m_hierarchyList->SetItem(row, 1, cmdIt->name);
+                wxString formation = "Prapor";
+                if(cmdIt->rank == 1)
+                    formation = "Pluk";
+                else if(cmdIt->rank >= 2)
+                    formation = "Brig\u00e1da";
+                m_hierarchyList->SetItem(row, 2, formation);
+            }
+            else
+            {
+                m_hierarchyList->SetItem(row, 1, "-");
+                m_hierarchyList->SetItem(row, 2, "-");
+            }
+        }
+        m_hierarchyList->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
+        m_hierarchyList->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
+        m_hierarchyList->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
+    }
+}
+
+void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
+{
+    if(m_rightBook)
+        m_rightBook->SetSelection(0);
+}
+
+void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
+{
+    if(m_rightBook)
+        m_rightBook->SetSelection(1);
+}
+
+void StrategicLevelFrame::OnAssignCommander(wxCommandEvent&)
+{
+    if(!m_hierarchyList)
+        return;
+
+    long selected = m_hierarchyList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    if(selected == wxNOT_FOUND)
+    {
+        wxMessageBox("Nejprve vyberte jednotku.", "Hierarchie", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    int unitIndex = (int)m_hierarchyList->GetItemData(selected);
+    std::vector<int> available;
+    wxArrayString choices;
+    for(size_t i = 0; i < m_commanders.size(); ++i)
+    {
+        const auto& cmd = m_commanders[i];
+        if(cmd.assigned_unit_index >= 0)
+            continue;
+        available.push_back((int)i);
+        wxString rank = "Prapor";
+        if(cmd.rank == 1)
+            rank = "Pluk";
+        else if(cmd.rank >= 2)
+            rank = "Brig\u00e1da";
+        choices.Add(wxString::Format("%s (%s)", cmd.name, rank));
+    }
+
+    if(choices.empty())
+    {
+        wxMessageBox("Nen\u00ed dostupn\u00fd velitel. Kupte nov\u00e9ho v \"Buy units\".", "Hierarchie", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    wxSingleChoiceDialog dlg(this, "Vyberte velitele pro jednotku:", "Hierarchie", choices);
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    int choiceIndex = dlg.GetSelection();
+    if(choiceIndex == wxNOT_FOUND)
+        return;
+
+    int commanderIndex = available[choiceIndex];
+    m_commanders[commanderIndex].assigned_unit_index = unitIndex;
+    RefreshUI();
+}
+
+void StrategicLevelFrame::OnRemoveCommander(wxCommandEvent&)
+{
+    if(!m_hierarchyList)
+        return;
+
+    long selected = m_hierarchyList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    if(selected == wxNOT_FOUND)
+    {
+        wxMessageBox("Nejprve vyberte jednotku.", "Hierarchie", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    int unitIndex = (int)m_hierarchyList->GetItemData(selected);
+    auto cmdIt = std::find_if(m_commanders.begin(), m_commanders.end(),
+        [&](const Commander& cmd) { return cmd.assigned_unit_index == unitIndex; });
+    if(cmdIt == m_commanders.end())
+    {
+        wxMessageBox("Vybran\u00e1 jednotka nem\u00e1 velitele.", "Hierarchie", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    cmdIt->assigned_unit_index = -1;
+    RefreshUI();
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
@@ -465,16 +632,44 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     rootSizer->Add(lbl, 0, wxLEFT | wxRIGHT | wxTOP, 10);
 
     auto* list = new wxListBox(&dlg, wxID_ANY);
-    std::vector<int> unit_ids;
-    unit_ids.reserve(m_spellData->units->GetUnits().size());
+    struct BuyItem {
+        enum class Type { Unit, Commander };
+        Type type = Type::Unit;
+        int unit_id = 0;
+        int commander_rank = 0;
+        wxString label;
+    };
+
+    std::vector<BuyItem> items;
+    items.reserve(m_spellData->units->GetUnits().size() + 3);
     for(const auto* unit : m_spellData->units->GetUnits())
     {
         if(!unit)
             continue;
-        unit_ids.push_back(unit->type_id);
-        list->Append(wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name))));
+        BuyItem item;
+        item.type = BuyItem::Type::Unit;
+        item.unit_id = unit->type_id;
+        item.label = wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name)));
+        items.push_back(item);
+        list->Append(item.label);
     }
-    if(!unit_ids.empty())
+
+    const wxString commanderNames[] = {
+        "Velitel (prapor)",
+        "Velitel (pluk)",
+        "Velitel (brig\u00e1da)"
+    };
+    for(int rank = 0; rank < 3; ++rank)
+    {
+        BuyItem item;
+        item.type = BuyItem::Type::Commander;
+        item.commander_rank = rank;
+        item.label = commanderNames[rank];
+        items.push_back(item);
+        list->Append(item.label);
+    }
+
+    if(!items.empty())
         list->SetSelection(0);
     rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
 
@@ -498,27 +693,44 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
         return;
 
     int sel = list->GetSelection();
-    if(sel == wxNOT_FOUND || sel >= (int)unit_ids.size())
+    if(sel == wxNOT_FOUND || sel >= (int)items.size())
     {
         wxMessageBox("No unit selected.", "Buy units", wxOK | wxICON_WARNING, this);
         return;
     }
 
-    LevelData::PlayerUnitAdd add;
-    add.unit_id = unit_ids[sel];
-    add.count = spinCount->GetValue();
-    add.health = 100;
-    add.extra = "-";
-
-    auto it = std::find_if(m_playerUnits.begin(), m_playerUnits.end(),
-        [&](const LevelData::PlayerUnitAdd& u)
+    const auto& chosen = items[sel];
+    if(chosen.type == BuyItem::Type::Commander)
+    {
+        const int count = spinCount->GetValue();
+        for(int i = 0; i < count; ++i)
         {
-            return u.unit_id == add.unit_id && u.health == add.health;
-        });
-    if(it != m_playerUnits.end())
-        it->count += add.count;
+            Commander cmd;
+            cmd.id = m_nextCommanderId++;
+            cmd.rank = chosen.commander_rank;
+            cmd.assigned_unit_index = -1;
+            cmd.name = wxString::Format("Velitel #%d", cmd.id);
+            m_commanders.push_back(cmd);
+        }
+    }
     else
-        m_playerUnits.push_back(add);
+    {
+        LevelData::PlayerUnitAdd add;
+        add.unit_id = chosen.unit_id;
+        add.count = spinCount->GetValue();
+        add.health = 100;
+        add.extra = "-";
+
+        auto it = std::find_if(m_playerUnits.begin(), m_playerUnits.end(),
+            [&](const LevelData::PlayerUnitAdd& u)
+            {
+                return u.unit_id == add.unit_id && u.health == add.health;
+            });
+        if(it != m_playerUnits.end())
+            it->count += add.count;
+        else
+            m_playerUnits.push_back(add);
+    }
 
     SaveStrategicState();
     RefreshUI();
