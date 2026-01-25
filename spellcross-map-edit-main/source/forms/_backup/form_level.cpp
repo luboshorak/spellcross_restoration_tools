@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <cmath>
 #include <regex>
+#include <array>
+#include <sstream>
 #include "LZ_spell.h"
 
 // Best-effort background decoding.
@@ -208,7 +210,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     LoadStrategicState();
     BuildUI();
-    //TryLoadBackground();
+    TryLoadBackground();
     RefreshUI();
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
@@ -243,16 +245,27 @@ void StrategicLevelFrame::BuildUI()
     // Left "map" panel
     m_mapPanel = new wxPanel(root);
     m_mapPanel->SetBackgroundColour(wxColour(30, 30, 30));
-    m_mapPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_mapPanel->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
 
+    // IMPORTANT: separate paint surface so the background isn't completely covered by child controls.
+    // The canvas shows the composed strategic map; controls live below it.
     m_mapSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto mapTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Strategic map");
-    mapTitle->SetForegroundColour(*wxLIGHT_GREY);
-    m_mapSizer->Add(mapTitle, 0, wxALL, 8);
+    m_mapCanvas = new wxPanel(m_mapPanel);
+    m_mapCanvas->SetBackgroundColour(wxColour(30, 30, 30));
+    m_mapCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_mapCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
+    m_mapCanvas->SetMinSize(wxSize(640, 360));
+    m_mapSizer->Add(m_mapCanvas, 1, wxALL | wxEXPAND, 8);
 
-    // Grid pro territory buttony (zatim overlay nad mapou)
+    auto controls = new wxPanel(m_mapPanel);
+    controls->SetBackgroundColour(wxColour(20, 20, 20));
+    auto controlsSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto mapTitle = new wxStaticText(controls, wxID_ANY, "Strategic map (click territory)");
+    mapTitle->SetForegroundColour(*wxLIGHT_GREY);
+    controlsSizer->Add(mapTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
+
+    // Territory buttons (temporary UI)
     auto grid = new wxGridSizer(0, 4, 6, 6);
     for(size_t i = 0; i < m_level.territories.size(); ++i)
     {
@@ -260,27 +273,29 @@ void StrategicLevelFrame::BuildUI()
         auto id = ID_TERRITORY_BASE + (int)i;
 
         wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
-        auto btn = new wxButton(m_mapPanel, id, label, wxDefaultPosition, wxSize(140, 60));
+        auto btn = new wxButton(controls, id, label, wxDefaultPosition, wxSize(140, 60));
         btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
         grid->Add(btn, 0, wxEXPAND);
     }
-
-    m_mapSizer->Add(grid, 1, wxALL | wxEXPAND, 8);
+    controlsSizer->Add(grid, 0, wxALL | wxEXPAND, 6);
 
     // Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
-    auto txtTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Territory / briefing text");
+    auto txtTitle = new wxStaticText(controls, wxID_ANY, "Territory / briefing text");
     txtTitle->SetForegroundColour(*wxLIGHT_GREY);
-    m_mapSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+    controlsSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
 
     auto txt = new wxTextCtrl(
-        m_mapPanel,
+        controls,
         ID_TERRITORY_TEXTBOX,
         "",
         wxDefaultPosition,
         wxDefaultSize,
         wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2 | wxTE_DONTWRAP);
-    txt->SetMinSize(wxSize(-1, 220));
-    m_mapSizer->Add(txt, 0, wxALL | wxEXPAND, 8);
+    txt->SetMinSize(wxSize(-1, 180));
+    controlsSizer->Add(txt, 0, wxALL | wxEXPAND, 6);
+
+    controls->SetSizer(controlsSizer);
+    m_mapSizer->Add(controls, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     m_mapPanel->SetSizer(m_mapSizer);
 
@@ -840,103 +855,367 @@ static bool LoadFileBytes(const std::filesystem::path& p, std::vector<unsigned c
     return (bool)f.read((char*)out.data(), n);
 }
 
-//void StrategicLevelFrame::TryLoadBackground()
-//{
-//    m_hasBg = false;
-//    m_bgBitmap = wxBitmap();
-//    m_bgBitmapScaled = wxBitmap();
-//    m_bgScaledW = -1;
-//    m_bgScaledH = -1;
-//
-//    namespace fs = std::filesystem;
-//
-//    fs::path base = fs::path(m_level.source_path);
-//    base.replace_extension();
-//
-//    fs::path lz = base;  lz.replace_extension(".LZ");
-//    fs::path pal = base; pal.replace_extension(".PAL");
-//
-//    std::vector<unsigned char> lzBytes, palBytes;
-//    if(!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
-//        return;
-//
-//    // Spellcross palettes are commonly 64*3 = 192 bytes
-//    if(palBytes.size() != 192 || lzBytes.size() < 4)
-//        return;
-//
-//    // Best-effort:
-//    //  - Some .LZ are already raw (header w/h + pixels)
-//    //  - Some .LZ are compressed with Spellcross LZW; for those, first deLZ then read header
-//    const uint8_t* src = (const uint8_t*)lzBytes.data();
-//    size_t srcLen = lzBytes.size();
-//
-//    auto rd16 = [&](const uint8_t* p, size_t off) -> unsigned {
-//        return (unsigned)p[off] | ((unsigned)p[off + 1] << 8);
-//    };
-//
-//    unsigned w = 0, h = 0;
-//    const uint8_t* pix = nullptr;
-//    std::vector<uint8_t> raw;
-//
-//    auto try_parse_raw = [&](const uint8_t* p, size_t len) -> bool {
-//        if(len < 4) return false;
-//        unsigned tw = rd16(p, 0);
-//        unsigned th = rd16(p, 2);
-//        if(tw == 0 || th == 0) return false;
-//        const size_t need = 4ull + (size_t)tw * (size_t)th;
-//        if(need > len) return false;
-//        w = tw; h = th;
-//        pix = p + 4;
-//        return true;
-//    };
-//
-//    // 1) try direct/raw first (keeps old behavior)
-//    if(!try_parse_raw(src, srcLen))
-//    {
-//        // 2) try Spellcross LZW decode (only if LZ_spell.cpp is linked in)
-//        LZWexpand delz(256 * 1024);
-//        raw = delz.Decode((uint8_t*)src, (uint8_t*)src + srcLen);
-//        if(raw.empty() || !try_parse_raw(raw.data(), raw.size()))
-//            return;
-//    }
-//
-//    // Palette is typically 6-bit VGA (0..63). Scale up for proper colors.
-//    auto vga6_to_8 = [](unsigned char v) -> unsigned char {
-//        // 0..63 -> 0..252 (classic VGA6 scaling)
-//        return (unsigned char)std::min(255, (int)v * 4);
-//    };
-//
-//    wxImage img((int)w, (int)h);
-//    unsigned char* rgb = img.GetData();
-//
-//    for(unsigned y = 0; y < h; ++y)
-//    for(unsigned x = 0; x < w; ++x)
-//    {
-//        unsigned idx = pix[y * w + x] & 0x3F;
-//        unsigned char r = vga6_to_8(palBytes[idx * 3 + 0]);
-//        unsigned char g = vga6_to_8(palBytes[idx * 3 + 1]);
-//        unsigned char b = vga6_to_8(palBytes[idx * 3 + 2]);
-//
-//        size_t o = ((size_t)y * w + x) * 3;
-//        rgb[o + 0] = r;
-//        rgb[o + 1] = g;
-//        rgb[o + 2] = b;
-//    }
-//
-//    m_bgBitmap = wxBitmap(img);
-//    m_hasBg = m_bgBitmap.IsOk();
-//    if(m_mapPanel) m_mapPanel->Refresh();
-//}
+// --- Strategic background decoding (LEVEL_0X.bin + HMLA__0X.bin + LEVEL_0X.PAL + LEVEL_0X.CLK) ---
+// Ported from spellcross_level_tool_v5.py (Pillow/Numpy) into C++/wxWidgets.
+
+static std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path& dir, const std::string& wanted)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if(!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
+        return {};
+
+    const std::string w = to_lower(wanted);
+    for(const auto& de : fs::directory_iterator(dir, ec))
+    {
+        if(ec) break;
+        if(!de.is_regular_file(ec))
+            continue;
+        const std::string fn = to_lower(de.path().filename().string());
+        if(fn == w)
+            return de.path();
+    }
+    return {};
+}
+
+static bool ExpandPaletteTo256(const std::vector<unsigned char>& palBytes, std::array<unsigned char, 256 * 3>& pal256)
+{
+    pal256.fill(0);
+    if(palBytes.size() < 3)
+        return false;
+
+    const size_t colors = palBytes.size() / 3;
+    if(colors != 32 && colors != 64 && colors != 256)
+        return false;
+
+    // Detect VGA 6-bit (0..63) values and scale to 0..255.
+    unsigned char maxv = 0;
+    for(size_t i = 0; i < colors * 3; ++i)
+        maxv = std::max(maxv, palBytes[i]);
+
+    const bool is_vga6 = (maxv <= 63);
+    auto to8 = [&](unsigned char v) -> unsigned char {
+        return is_vga6 ? (unsigned char)std::min(255, (int)v * 4) : v;
+    };
+
+    // Python tool repeats palette to fill 256 entries.
+    for(size_t i = 0; i < 256; ++i)
+    {
+        const size_t src = (i % colors) * 3;
+        pal256[i * 3 + 0] = to8(palBytes[src + 0]);
+        pal256[i * 3 + 1] = to8(palBytes[src + 1]);
+        pal256[i * 3 + 2] = to8(palBytes[src + 2]);
+    }
+    return true;
+}
+
+static bool DecodeCLK(const std::vector<unsigned char>& clkBytes, int& outW, int& outH, std::vector<unsigned char>& values)
+{
+    outW = 0;
+    outH = 0;
+    values.clear();
+
+    if(clkBytes.size() < 4)
+        return false;
+
+    auto rd16 = [&](size_t off) -> unsigned {
+        if(off + 1 >= clkBytes.size()) return 0;
+        return (unsigned)clkBytes[off] | ((unsigned)clkBytes[off + 1] << 8);
+    };
+
+    // NOTE: format observed in python tool: uint16 H, uint16 W
+    const unsigned H = rd16(0);
+    const unsigned W = rd16(2);
+    if(W == 0 || H == 0)
+        return false;
+
+    const size_t offsets_off = 4;
+    const size_t offsets_size = (size_t)H * 2;
+    if(offsets_off + offsets_size > clkBytes.size())
+        return false;
+
+    std::vector<unsigned> offsets;
+    offsets.reserve(H);
+    for(unsigned y = 0; y < H; ++y)
+        offsets.push_back(rd16(offsets_off + (size_t)y * 2));
+
+    values.assign((size_t)W * H, 0);
+
+    for(unsigned y = 0; y < H; ++y)
+    {
+        const unsigned start = offsets[y];
+        const unsigned end = (y + 1 < H) ? offsets[y + 1] : (unsigned)clkBytes.size();
+        if(start >= clkBytes.size() || end > clkBytes.size() || end <= start)
+            continue;
+
+        size_t x = 0;
+        for(unsigned i = start; i + 1 < end && x < W; i += 2)
+        {
+            const unsigned run_len = clkBytes[i];
+            const unsigned val = clkBytes[i + 1];
+            if(run_len == 0)
+                continue;
+            const size_t x2 = std::min((size_t)W, x + (size_t)run_len);
+            std::fill(values.begin() + (size_t)y * W + x, values.begin() + (size_t)y * W + x2, (unsigned char)val);
+            x = x2;
+        }
+    }
+
+    outW = (int)W;
+    outH = (int)H;
+    return true;
+}
+
+static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folder, int levelNum, wxBitmap& outBmp)
+{
+    namespace fs = std::filesystem;
+    outBmp = wxBitmap();
+    if(levelNum < 0 || levelNum > 99)
+        return false;
+
+    const std::string lvl = wxString::Format("LEVEL_%02d.BIN", levelNum).ToStdString();
+    const std::string fog = wxString::Format("HMLA__%02d.BIN", levelNum).ToStdString();
+    const std::string pal = wxString::Format("LEVEL_%02d.PAL", levelNum).ToStdString();
+    const std::string clk = wxString::Format("LEVEL_%02d.CLK", levelNum).ToStdString();
+
+    fs::path pLevel = FindFileCaseInsensitive(folder, lvl);
+    fs::path pFog   = FindFileCaseInsensitive(folder, fog);
+    fs::path pPal   = FindFileCaseInsensitive(folder, pal);
+    fs::path pClk   = FindFileCaseInsensitive(folder, clk);
+    if(pLevel.empty() || pFog.empty() || pPal.empty() || pClk.empty())
+        return false;
+
+    std::vector<unsigned char> levelBytes, fogBytes, palBytes, clkBytes;
+    if(!LoadFileBytes(pLevel, levelBytes) || !LoadFileBytes(pFog, fogBytes) || !LoadFileBytes(pPal, palBytes) || !LoadFileBytes(pClk, clkBytes))
+        return false;
+
+    int W = 0, H = 0;
+    std::vector<unsigned char> clkValues;
+    if(!DecodeCLK(clkBytes, W, H, clkValues))
+        return false;
+
+    const size_t need = (size_t)W * (size_t)H;
+    if(levelBytes.size() < need || fogBytes.size() < need)
+        return false;
+
+    std::array<unsigned char, 256 * 3> pal256;
+    if(!ExpandPaletteTo256(palBytes, pal256))
+        return false;
+
+    // Compose like python tool:
+    //  out = fog (darkened), then LEVEL where (clk==0), plus optional region outline.
+    const float fog_darken = 0.82f;
+
+    wxImage img(W, H, true);
+    img.InitAlpha();
+
+    for(int y = 0; y < H; ++y)
+    for(int x = 0; x < W; ++x)
+    {
+        const size_t i = (size_t)y * W + (size_t)x;
+        const bool inside = (clkValues[i] == 0);
+        const unsigned char idx = inside ? levelBytes[i] : fogBytes[i];
+
+        unsigned char r = pal256[(size_t)idx * 3 + 0];
+        unsigned char g = pal256[(size_t)idx * 3 + 1];
+        unsigned char b = pal256[(size_t)idx * 3 + 2];
+
+        if(!inside)
+        {
+            r = (unsigned char)std::clamp((int)std::lround((double)r * fog_darken), 0, 255);
+            g = (unsigned char)std::clamp((int)std::lround((double)g * fog_darken), 0, 255);
+            b = (unsigned char)std::clamp((int)std::lround((double)b * fog_darken), 0, 255);
+        }
+
+        img.SetRGB(x, y, r, g, b);
+        img.SetAlpha(x, y, 255);
+    }
+
+    // Outline (white) where neighboring CLK values differ, limited to inside area.
+    for(int y = 0; y < H; ++y)
+    for(int x = 0; x < W; ++x)
+    {
+        const size_t i = (size_t)y * W + (size_t)x;
+        if(clkValues[i] != 0)
+            continue;
+
+        bool edge = false;
+        if(x > 0 && clkValues[i] != clkValues[i - 1]) edge = true;
+        if(y > 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
+        if(edge)
+        {
+            img.SetRGB(x, y, 255, 255, 255);
+            img.SetAlpha(x, y, 255);
+        }
+    }
+
+    outBmp = wxBitmap(img);
+    return outBmp.IsOk();
+}
+
+static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath, wxBitmap& outBmp)
+{
+    namespace fs = std::filesystem;
+    outBmp = wxBitmap();
+
+    fs::path base = defPath;
+    base.replace_extension();
+
+    fs::path lz = base;  lz.replace_extension(".LZ");
+    fs::path pal = base; pal.replace_extension(".PAL");
+
+    std::vector<unsigned char> lzBytes, palBytes;
+    if(!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
+        return false;
+
+    if(lzBytes.size() < 4)
+        return false;
+
+    // Best-effort:
+    //  - Some .LZ are already raw (header w/h + pixels)
+    //  - Some .LZ are compressed with Spellcross LZW; for those, first deLZ then read header
+    const uint8_t* src = (const uint8_t*)lzBytes.data();
+    size_t srcLen = lzBytes.size();
+
+    auto rd16 = [&](const uint8_t* p, size_t off) -> unsigned {
+        return (unsigned)p[off] | ((unsigned)p[off + 1] << 8);
+    };
+
+    unsigned w = 0, h = 0;
+    const uint8_t* pix = nullptr;
+    std::vector<uint8_t> raw;
+
+    auto try_parse_raw = [&](const uint8_t* p, size_t len) -> bool {
+        if(len < 4) return false;
+        unsigned tw = rd16(p, 0);
+        unsigned th = rd16(p, 2);
+        if(tw == 0 || th == 0) return false;
+        const size_t need = 4ull + (size_t)tw * (size_t)th;
+        if(need > len) return false;
+        w = tw; h = th;
+        pix = p + 4;
+        return true;
+    };
+
+    if(!try_parse_raw(src, srcLen))
+    {
+        LZWexpand delz(256 * 1024);
+        raw = delz.Decode((uint8_t*)src, (uint8_t*)src + srcLen);
+        if(raw.empty() || !try_parse_raw(raw.data(), raw.size()))
+            return false;
+    }
+
+    std::array<unsigned char, 256 * 3> pal256;
+    if(!ExpandPaletteTo256(palBytes, pal256))
+        return false;
+
+    wxImage img((int)w, (int)h, true);
+    img.InitAlpha();
+    for(unsigned y = 0; y < h; ++y)
+    for(unsigned x = 0; x < w; ++x)
+    {
+        const unsigned char idx = pix[(size_t)y * w + x];
+        img.SetRGB((int)x, (int)y,
+            pal256[(size_t)idx * 3 + 0],
+            pal256[(size_t)idx * 3 + 1],
+            pal256[(size_t)idx * 3 + 2]);
+        img.SetAlpha((int)x, (int)y, 255);
+    }
+
+    outBmp = wxBitmap(img);
+    return outBmp.IsOk();
+}
+
+void StrategicLevelFrame::TryLoadBackground()
+{
+    m_hasBg = false;
+    m_bgBitmap = wxBitmap();
+    m_bgBitmapScaled = wxBitmap();
+    m_bgScaledW = -1;
+    m_bgScaledH = -1;
+
+    namespace fs = std::filesystem;
+
+    const fs::path defPath = fs::path(m_level.source_path);
+    const std::string fnU = to_upper(defPath.filename().string());
+
+    // Extract level number from "LEVEL_0X.DEF" (or similar) case-insensitively.
+    int levelNum = -1;
+    {
+        std::smatch m;
+        std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex::icase);
+        if(std::regex_search(fnU, m, re) && m.size() >= 2)
+            levelNum = std::stoi(m[1].str());
+    }
+
+    wxBitmap bmp;
+    if(levelNum >= 0)
+    {
+        // Search in reasonable places: folder of DEF, and a few parents with common subfolders.
+        std::vector<fs::path> dirs;
+        std::error_code ec;
+        fs::path base = defPath.parent_path();
+        for(int depth = 0; depth < 8 && !base.empty(); ++depth)
+        {
+            dirs.push_back(base);
+            dirs.push_back(base / "DATA");
+            dirs.push_back(base / "DATA" / "LEVEL");
+            dirs.push_back(base / "DATA" / "LEVELS");
+            dirs.push_back(base / "LEVEL");
+            dirs.push_back(base / "LEVELS");
+            dirs.push_back(base / "MAPS");
+            dirs.push_back(base / "DATA" / "MAPS");
+            base = base.parent_path();
+        }
+
+        // De-dup while preserving order.
+        std::vector<fs::path> uniq;
+        uniq.reserve(dirs.size());
+        for(const auto& d : dirs)
+        {
+            if(d.empty()) continue;
+            if(!fs::exists(d, ec) || !fs::is_directory(d, ec)) continue;
+            bool seen = false;
+            for(const auto& u : uniq)
+                if(u == d) { seen = true; break; }
+            if(!seen) uniq.push_back(d);
+        }
+
+        for(const auto& folder : uniq)
+        {
+            if(BuildStrategicCompositeFromFolder(folder, levelNum, bmp))
+                break;
+        }
+    }
+
+    if(!bmp.IsOk())
+        BuildLegacyLZBackgroundFromDef(defPath, bmp);
+
+    if(bmp.IsOk())
+    {
+        m_bgBitmap = bmp;
+        m_hasBg = true;
+    }
+
+    if(m_mapCanvas)
+        m_mapCanvas->Refresh();
+    else if(m_mapPanel)
+        m_mapPanel->Refresh();
+}
 
 void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 {
-    wxAutoBufferedPaintDC dc(m_mapPanel);
+    wxWindow* target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
+    if(!target)
+        return;
+
+    wxAutoBufferedPaintDC dc(target);
     dc.Clear();
 
     if(m_hasBg && m_bgBitmap.IsOk())
     {
         int pw, ph;
-        m_mapPanel->GetClientSize(&pw, &ph);
+        target->GetClientSize(&pw, &ph);
 
         const int bw = m_bgBitmap.GetWidth();
         const int bh = m_bgBitmap.GetHeight();

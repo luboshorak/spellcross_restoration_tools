@@ -25,10 +25,12 @@ private:
     // background (LEVEL_XX.LZ + LEVEL_XX.PAL) - best effort
     void TryLoadBackground();
     void OnMapPaint(wxPaintEvent& ev);
+    void OnMapLeftDown(wxMouseEvent& ev);
     void OnActivate(wxActivateEvent& ev);
 
     // actions
     void OnTerritory(wxCommandEvent& ev);
+    void SelectTerritoryById(int territory_id);
     void OnResearch(wxCommandEvent& ev);
     void OnBuyUnits(wxCommandEvent& ev);
     void OnEndTurn(wxCommandEvent& ev);
@@ -62,6 +64,12 @@ private:
 
     std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
 
+    // decoded CLK territory map for click-detection
+    std::vector<unsigned char> m_clkValues;
+    int m_clkW = 0;
+    int m_clkH = 0;
+    bool m_hasClk = false;
+
     // background bitmap
     wxBitmap m_bgBitmap;
     bool m_hasBg = false;
@@ -72,6 +80,7 @@ private:
     wxStaticBitmap* m_lblTurn = nullptr;
 
     wxPanel* m_mapPanel = nullptr;
+    wxPanel* m_territoryButtonsPanel = nullptr;
     // Dedicated paint surface for the strategic background (so it isn't fully covered by child controls).
     wxPanel* m_mapCanvas = nullptr;
     wxBoxSizer* m_mapSizer = nullptr;

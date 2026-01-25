@@ -254,6 +254,7 @@ void StrategicLevelFrame::BuildUI()
     m_mapCanvas->SetBackgroundColour(wxColour(30, 30, 30));
     m_mapCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_mapCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
+    m_mapCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
     m_mapCanvas->SetMinSize(wxSize(640, 360));
     m_mapSizer->Add(m_mapCanvas, 1, wxALL | wxEXPAND, 8);
 
@@ -266,6 +267,8 @@ void StrategicLevelFrame::BuildUI()
     controlsSizer->Add(mapTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
 
     // Territory buttons (temporary UI)
+    m_territoryButtonsPanel = new wxPanel(m_mapPanel);
+    m_territoryButtonsPanel->SetBackgroundColour(wxColour(30, 30, 30));
     auto grid = new wxGridSizer(0, 4, 6, 6);
     for(size_t i = 0; i < m_level.territories.size(); ++i)
     {
@@ -409,6 +412,82 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 {
     if(m_rightBook)
         m_rightBook->SetSelection(1);
+}
+
+void StrategicLevelFrame::SelectTerritoryById(int territory_id)
+{
+    // Find index in LevelData by id.
+    int idx = -1;
+    for(size_t i = 0; i < m_level.territories.size(); ++i)
+    {
+        if(m_level.territories[i].id == territory_id)
+        {
+            idx = (int)i;
+            break;
+        }
+    }
+    if(idx < 0)
+        return;
+
+    m_selectedTerritory = territory_id;
+
+    // Reuse existing logic by faking a button event id.
+    wxCommandEvent ev(wxEVT_BUTTON, ID_TERRITORY_BASE + idx);
+    OnTerritory(ev);
+}
+
+void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
+{
+    if(!m_hasBg || !m_bgBitmap.IsOk() || !m_hasClk || m_clkValues.empty())
+    {
+        ev.Skip();
+        return;
+    }
+
+    wxWindow* target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
+    if(!target)
+    {
+        ev.Skip();
+        return;
+    }
+
+    int pw, ph;
+    target->GetClientSize(&pw, &ph);
+    const int bw = m_bgBitmap.GetWidth();
+    const int bh = m_bgBitmap.GetHeight();
+    if(pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    const double sx = (double)pw / (double)bw;
+    const double sy = (double)ph / (double)bh;
+    const double s  = std::min(sx, sy);
+    const int dw = std::max(1, (int)std::lround((double)bw * s));
+    const int dh = std::max(1, (int)std::lround((double)bh * s));
+    const int ox = (pw - dw) / 2;
+    const int oy = (ph - dh) / 2;
+
+    const wxPoint p = ev.GetPosition();
+    if(p.x < ox || p.y < oy || p.x >= ox + dw || p.y >= oy + dh)
+        return;
+
+    // Map click from scaled bitmap to original pixel coords.
+    const int mx = (int)std::floor(((double)(p.x - ox) * (double)bw) / (double)dw);
+    const int my = (int)std::floor(((double)(p.y - oy) * (double)bh) / (double)dh);
+    if(mx < 0 || my < 0 || mx >= bw || my >= bh)
+        return;
+
+    // CLK map must match bitmap dimensions.
+    if(m_clkW != bw || m_clkH != bh || (size_t)m_clkW * (size_t)m_clkH != m_clkValues.size())
+        return;
+
+    const unsigned char tid = m_clkValues[(size_t)my * (size_t)m_clkW + (size_t)mx];
+    if(tid == 0)
+        return;
+
+    SelectTerritoryById((int)tid);
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
@@ -963,10 +1042,57 @@ static bool DecodeCLK(const std::vector<unsigned char>& clkBytes, int& outW, int
 
     outW = (int)W;
     outH = (int)H;
+
     return true;
 }
 
-static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folder, int levelNum, wxBitmap& outBmp)
+// Pøesuòte tuto funkci na úroveò souboru, mimo DecodeCLK:
+static bool NormalizeIndexedBuffer(const std::vector<unsigned char>& src, size_t need,
+                                   const std::vector<unsigned char>& clkValues,
+                                   std::vector<unsigned char>& out)
+{
+    out.clear();
+    if(src.size() == need)
+    {
+        out = src;
+        return true;
+    }
+    if(src.size() == need + 1)
+    {
+        // Choose whether to drop first or last byte by comparing how well the outside area
+        // compresses to a single key color (matches python tool behavior).
+        auto score_drop = [&](bool drop_first) -> size_t
+        {
+            const unsigned char* p = src.data() + (drop_first ? 1 : 0);
+            // count most frequent color on outside (clk==0)
+            std::array<size_t, 256> counts{};
+            for(size_t i = 0; i < need; ++i)
+            {
+                if(i < clkValues.size() && clkValues[i] == 0)
+                    counts[p[i]]++;
+            }
+            return *std::max_element(counts.begin(), counts.end());
+        };
+
+        size_t s1 = score_drop(true);
+        size_t s2 = score_drop(false); // dropping last means using first need bytes
+        bool drop_first = (s1 >= s2);
+
+        out.assign(src.begin() + (drop_first ? 1 : 0), src.begin() + (drop_first ? 1 : 0) + (ptrdiff_t)need);
+        return true;
+    }
+
+    // Larger buffers: take the last 'need' bytes as a best-effort (some assets contain a small header).
+    if(src.size() > need)
+    {
+        out.assign(src.end() - (ptrdiff_t)need, src.end());
+        return true;
+    }
+    return false;
+}
+
+static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folder, int levelNum, wxBitmap& outBmp,
+                                           int* outW = nullptr, int* outH = nullptr, std::vector<unsigned char>* outClk = nullptr)
 {
     namespace fs = std::filesystem;
     outBmp = wxBitmap();
@@ -995,7 +1121,10 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
         return false;
 
     const size_t need = (size_t)W * (size_t)H;
-    if(levelBytes.size() < need || fogBytes.size() < need)
+    std::vector<unsigned char> levelPix, fogPix;
+    if(!NormalizeIndexedBuffer(levelBytes, need, clkValues, levelPix))
+        return false;
+    if(!NormalizeIndexedBuffer(fogBytes, need, clkValues, fogPix))
         return false;
 
     std::array<unsigned char, 256 * 3> pal256;
@@ -1013,8 +1142,8 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     for(int x = 0; x < W; ++x)
     {
         const size_t i = (size_t)y * W + (size_t)x;
-        const bool inside = (clkValues[i] == 0);
-        const unsigned char idx = inside ? levelBytes[i] : fogBytes[i];
+        const bool inside = (clkValues[i] != 0);
+        const unsigned char idx = inside ? levelPix[i] : fogPix[i];
 
         unsigned char r = pal256[(size_t)idx * 3 + 0];
         unsigned char g = pal256[(size_t)idx * 3 + 1];
@@ -1036,12 +1165,12 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     for(int x = 0; x < W; ++x)
     {
         const size_t i = (size_t)y * W + (size_t)x;
-        if(clkValues[i] != 0)
+        if(clkValues[i] == 0)
             continue;
 
         bool edge = false;
-        if(x > 0 && clkValues[i] != clkValues[i - 1]) edge = true;
-        if(y > 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
+        if(x > 0 && clkValues[i - 1] != 0 && clkValues[i] != clkValues[i - 1]) edge = true;
+        if(y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
         if(edge)
         {
             img.SetRGB(x, y, 255, 255, 255);
@@ -1050,6 +1179,9 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     }
 
     outBmp = wxBitmap(img);
+    if(outW) *outW = W;
+    if(outH) *outH = H;
+    if(outClk) *outClk = std::move(clkValues);
     return outBmp.IsOk();
 }
 
@@ -1134,6 +1266,10 @@ void StrategicLevelFrame::TryLoadBackground()
     m_bgScaledW = -1;
     m_bgScaledH = -1;
 
+    m_hasClk = false;
+    m_clkValues.clear();
+    m_clkW = m_clkH = 0;
+
     namespace fs = std::filesystem;
 
     const fs::path defPath = fs::path(m_level.source_path);
@@ -1181,9 +1317,12 @@ void StrategicLevelFrame::TryLoadBackground()
             if(!seen) uniq.push_back(d);
         }
 
+        int cw = 0, ch = 0;
+        std::vector<unsigned char> cclk;
+
         for(const auto& folder : uniq)
         {
-            if(BuildStrategicCompositeFromFolder(folder, levelNum, bmp))
+            if(BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk))
                 break;
         }
     }
@@ -1193,8 +1332,19 @@ void StrategicLevelFrame::TryLoadBackground()
 
     if(bmp.IsOk())
     {
+        int cw = 0, ch = 0;
+        std::vector<unsigned char> cclk;
         m_bgBitmap = bmp;
         m_hasBg = true;
+        m_clkValues = std::move(cclk);
+        m_clkW = cw;
+        m_clkH = ch;
+        m_hasClk = (!m_clkValues.empty() && m_clkW > 0 && m_clkH > 0);
+        if(m_hasClk && m_territoryButtonsPanel)
+        {
+            m_territoryButtonsPanel->Hide();
+            if(m_mapSizer) m_mapSizer->Layout();
+        }
     }
 
     if(m_mapCanvas)

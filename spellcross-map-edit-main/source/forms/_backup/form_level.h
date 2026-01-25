@@ -72,6 +72,8 @@ private:
     wxStaticBitmap* m_lblTurn = nullptr;
 
     wxPanel* m_mapPanel = nullptr;
+    // Dedicated paint surface for the strategic background (so it isn't fully covered by child controls).
+    wxPanel* m_mapCanvas = nullptr;
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_roster = nullptr;
     wxListCtrl* m_hierarchyList = nullptr;
