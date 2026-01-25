@@ -217,38 +217,109 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 void StrategicLevelFrame::BuildUI()
 {
     auto root = new wxPanel(this);
+    root->SetBackgroundColour(wxColour(30, 8, 8));
 
-    // --- Top bar (Money / Research / Turn) ---
+    auto makeIndicatorBitmap = [](const wxColour& color) {
+        wxBitmap bmp(14, 14);
+        wxMemoryDC dc(bmp);
+        dc.SetBackground(wxBrush(wxColour(20, 20, 20)));
+        dc.Clear();
+        dc.SetBrush(wxBrush(color));
+        dc.SetPen(wxPen(wxColour(10, 0, 0)));
+        dc.DrawCircle(7, 7, 5);
+        dc.SelectObject(wxNullBitmap);
+        return bmp;
+    };
+
+    const wxColour metalDark(45, 45, 45);
+    const wxColour metalLight(70, 70, 70);
+    const wxColour menuButtonBg(25, 70, 25);
+    const wxColour menuButtonFg(180, 255, 180);
+    const wxFont logoFont(wxFontInfo(28).Bold());
+    const wxFont logoSubFont(wxFontInfo(14).Bold());
+    const wxFont menuFont(wxFontInfo(12).Bold());
+
+    // --- Header bar with logo + stats ---
     auto topBar = new wxPanel(root);
-    topBar->SetBackgroundColour(wxColour(20, 70, 20));
+    topBar->SetBackgroundColour(metalDark);
     auto topSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    auto logoSizer = new wxBoxSizer(wxVERTICAL);
+    auto logoMain = new wxStaticText(topBar, wxID_ANY, "Spellcross");
+    logoMain->SetForegroundColour(wxColour(210, 40, 40));
+    logoMain->SetFont(logoFont);
+    auto logoSub = new wxStaticText(topBar, wxID_ANY, "Posledn\u00ed bitva");
+    logoSub->SetForegroundColour(wxColour(200, 60, 60));
+    logoSub->SetFont(logoSubFont);
+    logoSizer->Add(logoMain, 0, wxLEFT | wxTOP, 10);
+    logoSizer->Add(logoSub, 0, wxLEFT | wxBOTTOM, 12);
 
     wxBitmap placeholder(1, 1);
     m_lblMoney = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
     m_lblResearch = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
     m_lblTurn = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
 
+    auto statsSizer = new wxBoxSizer(wxHORIZONTAL);
+    statsSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+    statsSizer->AddSpacer(16);
+    statsSizer->Add(m_lblResearch, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+    statsSizer->AddSpacer(16);
+    statsSizer->Add(m_lblTurn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+
+    topSizer->Add(logoSizer, 0, wxALIGN_CENTER_VERTICAL);
     topSizer->AddStretchSpacer(1);
-    topSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
-    topSizer->AddSpacer(20);
-    topSizer->Add(m_lblResearch, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
-    topSizer->AddSpacer(20);
-    topSizer->Add(m_lblTurn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
-    topSizer->AddSpacer(10);
+    topSizer->Add(statsSizer, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
     topBar->SetSizer(topSizer);
 
-    // --- Main split: Map (left) + Right panel ---
+    // --- Main split: Menu (left) + Map (center) + Right panel ---
     auto mainSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    auto menuPanel = new wxPanel(root);
+    menuPanel->SetBackgroundColour(metalLight);
+    auto menuSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto indicatorBmp = makeIndicatorBitmap(wxColour(180, 30, 30));
+
+    auto addMenuRow = [&](wxButton*& outBtn, int id, const wxString& label) {
+        auto row = new wxBoxSizer(wxHORIZONTAL);
+        auto light = new wxStaticBitmap(menuPanel, wxID_ANY, indicatorBmp);
+        row->Add(light, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+
+        outBtn = new wxButton(menuPanel, id, label, wxDefaultPosition, wxSize(160, 32));
+        outBtn->SetBackgroundColour(menuButtonBg);
+        outBtn->SetForegroundColour(menuButtonFg);
+        outBtn->SetFont(menuFont);
+        row->Add(outBtn, 1, wxEXPAND);
+
+        menuSizer->Add(row, 0, wxEXPAND | wxBOTTOM, 8);
+    };
+
+    auto menuTitle = new wxStaticText(menuPanel, wxID_ANY, "Strategick\u00e1 \u00farove\u0148");
+    menuTitle->SetForegroundColour(*wxWHITE);
+    menuTitle->SetFont(wxFontInfo(12).Bold());
+    menuSizer->Add(menuTitle, 0, wxLEFT | wxRIGHT | wxTOP, 12);
+    menuSizer->AddSpacer(8);
+
+    addMenuRow(m_btnStrategicMap, ID_BTN_STRATEGIC_MAP, "Strategick\u00e1 mapa");
+    addMenuRow(m_btnHierarchy, ID_BTN_HIERARCHY, "Hierarchie");
+    menuSizer->AddSpacer(6);
+    addMenuRow(m_btnResearch, ID_BTN_RESEARCH, "V\u00fdzkum");
+    addMenuRow(m_btnBuy, ID_BTN_BUY, "N\u00e1kup jednotek");
+    addMenuRow(m_btnLaunch, ID_BTN_LAUNCH, "Spustit misi");
+    addMenuRow(m_btnEndTurn, ID_BTN_ENDTURN, "Konec tahu");
+
+    menuSizer->AddStretchSpacer(1);
+    menuPanel->SetSizer(menuSizer);
 
     // Left "map" panel
     m_mapPanel = new wxPanel(root);
-    m_mapPanel->SetBackgroundColour(wxColour(30, 30, 30));
+    m_mapPanel->SetBackgroundColour(wxColour(25, 25, 25));
     m_mapPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_mapPanel->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
 
     m_mapSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto mapTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Strategic map");
+    auto mapTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Strategick\u00e1 mapa");
     mapTitle->SetForegroundColour(*wxLIGHT_GREY);
     m_mapSizer->Add(mapTitle, 0, wxALL, 8);
 
@@ -268,7 +339,7 @@ void StrategicLevelFrame::BuildUI()
     m_mapSizer->Add(grid, 1, wxALL | wxEXPAND, 8);
 
     // Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
-    auto txtTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Territory / briefing text");
+    auto txtTitle = new wxStaticText(m_mapPanel, wxID_ANY, "Territorium / briefing");
     txtTitle->SetForegroundColour(*wxLIGHT_GREY);
     m_mapSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 8);
 
@@ -284,17 +355,10 @@ void StrategicLevelFrame::BuildUI()
 
     m_mapPanel->SetSizer(m_mapSizer);
 
-    // Right panel: roster + actions
+    // Right panel: roster + hierarchy
     auto right = new wxPanel(root);
-    right->SetBackgroundColour(wxColour(10, 50, 10));
+    right->SetBackgroundColour(wxColour(15, 45, 15));
     auto rightSizer = new wxBoxSizer(wxVERTICAL);
-
-    auto rightNavSizer = new wxBoxSizer(wxHORIZONTAL);
-    m_btnStrategicMap = new wxButton(right, ID_BTN_STRATEGIC_MAP, "Strategick\u00e1 mapa");
-    m_btnHierarchy = new wxButton(right, ID_BTN_HIERARCHY, "Hierarchie");
-    rightNavSizer->Add(m_btnStrategicMap, 1, wxRIGHT, 6);
-    rightNavSizer->Add(m_btnHierarchy, 1);
-    rightSizer->Add(rightNavSizer, 0, wxALL | wxEXPAND, 10);
 
     auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
     rosterTitle->SetForegroundColour(*wxWHITE);
@@ -338,23 +402,11 @@ void StrategicLevelFrame::BuildUI()
     m_rightBook->AddPage(rosterPage, "Strategick\u00e1 mapa", true);
     m_rightBook->AddPage(hierarchyPage, "Hierarchie", false);
     rightSizer->Add(m_rightBook, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
-
-    auto btnSizer = new wxBoxSizer(wxVERTICAL);
-    m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
-    m_btnBuy      = new wxButton(right, ID_BTN_BUY, "Buy units");
-    m_btnLaunch   = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
-    m_btnEndTurn  = new wxButton(right, ID_BTN_ENDTURN, "End turn");
-
-    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuy,      0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 12);
-    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND);
-
-    rightSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
     right->SetSizer(rightSizer);
 
-    mainSizer->Add(m_mapPanel, 2, wxEXPAND);
-    mainSizer->Add(right, 1, wxEXPAND);
+    mainSizer->Add(menuPanel, 0, wxEXPAND | wxALL, 8);
+    mainSizer->Add(m_mapPanel, 2, wxEXPAND | wxTOP | wxBOTTOM | wxRIGHT, 8);
+    mainSizer->Add(right, 1, wxEXPAND | wxTOP | wxBOTTOM | wxRIGHT, 8);
 
     auto rootSizer = new wxBoxSizer(wxVERTICAL);
     rootSizer->Add(topBar, 0, wxEXPAND);
