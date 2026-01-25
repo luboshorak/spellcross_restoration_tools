@@ -28,6 +28,8 @@ wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY,      StrategicLevelFrame::OnBuyUnits)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN,  StrategicLevelFrame::OnEndTurn)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
 wxEND_EVENT_TABLE()
 
 // UI-only: readonly text panel under the territory grid (instead of popups)
@@ -287,6 +289,13 @@ void StrategicLevelFrame::BuildUI()
     right->SetBackgroundColour(wxColour(10, 50, 10));
     auto rightSizer = new wxBoxSizer(wxVERTICAL);
 
+    auto rightNavSizer = new wxBoxSizer(wxHORIZONTAL);
+    m_btnStrategicMap = new wxButton(right, ID_BTN_STRATEGIC_MAP, "Strategick\u00e1 mapa");
+    m_btnHierarchy = new wxButton(right, ID_BTN_HIERARCHY, "Hierarchie");
+    rightNavSizer->Add(m_btnStrategicMap, 1, wxRIGHT, 6);
+    rightNavSizer->Add(m_btnHierarchy, 1);
+    rightSizer->Add(rightNavSizer, 0, wxALL | wxEXPAND, 10);
+
     auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
     rosterTitle->SetForegroundColour(*wxWHITE);
     // Ped tmto dkem pidejte zskn fontu z m_spellData
@@ -294,11 +303,41 @@ void StrategicLevelFrame::BuildUI()
     rosterTitle->SetFont(font);
     rightSizer->Add(rosterTitle, 0, wxALL, 10);
 
-    m_roster = new wxListCtrl(right, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_rightBook = new wxSimplebook(right, wxID_ANY);
+    auto rosterPage = new wxPanel(m_rightBook);
+    auto rosterSizer = new wxBoxSizer(wxVERTICAL);
+    m_roster = new wxListCtrl(rosterPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->InsertColumn(0, "Unit");
     m_roster->InsertColumn(1, "Count");
     m_roster->InsertColumn(2, "HP");
-    rightSizer->Add(m_roster, 1, wxALL | wxEXPAND, 10);
+    rosterSizer->Add(m_roster, 1, wxEXPAND);
+    rosterPage->SetSizer(rosterSizer);
+
+    auto hierarchyPage = new wxPanel(m_rightBook);
+    auto hierarchySizer = new wxBoxSizer(wxVERTICAL);
+    auto hierarchyIntro = new wxStaticText(
+        hierarchyPage,
+        wxID_ANY,
+        "P\u0159ehled hierarchie\n\n"
+        "- Z\u00e1kladn\u00ed formac\u00ed je prapor.\n"
+        "- 2 prapory tvo\u0159\u00ed pluk.\n"
+        "- 2 pluky (4 prapory) tvo\u0159\u00ed brig\u00e1du.\n\n"
+        "Velitel\u00e9 jsou vz\u00e1cn\u00e9 jednotky ur\u010den\u00e9 pro formace.\n"
+        "Vy\u0161\u0161\u00ed hodnosti umo\u017e\u0148uj\u00ed vy\u0161\u0161\u00ed formace.\n"
+        "Pokud je jednotka s velitelem zni\u010dena, velitel je ztracen.");
+    hierarchyIntro->SetForegroundColour(*wxWHITE);
+    hierarchySizer->Add(hierarchyIntro, 0, wxBOTTOM | wxEXPAND, 10);
+
+    m_hierarchyList = new wxListCtrl(hierarchyPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_hierarchyList->InsertColumn(0, "Formation");
+    m_hierarchyList->InsertColumn(1, "Commander");
+    m_hierarchyList->InsertColumn(2, "Units");
+    hierarchySizer->Add(m_hierarchyList, 1, wxEXPAND);
+    hierarchyPage->SetSizer(hierarchySizer);
+
+    m_rightBook->AddPage(rosterPage, "Strategick\u00e1 mapa", true);
+    m_rightBook->AddPage(hierarchyPage, "Hierarchie", false);
+    rightSizer->Add(m_rightBook, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
 
     auto btnSizer = new wxBoxSizer(wxVERTICAL);
     m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
@@ -343,6 +382,18 @@ void StrategicLevelFrame::RefreshUI()
     m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
 
     m_btnLaunch->Enable(m_selectedTerritory >= 0);
+}
+
+void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
+{
+    if(m_rightBook)
+        m_rightBook->SetSelection(0);
+}
+
+void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
+{
+    if(m_rightBook)
+        m_rightBook->SetSelection(1);
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
