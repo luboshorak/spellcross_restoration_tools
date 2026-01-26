@@ -266,23 +266,25 @@ void StrategicLevelFrame::BuildUI()
     mapTitle->SetForegroundColour(*wxLIGHT_GREY);
     controlsSizer->Add(mapTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
 
-    // Territory buttons (temporary UI)
-    m_territoryButtonsPanel = new wxPanel(m_mapPanel);
-    m_territoryButtonsPanel->SetBackgroundColour(wxColour(30, 30, 30));
-    auto grid = new wxGridSizer(0, 4, 6, 6);
-    for(size_t i = 0; i < m_level.territories.size(); ++i)
-    {
-        const auto& t = m_level.territories[i];
-        auto id = ID_TERRITORY_BASE + (int)i;
+    // Territory buttons (temporary UI).
+// When CLK is available we can click directly on regions, so this grid will be hidden.
+m_territoryButtonsPanel = new wxPanel(controls);
+m_territoryButtonsPanel->SetBackgroundColour(wxColour(30, 30, 30));
+auto grid = new wxGridSizer(0, 4, 6, 6);
+for(size_t i = 0; i < m_level.territories.size(); ++i)
+{
+    const auto& t = m_level.territories[i];
+    auto id = ID_TERRITORY_BASE + (int)i;
 
-        wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
-        auto btn = new wxButton(controls, id, label, wxDefaultPosition, wxSize(140, 60));
-        btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
-        grid->Add(btn, 0, wxEXPAND);
-    }
-    controlsSizer->Add(grid, 0, wxALL | wxEXPAND, 6);
+    wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
+    auto btn = new wxButton(m_territoryButtonsPanel, id, label, wxDefaultPosition, wxSize(140, 60));
+    btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
+    grid->Add(btn, 0, wxEXPAND);
+}
+m_territoryButtonsPanel->SetSizer(grid);
+controlsSizer->Add(m_territoryButtonsPanel, 0, wxALL | wxEXPAND, 6);
 
-    // Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
+// Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
     auto txtTitle = new wxStaticText(controls, wxID_ANY, "Territory / briefing text");
     txtTitle->SetForegroundColour(*wxLIGHT_GREY);
     controlsSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
@@ -1046,7 +1048,6 @@ static bool DecodeCLK(const std::vector<unsigned char>& clkBytes, int& outW, int
     return true;
 }
 
-// Pøesuòte tuto funkci na úroveò souboru, mimo DecodeCLK:
 static bool NormalizeIndexedBuffer(const std::vector<unsigned char>& src, size_t need,
                                    const std::vector<unsigned char>& clkValues,
                                    std::vector<unsigned char>& out)
@@ -1173,7 +1174,7 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
         if(y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
         if(edge)
         {
-            img.SetRGB(x, y, 255, 255, 255);
+            img.SetRGB(x, y, 20, 20, 20);
             img.SetAlpha(x, y, 255);
         }
     }
@@ -1285,6 +1286,12 @@ void StrategicLevelFrame::TryLoadBackground()
     }
 
     wxBitmap bmp;
+
+    // If we can build the composite (LEVEL + HMLA + PAL + CLK), keep CLK for click-detection.
+    bool composite_ok = false;
+    int cw = 0, ch = 0;
+    std::vector<unsigned char> cclk;
+
     if(levelNum >= 0)
     {
         // Search in reasonable places: folder of DEF, and a few parents with common subfolders.
@@ -1317,33 +1324,42 @@ void StrategicLevelFrame::TryLoadBackground()
             if(!seen) uniq.push_back(d);
         }
 
-        int cw = 0, ch = 0;
-        std::vector<unsigned char> cclk;
-
         for(const auto& folder : uniq)
         {
             if(BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk))
+            {
+                composite_ok = true;
                 break;
+            }
         }
     }
 
+    // Fallback: older simple LZ background (no CLK).
     if(!bmp.IsOk())
         BuildLegacyLZBackgroundFromDef(defPath, bmp);
 
     if(bmp.IsOk())
     {
-        int cw = 0, ch = 0;
-        std::vector<unsigned char> cclk;
         m_bgBitmap = bmp;
         m_hasBg = true;
-        m_clkValues = std::move(cclk);
-        m_clkW = cw;
-        m_clkH = ch;
-        m_hasClk = (!m_clkValues.empty() && m_clkW > 0 && m_clkH > 0);
-        if(m_hasClk && m_territoryButtonsPanel)
+
+        if(composite_ok && !cclk.empty() && cw > 0 && ch > 0)
         {
-            m_territoryButtonsPanel->Hide();
-            if(m_mapSizer) m_mapSizer->Layout();
+            m_clkValues = std::move(cclk);
+            m_clkW = cw;
+            m_clkH = ch;
+            m_hasClk = ((size_t)m_clkW * (size_t)m_clkH == m_clkValues.size());
+
+            // Hide the temporary territory grid when region click-detection is available.
+            if(m_hasClk && m_territoryButtonsPanel)
+            {
+                m_territoryButtonsPanel->Hide();
+                if(m_mapPanel) m_mapPanel->Layout();
+            }
+
+
+            // Precompute centroid positions for labels / selection marker.
+            RebuildTerritoryCentroids();
         }
     }
 
@@ -1351,6 +1367,46 @@ void StrategicLevelFrame::TryLoadBackground()
         m_mapCanvas->Refresh();
     else if(m_mapPanel)
         m_mapPanel->Refresh();
+}
+
+
+void StrategicLevelFrame::RebuildTerritoryCentroids()
+{
+    m_territoryCentroids.clear();
+
+    if(!m_hasClk || m_clkValues.empty() || m_clkW <= 0 || m_clkH <= 0)
+        return;
+
+    // Accumulate pixel sums per territory id.
+    struct Acc { long long sx = 0; long long sy = 0; long long n = 0; };
+    std::unordered_map<int, Acc> acc;
+    acc.reserve(std::max<size_t>(16, m_level.territories.size() * 2));
+
+    for(int y = 0; y < m_clkH; ++y)
+    {
+        const unsigned char* row = &m_clkValues[(size_t)y * (size_t)m_clkW];
+        for(int x = 0; x < m_clkW; ++x)
+        {
+            const int tid = (int)row[x];
+            if(tid == 0)
+                continue;
+
+            auto& a = acc[tid];
+            a.sx += x;
+            a.sy += y;
+            a.n  += 1;
+        }
+    }
+
+    for(const auto& kv : acc)
+    {
+        if(kv.second.n <= 0)
+            continue;
+
+        const int cx = (int)std::lround((double)kv.second.sx / (double)kv.second.n);
+        const int cy = (int)std::lround((double)kv.second.sy / (double)kv.second.n);
+        m_territoryCentroids[kv.first] = wxPoint(cx, cy);
+    }
 }
 
 void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
@@ -1391,6 +1447,92 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
         const int x = (pw - dw) / 2;
         const int y = (ph - dh) / 2;
         dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
+
+// Territory labels directly on the map (replacement for the temporary button grid).
+// Prefer centroids computed from CLK (exact), fallback to LEVEL_XX.DEF "strategic_x/y".
+{
+    wxFont f = wxFontInfo(10).Bold();
+    dc.SetFont(f);
+
+    // Heuristic: many DEFs store strategic_x/y in a 0..255 logical space (not pixel coords).
+    int maxSX = 0, maxSY = 0;
+    for(const auto& t : m_level.territories)
+    {
+        maxSX = std::max(maxSX, t.strategic_x);
+        maxSY = std::max(maxSY, t.strategic_y);
+    }
+    const bool defLooksLike256 =
+        (maxSX > 0 && maxSY > 0 && maxSX <= 255 && maxSY <= 255 && (bw > 255 || bh > 255));
+
+    auto getPx = [&](const LevelTerritory& t, int& px, int& py) -> bool
+    {
+        // 1) Exact centroid from CLK
+        auto it = m_territoryCentroids.find(t.id);
+        if(it != m_territoryCentroids.end())
+        {
+            px = it->second.x;
+            py = it->second.y;
+            return true;
+        }
+
+        // 2) Fallback: DEF point
+        if(t.strategic_x <= 0 || t.strategic_y <= 0)
+            return false;
+
+        if(defLooksLike256)
+        {
+            px = (int)std::lround(((double)t.strategic_x * (double)bw) / 256.0);
+            py = (int)std::lround(((double)t.strategic_y * (double)bh) / 256.0);
+        }
+        else
+        {
+            px = t.strategic_x;
+            py = t.strategic_y;
+        }
+        return true;
+    };
+
+    // Draw all territory IDs.
+    for(const auto& t : m_level.territories)
+    {
+        int px = 0, py = 0;
+        if(!getPx(t, px, py))
+            continue;
+
+        const int tx = x + (int)std::lround((double)px * s);
+        const int ty = y + (int)std::lround((double)py * s);
+
+        wxString label = wxString::Format("T%02d", t.id);
+
+        // Tiny shadow for readability.
+        dc.SetTextForeground(wxColour(0, 0, 0));
+        dc.DrawText(label, tx + 1, ty + 1);
+        dc.SetTextForeground(wxColour(255, 255, 255));
+        dc.DrawText(label, tx, ty);
+    }
+
+    // Simple selection marker at the selected territory point.
+    if(m_selectedTerritory > 0)
+    {
+        const LevelTerritory* sel = nullptr;
+        for(const auto& t : m_level.territories)
+        {
+            if(t.id == m_selectedTerritory) { sel = &t; break; }
+        }
+
+        int px = 0, py = 0;
+        if(sel && getPx(*sel, px, py))
+        {
+            const int tx = x + (int)std::lround((double)px * s);
+            const int ty = y + (int)std::lround((double)py * s);
+            const int r  = std::max(6, (int)std::lround(6.0 * s));
+
+            dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
+            dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            dc.DrawCircle(tx, ty, r);
+        }
+    }
+}
     }
 }
 
