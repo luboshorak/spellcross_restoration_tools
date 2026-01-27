@@ -816,8 +816,16 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         }
     }
 
-    RefreshUI();
+    // persist progression before leaving the strategic screen
+    SaveStrategicState();
+
+    // jump directly into game mode and close the strategic-level window
+    m_main->SetGameModeUI(true);
+    m_main->Raise();
+
+    Close(true);
 }
+
 
 void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {

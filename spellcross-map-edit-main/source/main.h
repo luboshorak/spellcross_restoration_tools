@@ -106,6 +106,9 @@ public:
     void StatusStringCallback(std::string info);
     void CreateHUDbuttons();
     bool LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units);
+    // Switch between editor/game mode (also updates UI + resets game state when entering).
+    void SetGameModeUI(bool enable_game_mode);
+
 
     // === Pøidejte tento øádek do public sekce ===
     SpellData* spell_data;

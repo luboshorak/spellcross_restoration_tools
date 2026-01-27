@@ -117,6 +117,67 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
     return true;
 }
 
+void MainFrame::SetGameModeUI(bool enable_game_mode)
+{
+    if(!spell_map || !spell_map->IsLoaded())
+        return;
+
+    // Keep menu state in sync (if menu exists)
+    if(GetMenuBar())
+    {
+        if(auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
+            item->Check(enable_game_mode);
+    }
+
+    spell_map->SetGameMode(enable_game_mode);
+    if(canvas)
+        canvas->Refresh();
+
+    if(enable_game_mode)
+    {
+        // switch to game mode
+        if(ribbonBar)
+            ribbonBar->HidePanels();
+
+        if(menuView)
+        {
+            if(menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
+            if(menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
+            if(menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
+        }
+
+        wxCommandEvent dummy;
+        OnViewLayer(dummy);
+
+        // reset map runtime state
+        if(spell_map->saves)
+            spell_map->saves->Clear();
+        if(spell_map->events)
+            spell_map->events->ResetEvents();
+        if(spell_map->saves)
+            spell_map->saves->SaveInitial();
+
+        // exec initial events
+        spell_map->MissionStartEvent();
+
+        // reset units view/attack ranges
+        if(spell_map->unit_view)
+        {
+            spell_map->unit_view->ClearEvents();
+            spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
+            spell_map->unit_view->AddUnitsView();
+        }
+    }
+    else
+    {
+        // switch to editor mode
+        if(spell_map->saves)
+            spell_map->saves->LoadInitial();
+        spell_map->ResetUnitEvents();
+    }
+}
+
+
 void MainFrame::OnOpenLevelDef(wxCommandEvent& ev)
 {
     wxFileDialog dlg(
@@ -798,34 +859,7 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
         return;
 
     auto is_game = GetMenuBar()->FindItem(ID_mmGameMode)->IsChecked();
-    spell_map->SetGameMode(is_game);
-    canvas->Refresh();
-    if(is_game)
-    {
-        // switch to game mode
-        ribbonBar->HidePanels();        
-        menuView->FindItem(ID_ViewSoundLoops)->Check(false);
-        menuView->FindItem(ID_ViewSounds)->Check(false);
-        menuView->FindItem(ID_ViewEvents)->Check(false);
-        OnViewLayer(event);
-
-        // reset map
-        spell_map->saves->Clear();
-        spell_map->events->ResetEvents();
-        spell_map->saves->SaveInitial();        
-        // exec initial events
-        spell_map->MissionStartEvent();
-        // reset units view/attack ranges
-        spell_map->unit_view->ClearEvents();
-        spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
-        spell_map->unit_view->AddUnitsView();
-    }
-    else
-    {
-        // switch to editor mode
-        spell_map->saves->LoadInitial();
-        spell_map->ResetUnitEvents();
-    }
+    SetGameModeUI(is_game);
 }
 
 void MainFrame::OnLoadGameState(wxCommandEvent& event)

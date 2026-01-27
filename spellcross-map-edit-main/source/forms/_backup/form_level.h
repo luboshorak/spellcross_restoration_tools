@@ -28,6 +28,8 @@ private:
     void OnMapLeftDown(wxMouseEvent& ev);
     void OnActivate(wxActivateEvent& ev);
 
+    void RebuildTerritoryCentroids();
+
     // actions
     void OnTerritory(wxCommandEvent& ev);
     void SelectTerritoryById(int territory_id);
@@ -69,6 +71,10 @@ private:
     int m_clkW = 0;
     int m_clkH = 0;
     bool m_hasClk = false;
+
+
+    // territory id -> centroid (pixel coords in background bitmap space)
+    std::unordered_map<int, wxPoint> m_territoryCentroids;
 
     // background bitmap
     wxBitmap m_bgBitmap;
@@ -112,3 +118,4 @@ private:
 
     wxDECLARE_EVENT_TABLE();
 };
+// void StrategicLevelFrame::TryLoadBackground()
