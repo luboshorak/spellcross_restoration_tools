@@ -10,7 +10,6 @@
 #include "spellcross.h"
 #include "map.h"
 
-
 enum class FormMainMenuAction
 {
     NewGame,
@@ -25,9 +24,9 @@ class FormMainMenu
 {
 public:
     FormMainMenu(wxPanel* parent,
-                 wxWindowID win_id,
-                 SpellMap* spell_map,
-                 std::function<void(FormMainMenuAction)> action_cb);
+        wxWindowID win_id,
+        SpellMap* spell_map,
+        std::function<void(FormMainMenuAction)> action_cb);
     ~FormMainMenu();
 
 private:
@@ -40,7 +39,7 @@ private:
 
     SpellMap* m_spell_map;
     SpellData* m_spelldata;
-    wxPanel* form;
+    wxFrame* form;
     wxBitmap m_background;
     wxSize m_bg_size;
     std::vector<MenuItem> m_items;
@@ -49,6 +48,7 @@ private:
 
     bool LoadBackground();
     void BuildMenuItems();
+    void LayoutMenuItems(const wxSize& clientSize);
     void TriggerAction(int index);
 
     void OnClose(wxCloseEvent& ev);
