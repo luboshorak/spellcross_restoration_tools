@@ -147,6 +147,9 @@
     <ClCompile Include="forms\form_mission_params.cpp">
       <Filter>Source Files\forms</Filter>
     </ClCompile>
+    <ClCompile Include="forms\form_mmenu.cpp">
+      <Filter>Source Files\forms</Filter>
+    </ClCompile>
     <ClCompile Include="forms\form_about.cpp">
       <Filter>Source Files\forms</Filter>
     </ClCompile>
@@ -348,6 +351,9 @@
       <Filter>Header Files\forms</Filter>
     </ClInclude>
     <ClInclude Include="forms\form_mission_params.h">
+      <Filter>Header Files\forms</Filter>
+    </ClInclude>
+    <ClInclude Include="forms\form_mmenu.h">
       <Filter>Header Files\forms</Filter>
     </ClInclude>
     <ClInclude Include="forms\form_about.h">
