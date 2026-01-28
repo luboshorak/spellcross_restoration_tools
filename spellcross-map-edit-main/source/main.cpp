@@ -50,7 +50,81 @@
 #include <wx/busyinfo.h>
 #include "forms/form_level.h"
 
-namespace {\n+\n+std::string to_lower(std::string s)\n+{\n+    for(char& ch : s)\n+        ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));\n+    return s;\n+}\n+\n+std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path& dir, const std::string& wanted)\n+{\n+    namespace fs = std::filesystem;\n+    std::error_code ec;\n+    if(!fs::exists(dir, ec) || !fs::is_directory(dir, ec))\n+        return {};\n+\n+    const std::string w = to_lower(wanted);\n+    for(const auto& de : fs::directory_iterator(dir, ec))\n+    {\n+        if(ec)\n+            break;\n+        if(!de.is_regular_file(ec))\n+            continue;\n+        const std::string fn = to_lower(de.path().filename().string());\n+        if(fn == w)\n+            return de.path();\n+    }\n+    return {};\n+}\n+\n+std::filesystem::path FindSpellDataFile(const std::filesystem::path& root, const std::string& filename)\n+{\n+    const std::vector<std::filesystem::path> candidates = {\n+        root,\n+        root / \"DATA\",\n+        root / \"COMMON\",\n+        root / \"DATA\" / \"COMMON\",\n+        root / \"CD\",\n+        root / \"DATA\" / \"CD\",\n+    };\n+\n+    for(const auto& dir : candidates)\n+    {\n+        auto found = FindFileCaseInsensitive(dir, filename);\n+        if(!found.empty())\n+            return found;\n+    }\n+    return {};\n+}\n+\n+}\n+\n bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)\n*** End Patch"}### **Warning**: Line numbers won't match in this environment.
+#include <cctype>
+#include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
+
+namespace
+{
+
+    static std::string to_lower(std::string s)
+    {
+        for (char& ch : s)
+        {
+            const unsigned char uch = static_cast<unsigned char>(ch);
+            ch = static_cast<char>(std::tolower(uch));
+        }
+        return s;
+    }
+
+    static std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path& dir,
+        const std::string& wanted)
+    {
+        namespace fs = std::filesystem;
+
+        std::error_code ec;
+        if (!fs::exists(dir, ec) || ec)
+            return {};
+        if (!fs::is_directory(dir, ec) || ec)
+            return {};
+
+        const std::string w = to_lower(wanted);
+
+        // skip_permission_denied = ať to nezdechne na právech
+        for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
+        {
+            if (ec)
+                break;
+
+            if (!de.is_regular_file(ec) || ec)
+            {
+                ec.clear();
+                continue;
+            }
+
+            const std::string fn = to_lower(de.path().filename().string());
+            if (fn == w)
+                return de.path();
+        }
+
+        return {};
+    }
+
+    static std::filesystem::path FindSpellDataFile(const std::filesystem::path& root,
+        const std::string& filename)
+    {
+        const std::vector<std::filesystem::path> candidates = {
+            root,
+            root / "DATA",
+            root / "COMMON",
+            root / "DATA" / "COMMON",
+            root / "CD",
+            root / "DATA" / "CD",
+        };
+
+        for (const auto& dir : candidates)
+        {
+            auto found = FindFileCaseInsensitive(dir, filename);
+            if (!found.empty())
+                return found;
+        }
+        return {};
+    }
+
+} // namespace
+
 bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)
 {
     if (!spell_map || !spell_data)

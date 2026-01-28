@@ -149,7 +149,8 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
 
     const wxSize size = m_bg_size.IsFullySpecified() ? m_bg_size : wxSize(640, 480);
     wxPoint pos = {(parent->GetSize().x - size.x) / 2, (parent->GetSize().y - size.y) / 2};
-    form = new wxPanel(parent, win_id, pos, size, wxBORDER_NONE | wxFRAME_FLOAT_ON_PARENT | wxBG_STYLE_PAINT);
+    // Oprava: wxFRAME_FLOAT_ON_PARENT není platný styl pro wxPanel, použijte pouze platné styly
+    form = new wxPanel(parent, win_id, pos, size, wxBORDER_NONE | wxBG_STYLE_PAINT);
     form->SetBackgroundStyle(wxBG_STYLE_PAINT);
     form->SetDoubleBuffered(true);
     form->SetFocus();
