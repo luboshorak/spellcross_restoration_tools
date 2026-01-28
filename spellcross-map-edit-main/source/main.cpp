@@ -32,6 +32,7 @@
 #include <tuple>
 #include <string>
 #include <chrono>
+#include <cctype>
 #include <future>
 #include <thread>
 #include <memory>
@@ -49,6 +50,7 @@
 #include <wx/busyinfo.h>
 #include "forms/form_level.h"
 
+namespace {\n+\n+std::string to_lower(std::string s)\n+{\n+    for(char& ch : s)\n+        ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));\n+    return s;\n+}\n+\n+std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path& dir, const std::string& wanted)\n+{\n+    namespace fs = std::filesystem;\n+    std::error_code ec;\n+    if(!fs::exists(dir, ec) || !fs::is_directory(dir, ec))\n+        return {};\n+\n+    const std::string w = to_lower(wanted);\n+    for(const auto& de : fs::directory_iterator(dir, ec))\n+    {\n+        if(ec)\n+            break;\n+        if(!de.is_regular_file(ec))\n+            continue;\n+        const std::string fn = to_lower(de.path().filename().string());\n+        if(fn == w)\n+            return de.path();\n+    }\n+    return {};\n+}\n+\n+std::filesystem::path FindSpellDataFile(const std::filesystem::path& root, const std::string& filename)\n+{\n+    const std::vector<std::filesystem::path> candidates = {\n+        root,\n+        root / \"DATA\",\n+        root / \"COMMON\",\n+        root / \"DATA\" / \"COMMON\",\n+        root / \"CD\",\n+        root / \"DATA\" / \"CD\",\n+    };\n+\n+    for(const auto& dir : candidates)\n+    {\n+        auto found = FindFileCaseInsensitive(dir, filename);\n+        if(!found.empty())\n+            return found;\n+    }\n+    return {};\n+}\n+\n+}\n+\n bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)\n*** End Patch"}### **Warning**: Line numbers won't match in this environment.
 bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)
 {
     if (!spell_map || !spell_data)
@@ -321,6 +323,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     form_minimap = NULL;
     form_units_list = NULL;
     form_sounds = NULL;
+    form_mmenu = NULL;
         
     // File menu
     wxMenu* menuFile = new wxMenu;
@@ -329,6 +332,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     menuFile->Append(ID_SaveDTA,"&Save DTA map file","Save Spellcross map DTA file.");
     menuFile->Append(ID_SaveDEF,"&Save DEF map file","Save Spellcross map DEF file.");
     menuFile->Append(ID_NewMap,"&Ceate new Map\tCtrl-N","Create new map.");
+    menuFile->Append(ID_MainMenu,"Main &menu\tCtrl-M","Open main game menu.");
     menuFile->AppendSeparator();
     menuFile->Append(ID_OpenLevelDef, "Open &Level DEF...\tCtrl-L", "Open strategic level definition (.DEF).");
     menuFile->Append(wxID_EXIT);
@@ -508,6 +512,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     Bind(wxEVT_MENU,&MainFrame::OnSaveDTA,this,ID_SaveDTA);
     Bind(wxEVT_MENU,&MainFrame::OnSaveDEF,this,ID_SaveDEF);
     Bind(wxEVT_MENU,&MainFrame::OnNewMap,this,ID_NewMap);
+    Bind(wxEVT_MENU,&MainFrame::OnOpenMainMenu,this,ID_MainMenu);
 	Bind(wxEVT_MENU, &MainFrame::OnOpenLevelDef, this, ID_OpenLevelDef);
     Bind(wxEVT_MENU,&MainFrame::OnAbout, this, wxID_ABOUT);
     Bind(wxEVT_MENU,&MainFrame::OnExit, this, wxID_EXIT);
@@ -847,6 +852,11 @@ void MainFrame::OnClose(wxCloseEvent& ev)
         delete form_units_list;
         form_units_list = NULL;
     }
+    else if(ev.GetId() == ID_MMENU_WIN && form_mmenu)
+    {
+        delete form_mmenu;
+        form_mmenu = NULL;
+    }
     else
         ev.Skip();
 }
@@ -864,6 +874,11 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
 
 void MainFrame::OnLoadGameState(wxCommandEvent& event)
 {
+    LoadGameStateFromDialog();
+}
+
+bool MainFrame::LoadGameStateFromDialog()
+{
     wxFileDialog openFileDialog(
         this,
         "Load game state",
@@ -874,7 +889,7 @@ void MainFrame::OnLoadGameState(wxCommandEvent& event)
     );
 
     if (openFileDialog.ShowModal() == wxID_CANCEL)
-        return;
+        return false;
 
     wxString path = openFileDialog.GetPath();
     std::wstring wpath = path.ToStdWstring();
@@ -884,7 +899,90 @@ void MainFrame::OnLoadGameState(wxCommandEvent& event)
     {
         wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()),
             "Load error", wxICON_ERROR | wxOK, this);
+        return false;
     }
+
+    return true;
+}
+
+void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
+{
+    if(form_mmenu)
+        return;
+
+    if(!canvas)
+        return;
+
+    form_mmenu = new FormMainMenu(canvas, ID_MMENU_WIN, spell_map,
+        [this](FormMainMenuAction action) { OnMainMenuAction(action); });
+}
+
+void MainFrame::OnMainMenuAction(FormMainMenuAction action)
+{
+    auto close_menu = [this]() {
+        if(form_mmenu)
+        {
+            delete form_mmenu;
+            form_mmenu = NULL;
+        }
+    };
+
+    switch(action)
+    {
+        case FormMainMenuAction::NewGame:
+        {
+            if(!spell_data)
+                break;
+            std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
+            auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
+            if(def_path.empty())
+            {
+                wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                break;
+            }
+            if(LoadMapFromDefPath(def_path.wstring(), {}))
+                SetGameModeUI(true);
+            break;
+        }
+        case FormMainMenuAction::Continue:
+        {
+            if(!spell_map || !spell_map->IsLoaded())
+            {
+                wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                break;
+            }
+            wstring path = spell_map->GetTopPath();
+            if(path.empty())
+            {
+                wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
+                break;
+            }
+            if(LoadMapFromDefPath(path, {}))
+                SetGameModeUI(true);
+            break;
+        }
+        case FormMainMenuAction::LoadGame:
+        {
+            if(LoadGameStateFromDialog())
+                SetGameModeUI(true);
+            break;
+        }
+        case FormMainMenuAction::Credits:
+            wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+            break;
+        case FormMainMenuAction::Intro:
+            wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+            break;
+        case FormMainMenuAction::Exit:
+            if(spell_map)
+                spell_map->Close();
+            Close(true);
+            break;
+        default:
+            break;
+    }
+
+    close_menu();
 }
 
 // on reset view range in game mode
