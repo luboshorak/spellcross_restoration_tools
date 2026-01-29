@@ -7,7 +7,6 @@ spell_extractfs/data_extracted/
 spell_extractfs/data_raw/
 spell_extractfs/data_sorted/
 spellcross-map-edit-main/builds/
-spellcross-map-edit-main/data/
 
 # --- Custom ---
 # allow EXE in this repo (overrides global ignore)
@@ -26,6 +25,6 @@ env/
 **/ENV/
 **/env/
 
-echo spellcross-map-edit-main.7z>> .gitignore
-echo *.7z>> .gitignore
-echo *.zip>> .gitignore
+spellcross-map-edit-main.7z
+*.7z
+*.zip
