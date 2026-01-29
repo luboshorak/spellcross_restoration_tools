@@ -35,6 +35,7 @@ private:
     void SelectTerritoryById(int territory_id);
     void OnResearch(wxCommandEvent& ev);
     void OnBuyUnits(wxCommandEvent& ev);
+    void OnSellUnits(wxCommandEvent& ev);
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
     void OnShowStrategicMap(wxCommandEvent& ev);
@@ -43,6 +44,8 @@ private:
     void LoadStrategicState();
     void SaveStrategicState() const;
     wxString GetUnitDisplayName(int unit_id) const;
+    bool EnsureUnitCostsLoaded();
+    int GetUnitBuyCost(int unit_id) const;
 
     // mission selection / progression
     std::string ResolveMissionTokenForTerritory(int territory_id) const;
@@ -65,6 +68,8 @@ private:
     std::unordered_map<int, int> m_territoryLaunchCount;
 
     std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
+    std::unordered_map<int, int> m_unitCosts;
+    bool m_unitCostsLoaded = false;
 
     // decoded CLK territory map for click-detection
     std::vector<unsigned char> m_clkValues;
@@ -96,6 +101,7 @@ private:
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnBuy = nullptr;
+    wxButton* m_btnSell = nullptr;
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
     wxButton* m_btnStrategicMap = nullptr;
@@ -110,6 +116,7 @@ private:
         ID_TERRITORY_BASE = 20000,
         ID_BTN_RESEARCH,
         ID_BTN_BUY,
+        ID_BTN_SELL,
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
