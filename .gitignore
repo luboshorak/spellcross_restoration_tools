@@ -12,6 +12,7 @@ spellcross-map-edit-main/data/
 # --- Custom ---
 # allow EXE in this repo (overrides global ignore)
 !*.exe
+!*.json
 
 # --- Python venvs ---
 .venv/
