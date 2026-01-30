@@ -1,4 +1,5 @@
 #include "form_level.h"
+#include "form_strategic.h"
 
 #include "main.h"
 #include "other.h"
@@ -14,6 +15,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cmath>
+#include <cstdlib>
 #include <regex>
 #include <array>
 #include <sstream>
@@ -28,6 +30,7 @@
 wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY,      StrategicLevelFrame::OnBuyUnits)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_SELL,     StrategicLevelFrame::OnSellUnits)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN,  StrategicLevelFrame::OnEndTurn)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
@@ -82,6 +85,111 @@ static void UpdateSpellLabel(wxStaticBitmap* target, const SpellData* data, cons
 
     if(auto bmp = RenderSpellLabel(data, text); bmp.IsOk())
         target->SetBitmap(bmp);
+}
+
+static std::filesystem::path GetUnitsJsonPath()
+{
+    return std::filesystem::current_path() / "data" / "units.json";
+}
+
+static bool ParseJsonIntField(const std::string& obj, const char* key, int& outValue)
+{
+    if(!key)
+        return false;
+
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t pos = obj.find(needle);
+    if(pos == std::string::npos)
+        return false;
+
+    pos = obj.find(':', pos + needle.size());
+    if(pos == std::string::npos)
+        return false;
+
+    ++pos;
+    while(pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos])))
+        ++pos;
+
+    const char* start = obj.c_str() + pos;
+    char* end = nullptr;
+    long value = std::strtol(start, &end, 10);
+    if(end == start)
+        return false;
+
+    outValue = static_cast<int>(value);
+    return true;
+}
+
+static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unordered_map<int, int>& outCosts)
+{
+    std::ifstream file(path);
+    if(!file.is_open())
+        return false;
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string content = buffer.str();
+    if(content.empty())
+        return false;
+
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    size_t objStart = std::string::npos;
+
+    for(size_t i = 0; i < content.size(); ++i)
+    {
+        char c = content[i];
+        if(inString)
+        {
+            if(escaped)
+            {
+                escaped = false;
+            }
+            else if(c == '\\')
+            {
+                escaped = true;
+            }
+            else if(c == '"')
+            {
+                inString = false;
+            }
+            continue;
+        }
+
+        if(c == '"')
+        {
+            inString = true;
+            continue;
+        }
+
+        if(c == '{')
+        {
+            if(depth == 0)
+                objStart = i;
+            ++depth;
+        }
+        else if(c == '}')
+        {
+            if(depth > 0)
+            {
+                --depth;
+                if(depth == 0 && objStart != std::string::npos)
+                {
+                    const std::string obj = content.substr(objStart, i - objStart + 1);
+                    int index = -1;
+                    int cost = -1;
+                    if(ParseJsonIntField(obj, "index", index) && ParseJsonIntField(obj, "cost_buy", cost))
+                    {
+                        outCosts[index] = cost;
+                    }
+                    objStart = std::string::npos;
+                }
+            }
+        }
+    }
+
+    return !outCosts.empty();
 }
 
 static std::string trim(std::string s)
@@ -214,6 +322,32 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     RefreshUI();
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
+}
+
+bool StrategicLevelFrame::EnsureUnitCostsLoaded()
+{
+    if(m_unitCostsLoaded)
+        return true;
+
+    m_unitCosts.clear();
+    const auto path = GetUnitsJsonPath();
+    if(!LoadUnitCostsFromJson(path, m_unitCosts))
+    {
+        wxMessageBox(wxString::Format("Units pricing file not found or invalid.\nExpected: %s", path.string().c_str()),
+                     "Units pricing", wxOK | wxICON_WARNING, this);
+        return false;
+    }
+
+    m_unitCostsLoaded = true;
+    return true;
+}
+
+int StrategicLevelFrame::GetUnitBuyCost(int unit_id) const
+{
+    auto it = m_unitCosts.find(unit_id);
+    if(it == m_unitCosts.end())
+        return -1;
+    return it->second;
 }
 
 void StrategicLevelFrame::BuildUI()
@@ -361,14 +495,26 @@ controlsSizer->Add(m_territoryButtonsPanel, 0, wxALL | wxEXPAND, 6);
 
     auto btnSizer = new wxBoxSizer(wxVERTICAL);
     m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
-    m_btnBuy      = new wxButton(right, ID_BTN_BUY, "Buy units");
-    m_btnLaunch   = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
-    m_btnEndTurn  = new wxButton(right, ID_BTN_ENDTURN, "End turn");
+    m_btnBuy = new wxButton(right, ID_BTN_BUY, "Buy units");
+    m_btnSell = new wxButton(right, ID_BTN_SELL, "Sell units");
 
+    // NEW: Strategic info (opens new frame)
+    auto* btnStrategicInfo = new wxButton(right, wxID_ANY, "Strategic info");
+    btnStrategicInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent&)
+        {
+            auto* frm = new StrategicInfoFrame(this, m_level);
+            frm->Show(true);
+        });
+
+    m_btnLaunch = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
+    m_btnEndTurn = new wxButton(right, ID_BTN_ENDTURN, "End turn");
+    
     btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnBuy,      0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 12);
-    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND);
+    btnSizer->Add(m_btnSell,     0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnStrategicInfo, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND | wxBOTTOM, 6);
 
     rightSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
     right->SetSizer(rightSizer);
@@ -402,6 +548,8 @@ void StrategicLevelFrame::RefreshUI()
     m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
 
     m_btnLaunch->Enable(m_selectedTerritory >= 0);
+    if(m_btnSell)
+        m_btnSell->Enable(!m_playerUnits.empty());
 }
 
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
@@ -604,6 +752,8 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
         wxMessageBox("Units data not loaded.", "Buy units", wxOK | wxICON_WARNING, this);
         return;
     }
+    if(!EnsureUnitCostsLoaded())
+        return;
 
     wxDialog dlg(this, wxID_ANY, "Buy units", wxDefaultPosition, wxSize(420, 480));
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
@@ -613,13 +763,20 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
 
     auto* list = new wxListBox(&dlg, wxID_ANY);
     std::vector<int> unit_ids;
+    std::vector<int> unit_costs;
     unit_ids.reserve(m_spellData->units->GetUnits().size());
+    unit_costs.reserve(m_spellData->units->GetUnits().size());
     for(const auto* unit : m_spellData->units->GetUnits())
     {
         if(!unit)
             continue;
         unit_ids.push_back(unit->type_id);
-        list->Append(wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name))));
+        int cost = GetUnitBuyCost(unit->type_id);
+        unit_costs.push_back(cost);
+        wxString label = wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name)));
+        if(cost > 0)
+            label += wxString::Format(" (%d)", cost);
+        list->Append(label);
     }
     if(!unit_ids.empty())
         list->SetSelection(0);
@@ -650,10 +807,25 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
         wxMessageBox("No unit selected.", "Buy units", wxOK | wxICON_WARNING, this);
         return;
     }
+    if(sel >= (int)unit_costs.size() || unit_costs[sel] <= 0)
+    {
+        wxMessageBox("Selected unit has no price defined.", "Buy units", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    const int count = spinCount->GetValue();
+    const int unitCost = unit_costs[sel];
+    const int totalCost = unitCost * count;
+    if(m_money < totalCost)
+    {
+        wxMessageBox(wxString::Format("Not enough money. Need %d, you have %d.", totalCost, m_money),
+                     "Buy units", wxOK | wxICON_WARNING, this);
+        return;
+    }
 
     LevelData::PlayerUnitAdd add;
     add.unit_id = unit_ids[sel];
-    add.count = spinCount->GetValue();
+    add.count = count;
     add.health = 100;
     add.extra = "-";
 
@@ -666,6 +838,125 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
         it->count += add.count;
     else
         m_playerUnits.push_back(add);
+
+    m_money -= totalCost;
+    SaveStrategicState();
+    RefreshUI();
+}
+
+void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
+{
+    if(m_playerUnits.empty())
+    {
+        wxMessageBox("No units to sell.", "Sell units", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+    if(!EnsureUnitCostsLoaded())
+        return;
+
+    struct SellEntry
+    {
+        int index = -1;
+        int unit_id = -1;
+        int count = 0;
+        int health = 0;
+        int cost = -1;
+    };
+
+    std::vector<SellEntry> entries;
+    entries.reserve(m_playerUnits.size());
+
+    wxDialog dlg(this, wxID_ANY, "Sell units", wxDefaultPosition, wxSize(420, 480));
+    auto* rootSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* lbl = new wxStaticText(&dlg, wxID_ANY, "Select unit:");
+    rootSizer->Add(lbl, 0, wxLEFT | wxRIGHT | wxTOP, 10);
+
+    auto* list = new wxListBox(&dlg, wxID_ANY);
+    for(size_t i = 0; i < m_playerUnits.size(); ++i)
+    {
+        const auto& u = m_playerUnits[i];
+        SellEntry entry;
+        entry.index = static_cast<int>(i);
+        entry.unit_id = u.unit_id;
+        entry.count = u.count;
+        entry.health = u.health;
+        entry.cost = GetUnitBuyCost(u.unit_id);
+        entries.push_back(entry);
+
+        wxString label = wxString::Format("%s x%d", GetUnitDisplayName(u.unit_id), u.count);
+        if(entry.cost > 0)
+            label += wxString::Format(" (sell %d)", entry.cost / 2);
+        else
+            label += " (no price)";
+        list->Append(label);
+    }
+    if(!entries.empty())
+        list->SetSelection(0);
+    rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
+
+    auto* countSizer = new wxBoxSizer(wxHORIZONTAL);
+    countSizer->Add(new wxStaticText(&dlg, wxID_ANY, "Count:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    auto* spinCount = new wxSpinCtrl(&dlg, wxID_ANY, "1", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 99, 1);
+    countSizer->Add(spinCount, 0);
+    rootSizer->Add(countSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+    auto updateSpinRange = [&]()
+    {
+        int sel = list->GetSelection();
+        if(sel == wxNOT_FOUND || sel >= (int)entries.size())
+            return;
+        int maxCount = std::max(1, entries[sel].count);
+        spinCount->SetRange(1, maxCount);
+        if(spinCount->GetValue() > maxCount)
+            spinCount->SetValue(maxCount);
+    };
+    updateSpinRange();
+    list->Bind(wxEVT_LISTBOX, [&](wxCommandEvent&){ updateSpinRange(); });
+
+    auto* btnSizer = new wxBoxSizer(wxHORIZONTAL);
+    auto* btnSell = new wxButton(&dlg, wxID_OK, "Sell");
+    auto* btnCancel = new wxButton(&dlg, wxID_CANCEL, "Cancel");
+    btnSizer->AddStretchSpacer(1);
+    btnSizer->Add(btnSell, 0, wxRIGHT, 8);
+    btnSizer->Add(btnCancel, 0);
+    rootSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    dlg.SetSizerAndFit(rootSizer);
+
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    int sel = list->GetSelection();
+    if(sel == wxNOT_FOUND || sel >= (int)entries.size())
+    {
+        wxMessageBox("No unit selected.", "Sell units", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    const auto& entry = entries[sel];
+    if(entry.cost <= 0)
+    {
+        wxMessageBox("Selected unit has no price defined.", "Sell units", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    int sellCount = spinCount->GetValue();
+    if(sellCount <= 0)
+        return;
+    if(sellCount > entry.count)
+        sellCount = entry.count;
+
+    int refund = (entry.cost * sellCount) / 2;
+    m_money += refund;
+
+    if(entry.index >= 0 && entry.index < (int)m_playerUnits.size())
+    {
+        auto& unit = m_playerUnits[entry.index];
+        unit.count -= sellCount;
+        if(unit.count <= 0)
+            m_playerUnits.erase(m_playerUnits.begin() + entry.index);
+    }
 
     SaveStrategicState();
     RefreshUI();
@@ -816,8 +1107,16 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         }
     }
 
-    RefreshUI();
+    // persist progression before leaving the strategic screen
+    SaveStrategicState();
+
+    // jump directly into game mode and close the strategic-level window
+    m_main->SetGameModeUI(true);
+    m_main->Raise();
+
+    Close(true);
 }
+
 
 void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {

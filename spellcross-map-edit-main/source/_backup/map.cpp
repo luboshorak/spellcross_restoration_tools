@@ -6244,10 +6244,10 @@ void SpellMap::StartEnemyTurn()
     enemy_turn_prev_sel_mod = unit_selection_mod;
 
     enemy_turn_list.clear();
-    for (auto* u : units)
-    {
-        if (u && u->is_enemy)
-        {
+	for (auto* u : units)
+	{
+		if (u && u->is_enemy)
+		{
             // decay aggro memory once per enemy phase
 			if (u->ai_aggro_ttl > 0)
 			{
@@ -6257,13 +6257,15 @@ void SpellMap::StartEnemyTurn()
 			}
 			u->ResetAP(); // enemy starts with full AP
             enemy_turn_list.push_back(u);
-        }
-        else if (u && !u->is_enemy)
-        {
-            // prevent player actions during enemy phase
-            u->action_points = 0;
-        }
-    }
+		}
+		else if (u && !u->is_enemy)
+		{
+			// prevent player actions during enemy phase
+			if (u->panic_turns == 1)
+				u->panic_turns = 0;
+			u->action_points = 0;
+		}
+	}
 
     enemy_turn_idx = 0;
     enemy_turn_running = true;
@@ -6298,69 +6300,15 @@ void SpellMap::EndEnemyTurn()
 		}
 	}
 
-	// === PANIC: player units with morale==0 flee uncontrollably for 1 phase ===
-	// execute panic movement (before player gets control)
-	// (panic_turns is armed by MapUnit::UpdateModale() when morale drops to 0)
+	// === PANIC: player units with morale==0 flee uncontrollably for one player phase ===
+	// panic_turns meanings: 2=pending flee (execute now), 1=panicking (cannot be controlled), 0=normal
+	std::vector<MapUnit*> panic_units;
+	panic_units.reserve(units.size());
 	for (auto* u : units)
 	{
 		if (!u || u->is_enemy) continue;
-		if (u->panic_turns <= 0) continue;
-		if (IsUnitBusy(u) || u->action_points <= 0) continue;
-
-		// compute reachable tiles synchronously
-		unit_range->FindRange(u);
-		unit_range->ResultLock(true);
-
-		// random direction preference (8-way projection; good enough on hex coords too)
-		static const int dirs[8][2] = { {1,0},{-1,0},{0,1},{0,-1},{1,1},{-1,-1},{1,-1},{-1,1} };
-		int did = rand() & 7;
-		int dirx = dirs[did][0];
-		int diry = dirs[did][1];
-
-		int best_idx = -1;
-		long best_score = LONG_MIN;
-		int sx = u->coor.x;
-		int sy = u->coor.y;
-		int sidx = ConvXY(u->coor);
-
-		for (int idx = 0; idx < (int)unit_range->ap_left.size(); idx++)
-		{
-			if (idx == sidx) continue;
-			if (unit_range->ap_left[idx] < 0) continue;
-
-			// blocked by same class (air/land) unit?
-			bool blocked = false;
-			for (auto* other = Lunit[idx]; other; other = other->next)
-			{
-				if (!other || other == u) continue;
-				if ((u->unit->isAir() && other->unit->isAir()) || (u->unit->isLand() && other->unit->isLand()))
-				{ blocked = true; break; }
-			}
-			if (blocked) continue;
-
-			int x = idx % x_size;
-			int y = idx / x_size;
-			int dx = x - sx;
-			int dy = y - sy;
-			long dot = (long)dx * (long)dirx + (long)dy * (long)diry;
-			long dist = (long)(abs(dx) + abs(dy));
-			long score = dot * 1000 + dist; // prioritize direction strongly, then distance
-			if (score > best_score)
-			{
-				best_score = score;
-				best_idx = idx;
-			}
-		}
-
-		unit_range->ResultLock(false);
-
-		if (best_idx >= 0)
-		{
-			MapXY dst;
-			dst.x = best_idx % x_size;
-			dst.y = best_idx / x_size;
-			StartMove_NoRangeCheck(u, dst);
-		}
+		if (u->panic_turns == 2)
+			panic_units.push_back(u);
 	}
 
 	// If player has no units left -> end game mode
@@ -6378,11 +6326,33 @@ void SpellMap::EndEnemyTurn()
 	}
 
 	// restore selection (only if still alive), otherwise pick first alliance unit
+	MapUnit* desired_selection = nullptr;
 	if (_ptr_in_units_list(units, enemy_turn_prev_selection) && enemy_turn_prev_selection && !enemy_turn_prev_selection->is_enemy)
-		unit_selection = enemy_turn_prev_selection;
+		desired_selection = enemy_turn_prev_selection;
 	else
-		unit_selection = first_alliance;
+		desired_selection = first_alliance;
 
+	// if restored selection is panicking, pick first controllable unit
+	if (desired_selection && desired_selection->panic_turns > 0)
+	{
+		for (auto* u : units)
+		{
+			if (u && !u->is_enemy && u->panic_turns <= 0) { desired_selection = u; break; }
+		}
+	}
+
+	if (!panic_units.empty())
+	{
+		StartPanicTurn(panic_units, desired_selection);
+		g_attack_map_dirty_for = nullptr;
+		enemy_turn_prev_selection = nullptr;
+		enemy_turn_prev_sel_mod = false;
+		ReleaseMap();
+		InvalidateHUDbuttons();
+		return;
+	}
+
+	unit_selection = desired_selection;
 	unit_selection_mod = true;
 
 	// v8: selection restored -> refresh attack map before player acts
@@ -6394,6 +6364,174 @@ void SpellMap::EndEnemyTurn()
 	ReleaseMap();
 
 	InvalidateHUDbuttons();
+}
+
+void SpellMap::StartPanicTurn(const std::vector<MapUnit*>& panic_units, MapUnit* restore_selection)
+{
+	panic_turn_running = true;
+	panic_turn_list = panic_units;
+	panic_turn_idx = 0;
+	panic_turn_restore_selection = restore_selection;
+
+	unit_selection = nullptr;
+	unit_selection_mod = true;
+}
+
+void SpellMap::EndPanicTurn()
+{
+	panic_turn_running = false;
+	panic_turn_list.clear();
+	panic_turn_idx = 0;
+
+	unit_selection = panic_turn_restore_selection;
+	unit_selection_mod = true;
+
+	// v8: selection restored -> refresh attack map before player acts
+	if (unit_selection)
+		unit_view->CalcAttackRange(unit_selection, true);
+
+	g_attack_map_dirty_for = nullptr;
+	panic_turn_restore_selection = nullptr;
+
+	InvalidateHUDbuttons();
+}
+
+bool SpellMap::PanicTurnStep()
+{
+	if (!panic_turn_running)
+		return(false);
+
+	LockMap();
+
+	const bool panic_use_visibility = unit_view && unit_view->view.size() == (size_t)(x_size * y_size);
+
+	while (panic_turn_idx < panic_turn_list.size())
+	{
+		MapUnit* u = panic_turn_list[panic_turn_idx++];
+		if (!u || u->is_enemy || !_ptr_in_units_list(units, u))
+			continue;
+
+		// skip if already busy or has no AP
+		if (IsUnitBusy(u) || u->action_points <= 0)
+		{
+			u->panic_turns = 1;
+			continue;
+		}
+
+		// panic actions are driven by the selected unit state machine -> temporarily select this unit
+		unit_selection = u;
+		unit_selection_mod = true;
+
+		auto tile_blocked = [&](int idx) -> bool
+		{
+			for (auto* other = Lunit[idx]; other; other = other->next)
+			{
+				if (!other || other == u) continue;
+				return true;
+			}
+			return false;
+		};
+
+		// Try to move as far as possible in a random direction. Use StartMove_NoRangeCheck (sync) to respect AP/path rules.
+		int start_angle = rand() & 7;
+		bool moved = false;
+		for (int pass = 0; pass < 8 && !moved; pass++)
+		{
+			int angle = (start_angle + pass) & 7;
+
+			MapXY farPos = u->coor;
+			MapXY cur = u->coor;
+			for (int step = 0; step < 40; step++)
+			{
+				MapXY nxt = GetNeighborTile8D(cur, angle);
+				if (!nxt.IsSelected()) break;
+				cur = nxt;
+				farPos = cur;
+			}
+
+			MapXY trypos = farPos;
+			for (int back = 0; back < 40; back++)
+			{
+				int idx = ConvXY(trypos);
+				if (panic_use_visibility && unit_view->view[idx] < 2)
+				{
+					MapXY prev = GetNeighborTile8D(trypos, (angle + 4) & 7);
+					if (!prev.IsSelected()) break;
+					trypos = prev;
+					continue;
+				}
+
+				if (!tile_blocked(idx) && StartMove_NoRangeCheck(u, trypos))
+				{ moved = true; break; }
+
+				MapXY prev = GetNeighborTile8D(trypos, (angle + 4) & 7);
+				if (!prev.IsSelected()) break;
+				trypos = prev;
+			}
+		}
+
+		if (!moved && unit_range && !IsUnitBusy(u) && u->action_points > 0)
+		{
+			unit_range->FindRange(u);
+			unit_range->ResultLock(true);
+
+			static const int dirs[8][2] = { {1,0},{-1,0},{0,1},{0,-1},{1,1},{-1,-1},{1,-1},{-1,1} };
+			int did = rand() & 7;
+			int dirx = dirs[did][0];
+			int diry = dirs[did][1];
+
+			int best_idx = -1;
+			long best_score = LONG_MIN;
+			int sx = u->coor.x;
+			int sy = u->coor.y;
+			int sidx = ConvXY(u->coor);
+
+			for (int idx = 0; idx < (int)unit_range->ap_left.size(); idx++)
+			{
+				if (idx == sidx) continue;
+				if (unit_range->ap_left[idx] < 0) continue;
+				if (panic_use_visibility && unit_view->view[idx] < 2) continue;
+
+				if (tile_blocked(idx))
+					continue;
+
+				int x = idx % x_size;
+				int y = idx / x_size;
+				int dx = x - sx;
+				int dy = y - sy;
+				long dot = (long)dx * (long)dirx + (long)dy * (long)diry;
+				long dist = (long)(abs(dx) + abs(dy));
+				long score = dot * 1000 + dist;
+				if (score > best_score)
+				{
+					best_score = score;
+					best_idx = idx;
+				}
+			}
+
+			unit_range->ResultLock(false);
+
+			if (best_idx >= 0)
+			{
+				MapXY dst;
+				dst.x = best_idx % x_size;
+				dst.y = best_idx / x_size;
+				if (StartMove_NoRangeCheck(u, dst))
+					moved = true;
+			}
+		}
+
+		u->panic_turns = 1; // panicking for this whole player phase (cannot be selected)
+
+		if (moved)
+		{
+			ReleaseMap();
+			return(true);
+		}
+	}
+
+	ReleaseMap();
+	return(false);
 }
 
 bool SpellMap::EnemyTurnStep()
@@ -6706,6 +6844,115 @@ bool SpellMap::EnemyTurnStep()
 			continue;
 		}
 
+		// 3) scout behavior for air units that must land to attack (Magotar)
+		if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction() &&
+			enemy->unit->attack_light <= 0 && enemy->unit->attack_armored <= 0)
+		{
+			MapUnit* nearest_ground = nullptr;
+			int best_dist = INT_MAX;
+
+			for (auto* u : units)
+			{
+				if (!u || u->is_enemy) continue;
+				if (!u->unit || !u->unit->isLand()) continue;
+
+				int dist = enemy->coor.Distance(u->coor);
+				if (dist < best_dist)
+				{
+					best_dist = dist;
+					nearest_ground = u;
+				}
+			}
+
+			if (nearest_ground)
+			{
+				auto tile_free_for = [&](const MapXY& t) -> bool
+				{
+					if (!(t.x >= 0 && t.y >= 0))
+						return false;
+
+					auto pxy = ConvXY(const_cast<MapXY&>(t));
+					auto tile_unit = Lunit[pxy];
+					while (tile_unit)
+					{
+						if ((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
+							(!enemy->unit->isAir() && !tile_unit->unit->isAir()))
+						{
+							return false;
+						}
+						tile_unit = tile_unit->next;
+					}
+					return true;
+				};
+
+				auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
+				{
+					int ap_saved = enemy->action_points;
+					enemy->action_points = 200000;
+					auto path = unit_range->FindPath(enemy, dest);
+					enemy->action_points = ap_saved;
+					return path;
+				};
+
+				// candidates: neighbors around goal (preferred), and goal itself (if empty)
+				std::vector<MapXY> cand;
+				cand.reserve(9);
+				MapXY goal = nearest_ground->coor;
+
+				for (int dir = 0; dir < 8; dir++)
+				{
+					MapXY t = GetNeighborTile8D(goal, dir);
+					if (tile_free_for(t))
+						cand.push_back(t);
+				}
+				if (tile_free_for(goal))
+					cand.push_back(goal);
+
+				MapXY best_tile;
+				best_tile.Clear();
+				int best_rem = INT_MAX;
+				int best_cost = INT_MAX;
+
+				for (auto& dest : cand)
+				{
+					auto path = find_path_unbounded(dest);
+					if (path.size() < 2)
+						continue;
+
+					// advance as far as possible this turn
+					MapXY advance = enemy->coor;
+					int adv_cost = 0;
+					for (int i = 1; i < (int)path.size(); i++)
+					{
+						if (path[i].g_cost <= enemy->action_points)
+						{
+							advance = path[i].pos;
+							adv_cost = path[i].g_cost;
+						}
+						else
+							break;
+					}
+
+					if (advance == enemy->coor)
+						continue;
+
+					int rem = advance.Distance(goal);
+					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
+					{
+						best_rem = rem;
+						best_cost = adv_cost;
+						best_tile = advance;
+					}
+				}
+
+				if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
+				{
+					ReleaseMap();
+					return(true);
+				}
+			}
+		}
+
 		// not aggroed and no visible target -> keep original behaviour (do nothing)
 		continue;
 	}
@@ -6855,9 +7102,9 @@ MapUnit* SpellMap::CanSelectUnit(MapXY pos)
 	while (unit)
 	{
 		if (unit->unit->isLand() && !unit->is_enemy && unit != unit_selection && unit->panic_turns <= 0)
-				land_unit = unit;
+			land_unit = unit;
 		if (unit->unit->isAir() && !unit->is_enemy && unit != unit_selection && unit->panic_turns <= 0)
-				air_unit = unit;
+			air_unit = unit;
 		unit = unit->next;
 	}
 
@@ -7413,16 +7660,27 @@ int SpellMap::RenderHUDrect(uint8_t* buf, uint8_t* buf_end, int buf_x_size, int 
 // HUD button event handlers
 void SpellMap::OnHUDnextUnit()
 {
-	for (int uid = 0; uid < units.size(); uid++)
+	if (units.empty())
+		return;
+
+	int start_idx = -1;
+	for (int uid = 0; uid < (int)units.size(); uid++)
 	{
 		if (units[uid] == unit_selection)
 		{
-			// current unit found in the list: go to next
-			uid++;
-			if (uid >= units.size())
-				uid = 0;
-			unit_selection = units[uid];
+			start_idx = uid;
+			break;
 		}
+	}
+
+	for (int step = 1; step <= (int)units.size(); step++)
+	{
+		int uid = (start_idx + step) % (int)units.size();
+		auto* candidate = units[uid];
+		if (!candidate || candidate->is_enemy || candidate->panic_turns > 0)
+			continue;
+		SelectUnit(candidate);
+		return;
 	}
 }
 void SpellMap::OnHUDnextUnfinishedUnit()
@@ -9252,6 +9510,26 @@ int SpellMap::Tick()
 	// Refresh it so player can act immediately without �reclick�.
 	unit = GetSelectedUnit();
 
+	// === Panic turn driver ===
+	if (panic_turn_running)
+	{
+		int safety = 0;
+		// if no unit is currently animating, schedule next panic action
+		while (panic_turn_running && (!unit || !IsUnitBusy(unit)) && safety < 50)
+		{
+			if (!PanicTurnStep())
+			{
+				// no more panic actions -> back to player
+				EndPanicTurn();
+				break;
+			}
+			unit = GetSelectedUnit();
+			safety++;
+		}
+	}
+
+	// refresh selection after panic turn
+	unit = GetSelectedUnit();
 
 	// === Game over check: player has no units left in game mode ===
 	if (isGameMode())
@@ -13544,6 +13822,3 @@ int SpellMap::EditClass(vector<MapXY>& selection, SpellTool* tool, std::function
 
 	return(0);
 }
-
-
-

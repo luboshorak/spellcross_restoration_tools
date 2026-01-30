@@ -1035,6 +1035,112 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 	return 0;
 }
 
+int SpellMap::PeekSaveMapPath(const std::wstring& save_path, std::wstring& out_map_path, std::string* out_error)
+{
+	out_map_path.clear();
+	if (out_error) out_error->clear();
+
+	std::ifstream f(std::filesystem::path(save_path), std::ios::in | std::ios::binary);
+	if (!f.good())
+	{
+		if (out_error) *out_error = "Cannot open save file.";
+		return 2;
+	}
+
+	// Read only first part (header should be small)
+	std::string head;
+	head.resize(64 * 1024);
+	f.read(&head[0], (std::streamsize)head.size());
+	head.resize((size_t)f.gcount());
+
+	// header/payload split marker
+	const std::string marker1 = "\n--PAYLOAD--\n";
+	const std::string marker2 = "\r\n--PAYLOAD--\r\n";
+
+	size_t mpos = head.find(marker1);
+	if (mpos == std::string::npos)
+		mpos = head.find(marker2);
+
+	std::string header = (mpos == std::string::npos) ? head : head.substr(0, mpos);
+
+	std::string map_path_s;
+	if (!scsave::ExtractQuotedField2(header, "map_path", map_path_s))
+	{
+		if (out_error) *out_error = "Save header missing map_path.";
+		return 3;
+	}
+
+	out_map_path = std::wstring(map_path_s.begin(), map_path_s.end());
+	return 0;
+}
+
+std::wstring SpellMap::GuessStrategicStatePathFromMapPath(const std::wstring& map_or_def_path)
+{
+	namespace fs = std::filesystem;
+	std::error_code ec;
+
+	fs::path p(map_or_def_path);
+	fs::path dir = p.has_parent_path() ? p.parent_path() : fs::current_path(ec);
+
+	// Most common: strategic_state.json next to the DEF/map
+	fs::path c1 = dir / "strategic_state.json";
+	if (fs::exists(c1, ec))
+		return c1.wstring();
+
+	// Sometimes DEF is in subfolder, try parent
+	if (dir.has_parent_path())
+	{
+		fs::path c2 = dir.parent_path() / "strategic_state.json";
+		if (fs::exists(c2, ec))
+			return c2.wstring();
+	}
+
+	// Fallback: expected location even if not exists yet
+	return c1.wstring();
+}
+
+
+//-----------------------------------------------------------------------------
+// Autosave helpers (used by UI menu: File -> Load current saved level)
+//-----------------------------------------------------------------------------
+std::wstring SpellMap::GetAutoSavePath() const
+{
+	namespace fs = std::filesystem;
+	std::error_code ec;
+
+	// Derive from the map currently loaded by this SpellMap.
+	fs::path base = fs::path(const_cast<SpellMap*>(this)->GetTopPath());
+	if(base.empty())
+		base = fs::current_path(ec);
+
+	fs::path dir = base.has_parent_path() ? base.parent_path() : fs::current_path(ec);
+	std::string stem = base.stem().string();
+	if(stem.empty())
+		stem = "level";
+
+	fs::path out = dir / (stem + ".autosave.scsave");
+	return out.wstring();
+}
+
+int SpellMap::SaveGameStateAuto()
+{
+	return SaveGameStateToFile(GetAutoSavePath());
+}
+
+int SpellMap::LoadGameStateAuto()
+{
+	// If the autosave doesn't exist, set a friendly error.
+	std::filesystem::path p(GetAutoSavePath());
+	std::error_code ec;
+	if(!std::filesystem::exists(p, ec) || !std::filesystem::is_regular_file(p, ec))
+	{
+		last_error = "Autosave file not found for current level.";
+		return 2;
+	}
+	return LoadGameStateFromFile(p.wstring());
+}
+
+
 SpellMap::~SpellMap()
 {
 	// cleanup heap allocated stuff

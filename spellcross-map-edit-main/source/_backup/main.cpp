@@ -32,6 +32,7 @@
 #include <tuple>
 #include <string>
 #include <chrono>
+#include <cctype>
 #include <future>
 #include <thread>
 #include <memory>
@@ -48,6 +49,81 @@
 #include <wx/msgdlg.h>
 #include <wx/busyinfo.h>
 #include "forms/form_level.h"
+
+#include <cctype>
+#include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
+
+namespace
+{
+
+    static std::string to_lower(std::string s)
+    {
+        for (char& ch : s)
+        {
+            const unsigned char uch = static_cast<unsigned char>(ch);
+            ch = static_cast<char>(std::tolower(uch));
+        }
+        return s;
+    }
+
+    static std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path& dir,
+        const std::string& wanted)
+    {
+        namespace fs = std::filesystem;
+
+        std::error_code ec;
+        if (!fs::exists(dir, ec) || ec)
+            return {};
+        if (!fs::is_directory(dir, ec) || ec)
+            return {};
+
+        const std::string w = to_lower(wanted);
+
+        // skip_permission_denied = ať to nezdechne na právech
+        for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
+        {
+            if (ec)
+                break;
+
+            if (!de.is_regular_file(ec) || ec)
+            {
+                ec.clear();
+                continue;
+            }
+
+            const std::string fn = to_lower(de.path().filename().string());
+            if (fn == w)
+                return de.path();
+        }
+
+        return {};
+    }
+
+    static std::filesystem::path FindSpellDataFile(const std::filesystem::path& root,
+        const std::string& filename)
+    {
+        const std::vector<std::filesystem::path> candidates = {
+            root,
+            root / "DATA",
+            root / "COMMON",
+            root / "DATA" / "COMMON",
+            root / "CD",
+            root / "DATA" / "CD",
+        };
+
+        for (const auto& dir : candidates)
+        {
+            auto found = FindFileCaseInsensitive(dir, filename);
+            if (!found.empty())
+                return found;
+        }
+        return {};
+    }
+
+} // namespace
 
 bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)
 {
@@ -116,6 +192,67 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
 
     return true;
 }
+
+void MainFrame::SetGameModeUI(bool enable_game_mode)
+{
+    if(!spell_map || !spell_map->IsLoaded())
+        return;
+
+    // Keep menu state in sync (if menu exists)
+    if(GetMenuBar())
+    {
+        if(auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
+            item->Check(enable_game_mode);
+    }
+
+    spell_map->SetGameMode(enable_game_mode);
+    if(canvas)
+        canvas->Refresh();
+
+    if(enable_game_mode)
+    {
+        // switch to game mode
+        if(ribbonBar)
+            ribbonBar->HidePanels();
+
+        if(menuView)
+        {
+            if(menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
+            if(menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
+            if(menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
+        }
+
+        wxCommandEvent dummy;
+        OnViewLayer(dummy);
+
+        // reset map runtime state
+        if(spell_map->saves)
+            spell_map->saves->Clear();
+        if(spell_map->events)
+            spell_map->events->ResetEvents();
+        if(spell_map->saves)
+            spell_map->saves->SaveInitial();
+
+        // exec initial events
+        spell_map->MissionStartEvent();
+
+        // reset units view/attack ranges
+        if(spell_map->unit_view)
+        {
+            spell_map->unit_view->ClearEvents();
+            spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
+            spell_map->unit_view->AddUnitsView();
+        }
+    }
+    else
+    {
+        // switch to editor mode
+        if(spell_map->saves)
+            spell_map->saves->LoadInitial();
+        spell_map->ResetUnitEvents();
+    }
+}
+
 
 void MainFrame::OnOpenLevelDef(wxCommandEvent& ev)
 {
@@ -260,6 +397,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     form_minimap = NULL;
     form_units_list = NULL;
     form_sounds = NULL;
+    form_mmenu = NULL;
         
     // File menu
     wxMenu* menuFile = new wxMenu;
@@ -268,6 +406,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     menuFile->Append(ID_SaveDTA,"&Save DTA map file","Save Spellcross map DTA file.");
     menuFile->Append(ID_SaveDEF,"&Save DEF map file","Save Spellcross map DEF file.");
     menuFile->Append(ID_NewMap,"&Ceate new Map\tCtrl-N","Create new map.");
+    menuFile->Append(ID_MainMenu,"Main &menu\tCtrl-M","Open main game menu.");
     menuFile->AppendSeparator();
     menuFile->Append(ID_OpenLevelDef, "Open &Level DEF...\tCtrl-L", "Open strategic level definition (.DEF).");
     menuFile->Append(wxID_EXIT);
@@ -447,6 +586,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     Bind(wxEVT_MENU,&MainFrame::OnSaveDTA,this,ID_SaveDTA);
     Bind(wxEVT_MENU,&MainFrame::OnSaveDEF,this,ID_SaveDEF);
     Bind(wxEVT_MENU,&MainFrame::OnNewMap,this,ID_NewMap);
+    Bind(wxEVT_MENU,&MainFrame::OnOpenMainMenu,this,ID_MainMenu);
 	Bind(wxEVT_MENU, &MainFrame::OnOpenLevelDef, this, ID_OpenLevelDef);
     Bind(wxEVT_MENU,&MainFrame::OnAbout, this, wxID_ABOUT);
     Bind(wxEVT_MENU,&MainFrame::OnExit, this, wxID_EXIT);
@@ -786,6 +926,11 @@ void MainFrame::OnClose(wxCloseEvent& ev)
         delete form_units_list;
         form_units_list = NULL;
     }
+    else if(ev.GetId() == ID_MMENU_WIN && form_mmenu)
+    {
+        delete form_mmenu;
+        form_mmenu = NULL;
+    }
     else
         ev.Skip();
 }
@@ -798,37 +943,15 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
         return;
 
     auto is_game = GetMenuBar()->FindItem(ID_mmGameMode)->IsChecked();
-    spell_map->SetGameMode(is_game);
-    canvas->Refresh();
-    if(is_game)
-    {
-        // switch to game mode
-        ribbonBar->HidePanels();        
-        menuView->FindItem(ID_ViewSoundLoops)->Check(false);
-        menuView->FindItem(ID_ViewSounds)->Check(false);
-        menuView->FindItem(ID_ViewEvents)->Check(false);
-        OnViewLayer(event);
-
-        // reset map
-        spell_map->saves->Clear();
-        spell_map->events->ResetEvents();
-        spell_map->saves->SaveInitial();        
-        // exec initial events
-        spell_map->MissionStartEvent();
-        // reset units view/attack ranges
-        spell_map->unit_view->ClearEvents();
-        spell_map->unit_view->ClearUnitsView(SpellMap::ViewRange::ClearMode::RESET);
-        spell_map->unit_view->AddUnitsView();
-    }
-    else
-    {
-        // switch to editor mode
-        spell_map->saves->LoadInitial();
-        spell_map->ResetUnitEvents();
-    }
+    SetGameModeUI(is_game);
 }
 
 void MainFrame::OnLoadGameState(wxCommandEvent& event)
+{
+    LoadGameStateFromDialog();
+}
+
+bool MainFrame::LoadGameStateFromDialog()
 {
     wxFileDialog openFileDialog(
         this,
@@ -840,7 +963,7 @@ void MainFrame::OnLoadGameState(wxCommandEvent& event)
     );
 
     if (openFileDialog.ShowModal() == wxID_CANCEL)
-        return;
+        return false;
 
     wxString path = openFileDialog.GetPath();
     std::wstring wpath = path.ToStdWstring();
@@ -850,7 +973,90 @@ void MainFrame::OnLoadGameState(wxCommandEvent& event)
     {
         wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()),
             "Load error", wxICON_ERROR | wxOK, this);
+        return false;
     }
+
+    return true;
+}
+
+void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
+{
+    if(form_mmenu)
+        return;
+
+    if(!canvas)
+        return;
+
+    form_mmenu = new FormMainMenu(canvas, ID_MMENU_WIN, spell_map,
+        [this](FormMainMenuAction action) { OnMainMenuAction(action); });
+}
+
+void MainFrame::OnMainMenuAction(FormMainMenuAction action)
+{
+    auto close_menu = [this]() {
+        if(form_mmenu)
+        {
+            delete form_mmenu;
+            form_mmenu = NULL;
+        }
+    };
+
+    switch(action)
+    {
+        case FormMainMenuAction::NewGame:
+        {
+            if(!spell_data)
+                break;
+            std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
+            auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
+            if(def_path.empty())
+            {
+                wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                break;
+            }
+            if(LoadMapFromDefPath(def_path.wstring(), {}))
+                SetGameModeUI(true);
+            break;
+        }
+        case FormMainMenuAction::Continue:
+        {
+            if(!spell_map || !spell_map->IsLoaded())
+            {
+                wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                break;
+            }
+            wstring path = spell_map->GetTopPath();
+            if(path.empty())
+            {
+                wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
+                break;
+            }
+            if(LoadMapFromDefPath(path, {}))
+                SetGameModeUI(true);
+            break;
+        }
+        case FormMainMenuAction::LoadGame:
+        {
+            if(LoadGameStateFromDialog())
+                SetGameModeUI(true);
+            break;
+        }
+        case FormMainMenuAction::Credits:
+            wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+            break;
+        case FormMainMenuAction::Intro:
+            wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+            break;
+        case FormMainMenuAction::Exit:
+            if(spell_map)
+                spell_map->Close();
+            Close(true);
+            break;
+        default:
+            break;
+    }
+
+    close_menu();
 }
 
 // on reset view range in game mode

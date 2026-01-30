@@ -51,6 +51,7 @@
     <ClCompile Include="forms\form_unit_options.cpp" />
     <ClCompile Include="forms\form_video.cpp" />
     <ClCompile Include="forms\form_video_box.cpp" />
+    <ClCompile Include="form_strategic.cpp" />
     <ClCompile Include="fsu_archive.cpp" />
     <ClCompile Include="fs_archive.cpp" />
     <ClCompile Include="level.cpp" />
@@ -119,6 +120,7 @@
     <ClInclude Include="forms\form_unit_options.h" />
     <ClInclude Include="forms\form_video.h" />
     <ClInclude Include="forms\form_video_box.h" />
+    <ClInclude Include="form_strategic.h" />
     <ClInclude Include="fsu_archive.h" />
     <ClInclude Include="fs_archive.h" />
     <ClInclude Include="level.h" />

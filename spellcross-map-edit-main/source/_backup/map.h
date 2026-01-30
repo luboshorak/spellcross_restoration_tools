@@ -59,7 +59,7 @@ public:
 
 	//MapSprite(Sprite* sprite);
 	MapSprite();
-	~MapSprite();
+	virtual ~MapSprite();
 
 	void SetL1(Sprite* sprite,int elev=-1);
 	void SetL2(Sprite* sprite,int flags=-1);
@@ -238,11 +238,19 @@ class SpellMap
 		size_t enemy_turn_idx = 0;
 		MapUnit* enemy_turn_prev_selection = nullptr;
 		int enemy_turn_prev_sel_mod = false;
+		// panic turn state (player units fleeing automatically)
+		bool panic_turn_running = false;
+		std::vector<MapUnit*> panic_turn_list;
+		size_t panic_turn_idx = 0;
+		MapUnit* panic_turn_restore_selection = nullptr;
 
 		// enemy turn helpers (implemented in map.cpp)
 		void StartEnemyTurn();
 		void EndEnemyTurn();
 		bool EnemyTurnStep();
+		void StartPanicTurn(const std::vector<MapUnit*>& panic_units, MapUnit* restore_selection);
+		void EndPanicTurn();
+		bool PanicTurnStep();
 		bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
 		bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
 		bool IsUnitBusy(MapUnit* unit);
@@ -384,10 +392,10 @@ class SpellMap
 
 		std::string GetLastError() {return last_error;};
 
-		// Pøidejte deklaraci metody do veøejné sekce tøídy SpellMap:
+		// PÃ¸idejte deklaraci metody do veÃ¸ejnÃ© sekce tÃ¸Ã­dy SpellMap:
 		void SetDeploymentMode(bool on);
 
-		// Pøidejte deklaraci metody do veøejné sekce tøídy SpellMap:
+		// PÃ¸idejte deklaraci metody do veÃ¸ejnÃ© sekce tÃ¸Ã­dy SpellMap:
 		bool IsDeploymentMode() const;
 
 		// message box stuff
@@ -405,6 +413,7 @@ class SpellMap
 		void HaltUnitRanging(bool clear_tasks=false);
 		void ResumeUnitRanging(bool resume=true);
 
+		void AggroEnemiesAround(MapXY center, MapXY attacker_pos, int attacker_id, int radius, int ttl);
 
 		// default scroller
 		TScroll scroller;

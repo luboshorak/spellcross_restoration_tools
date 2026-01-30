@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
@@ -52,7 +53,7 @@ private:
     std::wstring ResolveMapDefPathForMissionToken(const std::string& mission_token) const;
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
-private:
+public:
     MainFrame* m_main = nullptr;
     SpellData* m_spellData = nullptr;
     LevelData m_level;
@@ -62,6 +63,17 @@ private:
     int m_money = 0;
     int m_research = 0;
     int m_selectedTerritory = -1;
+
+    // Player progression (saved in strategic_state.json)
+    struct PlayerProgress
+    {
+        std::string name = "John Alexander";
+        int rank = 0;
+        int experience = 0;
+        int actions = 0;
+    };
+
+    PlayerProgress m_player;
 
     // per-territory state: current mission token + number of launches
     std::unordered_map<int, std::string> m_territoryCurrentMission;
