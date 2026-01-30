@@ -6844,6 +6844,115 @@ bool SpellMap::EnemyTurnStep()
 			continue;
 		}
 
+		// 3) scout behavior for air units that must land to attack (Magotar)
+		if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction() &&
+			enemy->unit->attack_light <= 0 && enemy->unit->attack_armored <= 0)
+		{
+			MapUnit* nearest_ground = nullptr;
+			int best_dist = INT_MAX;
+
+			for (auto* u : units)
+			{
+				if (!u || u->is_enemy) continue;
+				if (!u->unit || !u->unit->isLand()) continue;
+
+				int dist = enemy->coor.Distance(u->coor);
+				if (dist < best_dist)
+				{
+					best_dist = dist;
+					nearest_ground = u;
+				}
+			}
+
+			if (nearest_ground)
+			{
+				auto tile_free_for = [&](const MapXY& t) -> bool
+				{
+					if (!(t.x >= 0 && t.y >= 0))
+						return false;
+
+					auto pxy = ConvXY(const_cast<MapXY&>(t));
+					auto tile_unit = Lunit[pxy];
+					while (tile_unit)
+					{
+						if ((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
+							(!enemy->unit->isAir() && !tile_unit->unit->isAir()))
+						{
+							return false;
+						}
+						tile_unit = tile_unit->next;
+					}
+					return true;
+				};
+
+				auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
+				{
+					int ap_saved = enemy->action_points;
+					enemy->action_points = 200000;
+					auto path = unit_range->FindPath(enemy, dest);
+					enemy->action_points = ap_saved;
+					return path;
+				};
+
+				// candidates: neighbors around goal (preferred), and goal itself (if empty)
+				std::vector<MapXY> cand;
+				cand.reserve(9);
+				MapXY goal = nearest_ground->coor;
+
+				for (int dir = 0; dir < 8; dir++)
+				{
+					MapXY t = GetNeighborTile8D(goal, dir);
+					if (tile_free_for(t))
+						cand.push_back(t);
+				}
+				if (tile_free_for(goal))
+					cand.push_back(goal);
+
+				MapXY best_tile;
+				best_tile.Clear();
+				int best_rem = INT_MAX;
+				int best_cost = INT_MAX;
+
+				for (auto& dest : cand)
+				{
+					auto path = find_path_unbounded(dest);
+					if (path.size() < 2)
+						continue;
+
+					// advance as far as possible this turn
+					MapXY advance = enemy->coor;
+					int adv_cost = 0;
+					for (int i = 1; i < (int)path.size(); i++)
+					{
+						if (path[i].g_cost <= enemy->action_points)
+						{
+							advance = path[i].pos;
+							adv_cost = path[i].g_cost;
+						}
+						else
+							break;
+					}
+
+					if (advance == enemy->coor)
+						continue;
+
+					int rem = advance.Distance(goal);
+					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
+					{
+						best_rem = rem;
+						best_cost = adv_cost;
+						best_tile = advance;
+					}
+				}
+
+				if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
+				{
+					ReleaseMap();
+					return(true);
+				}
+			}
+		}
+
 		// not aggroed and no visible target -> keep original behaviour (do nothing)
 		continue;
 	}
