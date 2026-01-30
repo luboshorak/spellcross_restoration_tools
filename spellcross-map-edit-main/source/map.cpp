@@ -6302,11 +6302,135 @@ void SpellMap::EndEnemyTurn()
 
 	// === PANIC: player units with morale==0 flee uncontrollably for one player phase ===
 	// panic_turns meanings: 2=pending flee (execute now), 1=panicking (cannot be controlled), 0=normal
-	const bool panic_use_visibility = unit_view && unit_view->view.size() == (size_t)(x_size * y_size);
+	std::vector<MapUnit*> panic_units;
+	panic_units.reserve(units.size());
 	for (auto* u : units)
 	{
 		if (!u || u->is_enemy) continue;
-		if (u->panic_turns != 2) continue;
+		if (u->panic_turns == 2)
+			panic_units.push_back(u);
+	}
+
+	// If player has no units left -> end game mode
+	if (!has_alliance)
+	{
+		unit_selection = nullptr;
+		unit_selection_mod = true;
+		enemy_turn_prev_selection = nullptr;
+		enemy_turn_prev_sel_mod = false;
+		ReleaseMap();
+
+		SetGameMode(0); // exits game mode
+		InvalidateHUDbuttons();
+		return;
+	}
+
+	// restore selection (only if still alive), otherwise pick first alliance unit
+	MapUnit* desired_selection = nullptr;
+	if (_ptr_in_units_list(units, enemy_turn_prev_selection) && enemy_turn_prev_selection && !enemy_turn_prev_selection->is_enemy)
+		desired_selection = enemy_turn_prev_selection;
+	else
+		desired_selection = first_alliance;
+
+	// if restored selection is panicking, pick first controllable unit
+	if (desired_selection && desired_selection->panic_turns > 0)
+	{
+		for (auto* u : units)
+		{
+			if (u && !u->is_enemy && u->panic_turns <= 0) { desired_selection = u; break; }
+		}
+	}
+
+	if (!panic_units.empty())
+	{
+		StartPanicTurn(panic_units, desired_selection);
+		g_attack_map_dirty_for = nullptr;
+		enemy_turn_prev_selection = nullptr;
+		enemy_turn_prev_sel_mod = false;
+		ReleaseMap();
+		InvalidateHUDbuttons();
+		return;
+	}
+
+	unit_selection = desired_selection;
+	unit_selection_mod = true;
+
+	// v8: selection restored -> refresh attack map before player acts
+	if (unit_selection)
+		unit_view->CalcAttackRange(unit_selection, true);
+	g_attack_map_dirty_for = nullptr;enemy_turn_prev_selection = nullptr;
+	enemy_turn_prev_sel_mod = false;
+
+	ReleaseMap();
+
+	InvalidateHUDbuttons();
+}
+
+void SpellMap::StartPanicTurn(const std::vector<MapUnit*>& panic_units, MapUnit* restore_selection)
+{
+	panic_turn_running = true;
+	panic_turn_list = panic_units;
+	panic_turn_idx = 0;
+	panic_turn_restore_selection = restore_selection;
+
+	unit_selection = nullptr;
+	unit_selection_mod = true;
+}
+
+void SpellMap::EndPanicTurn()
+{
+	panic_turn_running = false;
+	panic_turn_list.clear();
+	panic_turn_idx = 0;
+
+	unit_selection = panic_turn_restore_selection;
+	unit_selection_mod = true;
+
+	// v8: selection restored -> refresh attack map before player acts
+	if (unit_selection)
+		unit_view->CalcAttackRange(unit_selection, true);
+
+	g_attack_map_dirty_for = nullptr;
+	panic_turn_restore_selection = nullptr;
+
+	InvalidateHUDbuttons();
+}
+
+bool SpellMap::PanicTurnStep()
+{
+	if (!panic_turn_running)
+		return(false);
+
+	LockMap();
+
+	const bool panic_use_visibility = unit_view && unit_view->view.size() == (size_t)(x_size * y_size);
+
+	while (panic_turn_idx < panic_turn_list.size())
+	{
+		MapUnit* u = panic_turn_list[panic_turn_idx++];
+		if (!u || u->is_enemy || !_ptr_in_units_list(units, u))
+			continue;
+
+		// skip if already busy or has no AP
+		if (IsUnitBusy(u) || u->action_points <= 0)
+		{
+			u->panic_turns = 1;
+			continue;
+		}
+
+		// panic actions are driven by the selected unit state machine -> temporarily select this unit
+		unit_selection = u;
+		unit_selection_mod = true;
+
+		auto tile_blocked = [&](int idx) -> bool
+		{
+			for (auto* other = Lunit[idx]; other; other = other->next)
+			{
+				if (!other || other == u) continue;
+				return true;
+			}
+			return false;
+		};
 
 		// Try to move as far as possible in a random direction. Use StartMove_NoRangeCheck (sync) to respect AP/path rules.
 		int start_angle = rand() & 7;
@@ -6337,17 +6461,7 @@ void SpellMap::EndEnemyTurn()
 					continue;
 				}
 
-				// skip if occupied by enemy or same movement class
-				bool blocked = false;
-				for (auto* other = Lunit[idx]; other; other = other->next)
-				{
-					if (!other || other == u) continue;
-					if (other->is_enemy)
-					{ blocked = true; break; }
-					if ((u->unit->isAir() && other->unit->isAir()) || (u->unit->isLand() && other->unit->isLand()))
-					{ blocked = true; break; }
-				}
-				if (!blocked && StartMove_NoRangeCheck(u, trypos))
+				if (!tile_blocked(idx) && StartMove_NoRangeCheck(u, trypos))
 				{ moved = true; break; }
 
 				MapXY prev = GetNeighborTile8D(trypos, (angle + 4) & 7);
@@ -6378,16 +6492,8 @@ void SpellMap::EndEnemyTurn()
 				if (unit_range->ap_left[idx] < 0) continue;
 				if (panic_use_visibility && unit_view->view[idx] < 2) continue;
 
-				bool blocked = false;
-				for (auto* other = Lunit[idx]; other; other = other->next)
-				{
-					if (!other || other == u) continue;
-					if (other->is_enemy)
-					{ blocked = true; break; }
-					if ((u->unit->isAir() && other->unit->isAir()) || (u->unit->isLand() && other->unit->isLand()))
-					{ blocked = true; break; }
-				}
-				if (blocked) continue;
+				if (tile_blocked(idx))
+					continue;
 
 				int x = idx % x_size;
 				int y = idx / x_size;
@@ -6416,50 +6522,16 @@ void SpellMap::EndEnemyTurn()
 		}
 
 		u->panic_turns = 1; // panicking for this whole player phase (cannot be selected)
-	}
 
-
-
-	// If player has no units left -> end game mode
-	if (!has_alliance)
-	{
-		unit_selection = nullptr;
-		unit_selection_mod = true;
-		enemy_turn_prev_selection = nullptr;
-		enemy_turn_prev_sel_mod = false;
-		ReleaseMap();
-
-		SetGameMode(0); // exits game mode
-		InvalidateHUDbuttons();
-		return;
-	}
-
-	// restore selection (only if still alive), otherwise pick first alliance unit
-	if (_ptr_in_units_list(units, enemy_turn_prev_selection) && enemy_turn_prev_selection && !enemy_turn_prev_selection->is_enemy)
-		unit_selection = enemy_turn_prev_selection;
-	else
-		unit_selection = first_alliance;
-
-	// if restored selection is panicking, pick first controllable unit
-	if (unit_selection && unit_selection->panic_turns > 0)
-	{
-		for (auto* u : units)
+		if (moved)
 		{
-			if (u && !u->is_enemy && u->panic_turns <= 0) { unit_selection = u; break; }
+			ReleaseMap();
+			return(true);
 		}
 	}
 
-	unit_selection_mod = true;
-
-	// v8: selection restored -> refresh attack map before player acts
-	if (unit_selection)
-		unit_view->CalcAttackRange(unit_selection, true);
-	g_attack_map_dirty_for = nullptr;enemy_turn_prev_selection = nullptr;
-	enemy_turn_prev_sel_mod = false;
-
 	ReleaseMap();
-
-	InvalidateHUDbuttons();
+	return(false);
 }
 
 bool SpellMap::EnemyTurnStep()
@@ -9329,6 +9401,26 @@ int SpellMap::Tick()
 	// Refresh it so player can act immediately without �reclick�.
 	unit = GetSelectedUnit();
 
+	// === Panic turn driver ===
+	if (panic_turn_running)
+	{
+		int safety = 0;
+		// if no unit is currently animating, schedule next panic action
+		while (panic_turn_running && (!unit || !IsUnitBusy(unit)) && safety < 50)
+		{
+			if (!PanicTurnStep())
+			{
+				// no more panic actions -> back to player
+				EndPanicTurn();
+				break;
+			}
+			unit = GetSelectedUnit();
+			safety++;
+		}
+	}
+
+	// refresh selection after panic turn
+	unit = GetSelectedUnit();
 
 	// === Game over check: player has no units left in game mode ===
 	if (isGameMode())
