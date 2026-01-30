@@ -2042,11 +2042,12 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 		else
 		{
 			// optional AoE around the struck target (fear-like behavior)
+			const MapXY center = (act == SpellUnitRec::SPEC_ACT_PARALYZE) ? this->coor : target->coor;
 			for (auto* u : map->units)
 			{
 				if (!u) continue;
 				if (u->is_enemy == this->is_enemy) continue;
-				if (u->coor.Distance(target->coor) > radius) continue;
+				if (u->coor.Distance(center) > radius) continue;
 				u->UpdateModale(-drop);
 			}
 		}
