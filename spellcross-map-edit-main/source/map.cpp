@@ -22,6 +22,7 @@
 #include <regex>
 #include <tuple>
 #include <algorithm>
+#include <unordered_map>
 #include <random>
 #include <chrono>
 #include <climits>
@@ -36,6 +37,40 @@
 #include <type_traits>
 #include <sstream>
 #include <cstring>
+
+
+namespace
+{
+    // For enemy movement: update ONLY the enemy unit's visibility based on the player's current view mask,
+    // without overwriting unit_view->view (which would reveal the map).
+    static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
+    {
+        if (!map || !unit_view || !enemy)
+            return;
+
+        int mxy = map->ConvXY(enemy->coor);
+        if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
+            return;
+
+        const bool currently_visible = (unit_view->view[mxy] == 2);
+
+        if (currently_visible)
+        {
+            if (enemy->is_visible < 2 && new_contact)
+                *new_contact = 1;
+
+            enemy->is_visible = 2;
+            enemy->was_seen = true;
+        }
+        else
+        {
+            // was visible -> degrade to "known but not currently visible"
+            if (enemy->is_visible > 1)
+                enemy->is_visible = 1;
+        }
+    }
+} // namespace
+
 
 namespace scsave
 {
@@ -6633,8 +6668,28 @@ bool SpellMap::EnemyTurnStep()
 							return false;
 						};
 
-					// can we land right here?
-					bool can_land_here = !has_land_unit(enemy->coor);
+					// can we land right here? (no stacked land unit + terrain/object must allow the LAND morph)
+					auto can_land_at = [&](const MapXY& t) -> bool
+					{
+						if (!const_cast<MapXY&>(t).IsSelected())
+							return false;
+
+						if (has_land_unit(t))
+							return false;
+
+						// land-unit obstacle rules must use the *morphed* type (walk/hover)
+						auto pxy = ConvXY(const_cast<MapXY&>(t));
+						if (!morph_type->isWalk() && tiles[pxy].flags == 0x90)
+							return false;
+						if (!morph_type->isHover() && tiles[pxy].flags == 0x60)
+							return false;
+						if (tiles[pxy].flags && tiles[pxy].flags != 0x90 && tiles[pxy].flags != 0x60)
+							return false;
+
+						return true;
+					};
+
+					bool can_land_here = can_land_at(enemy->coor);
 
 					if (can_land_here)
 					{
@@ -6679,8 +6734,9 @@ bool SpellMap::EnemyTurnStep()
 						if (!land_tile.IsSelected())
 							continue;
 
-						// must be landable (no land unit on it), and air-move must not collide with another air unit
-						if (has_land_unit(land_tile))
+						// must be landable (no stacked land unit + terrain/object must allow landing),
+						// and air-move must not collide with another air unit
+						if (!can_land_at(land_tile))
 							continue;
 						if (has_air_unit_other(land_tile))
 							continue;
@@ -6838,117 +6894,198 @@ bool SpellMap::EnemyTurnStep()
 			continue;
 		}
 
-		// 3) scout behavior for air units that must land to attack (Magotar)
-		if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction() &&
-			enemy->unit->attack_light <= 0 && enemy->unit->attack_armored <= 0)
+// 3) scout behavior for air units that must land to attack (Magotar)
+// - default: patrol around spawn/home (perimeter scouting)
+// - engage only when player ground unit is close enough (prevents "bee-line" across the whole map)
+if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction() &&
+	enemy->unit->attack_light <= 0 && enemy->unit->attack_armored <= 0)
+{
+	MapUnit* nearest_ground = nullptr;
+	int best_dist = INT_MAX;
+
+	for (auto* u : units)
+	{
+		if (!u || u->is_enemy) continue;
+		if (!u->unit || !u->unit->isLand()) continue;
+
+		int dist = enemy->coor.Distance(u->coor);
+		if (dist < best_dist)
 		{
-			MapUnit* nearest_ground = nullptr;
-			int best_dist = INT_MAX;
+			best_dist = dist;
+			nearest_ground = u;
+		}
+	}
 
-			for (auto* u : units)
+	auto tile_free_for_air = [&](const MapXY& t) -> bool
+	{
+		if (!const_cast<MapXY&>(t).IsSelected())
+			return false;
+
+		auto pxy = ConvXY(const_cast<MapXY&>(t));
+		auto tile_unit = Lunit[pxy];
+		while (tile_unit)
+		{
+			// air units can't stack with other air units
+			if (tile_unit != enemy && tile_unit->unit && tile_unit->unit->isAir())
+				return false;
+
+			tile_unit = tile_unit->next;
+		}
+		return true;
+	};
+
+	auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
+	{
+		int ap_saved = enemy->action_points;
+		enemy->action_points = 200000;
+		auto path = unit_range->FindPath(enemy, dest);
+		enemy->action_points = ap_saved;
+		return path;
+	};
+
+	// engage only when close (or if already aggroed by attack logic above)
+	const int AGGRO_DIST = 6;
+	const bool engage = (nearest_ground && best_dist <= AGGRO_DIST);
+
+	if (engage)
+	{
+		// close enough -> approach the nearest ground unit (to set up landing next turn)
+		std::vector<MapXY> cand;
+		cand.reserve(9);
+		MapXY goal = nearest_ground->coor;
+
+		for (int dir = 0; dir < 8; dir++)
+		{
+			MapXY t = GetNeighborTile8D(goal, dir);
+			if (tile_free_for_air(t))
+				cand.push_back(t);
+		}
+		if (tile_free_for_air(goal))
+			cand.push_back(goal);
+
+		MapXY best_tile;
+		best_tile.Clear();
+		int best_rem = INT_MAX;
+		int best_cost = INT_MAX;
+
+		for (auto& dest : cand)
+		{
+			auto path = find_path_unbounded(dest);
+			if (path.size() < 2)
+				continue;
+
+			// advance as far as possible this turn
+			MapXY advance = enemy->coor;
+			int adv_cost = 0;
+			for (int i = 1; i < (int)path.size(); i++)
 			{
-				if (!u || u->is_enemy) continue;
-				if (!u->unit || !u->unit->isLand()) continue;
-
-				int dist = enemy->coor.Distance(u->coor);
-				if (dist < best_dist)
+				if (path[i].g_cost <= enemy->action_points)
 				{
-					best_dist = dist;
-					nearest_ground = u;
+					advance = path[i].pos;
+					adv_cost = path[i].g_cost;
 				}
+				else
+					break;
 			}
 
-			if (nearest_ground)
+			if (advance == enemy->coor)
+				continue;
+
+			int rem = advance.Distance(goal);
+			if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
 			{
-				auto tile_free_for = [&](const MapXY& t) -> bool
+				best_rem = rem;
+				best_cost = adv_cost;
+				best_tile = advance;
+			}
+		}
+
+		if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
+		{
+			ReleaseMap();
+			return(true);
+		}
+	}
+	else
+	{
+		// far away -> perimeter patrol around home
+		struct PatrolState
+		{
+			MapXY home;
+			MapXY waypoint;
+			int radius = 8;
+			int stuck = 0;
+		};
+
+		static std::unordered_map<int, PatrolState> magotar_patrol;
+
+		auto& st = magotar_patrol[enemy->id];
+		if (!st.home.IsSelected())
+		{
+			st.home = enemy->coor;
+			st.waypoint.Clear();
+			st.radius = 8;
+			st.stuck = 0;
+		}
+
+		auto pick_waypoint = [&]() -> MapXY
+		{
+			for (int tries = 0; tries < 40; ++tries)
+			{
+				int dx = (rand() % (2 * st.radius + 1)) - st.radius;
+				int dy = (rand() % (2 * st.radius + 1)) - st.radius;
+				MapXY t(st.home.x + dx, st.home.y + dy);
+
+				if (!t.IsSelected())
+					continue;
+				if (st.home.Distance(t) < 2 || st.home.Distance(t) > st.radius)
+					continue;
+				if (!tile_free_for_air(t))
+					continue;
+
+				auto path = find_path_unbounded(t);
+				if (path.size() < 2)
+					continue;
+
+				return t;
+			}
+			MapXY none; none.Clear(); return none;
+		};
+
+		if (!st.waypoint.IsSelected() || enemy->coor.Distance(st.waypoint) <= 1 || st.stuck >= 3)
+		{
+			st.waypoint = pick_waypoint();
+			st.stuck = 0;
+		}
+
+		if (st.waypoint.IsSelected())
+		{
+			auto path = find_path_unbounded(st.waypoint);
+			if (path.size() >= 2)
+			{
+				MapXY advance = enemy->coor;
+				for (int i = 1; i < (int)path.size(); i++)
 				{
-					if (!(t.x >= 0 && t.y >= 0))
-						return false;
-
-					auto pxy = ConvXY(const_cast<MapXY&>(t));
-					auto tile_unit = Lunit[pxy];
-					while (tile_unit)
-					{
-						if ((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
-							(!enemy->unit->isAir() && !tile_unit->unit->isAir()))
-						{
-							return false;
-						}
-						tile_unit = tile_unit->next;
-					}
-					return true;
-				};
-
-				auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
-				{
-					int ap_saved = enemy->action_points;
-					enemy->action_points = 200000;
-					auto path = unit_range->FindPath(enemy, dest);
-					enemy->action_points = ap_saved;
-					return path;
-				};
-
-				// candidates: neighbors around goal (preferred), and goal itself (if empty)
-				std::vector<MapXY> cand;
-				cand.reserve(9);
-				MapXY goal = nearest_ground->coor;
-
-				for (int dir = 0; dir < 8; dir++)
-				{
-					MapXY t = GetNeighborTile8D(goal, dir);
-					if (tile_free_for(t))
-						cand.push_back(t);
+					if (path[i].g_cost <= enemy->action_points)
+						advance = path[i].pos;
+					else
+						break;
 				}
-				if (tile_free_for(goal))
-					cand.push_back(goal);
 
-				MapXY best_tile;
-				best_tile.Clear();
-				int best_rem = INT_MAX;
-				int best_cost = INT_MAX;
-
-				for (auto& dest : cand)
-				{
-					auto path = find_path_unbounded(dest);
-					if (path.size() < 2)
-						continue;
-
-					// advance as far as possible this turn
-					MapXY advance = enemy->coor;
-					int adv_cost = 0;
-					for (int i = 1; i < (int)path.size(); i++)
-					{
-						if (path[i].g_cost <= enemy->action_points)
-						{
-							advance = path[i].pos;
-							adv_cost = path[i].g_cost;
-						}
-						else
-							break;
-					}
-
-					if (advance == enemy->coor)
-						continue;
-
-					int rem = advance.Distance(goal);
-					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
-					{
-						best_rem = rem;
-						best_cost = adv_cost;
-						best_tile = advance;
-					}
-				}
-
-				if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
+				if (advance == enemy->coor)
+					st.stuck++;
+				else if (StartMove_NoRangeCheck(enemy, advance))
 				{
 					ReleaseMap();
 					return(true);
 				}
 			}
 		}
+	}
+}
 
-		// not aggroed and no visible target -> keep original behaviour (do nothing)
-		continue;
+// not aggroed and no visible target -> keep original behaviour (do nothing)
+continue;
 	}
 
 	ReleaseMap();
@@ -9603,8 +9740,9 @@ int SpellMap::Tick()
 					// update view of all but this unit:
 					unit_view->ClearUnitsView();
 					unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true, unit);
-					unit_view->StoreUnitsView();
-					unit_view->AddUnitView(unit);
+					unit_view->StoreUnitsView(unit->is_enemy);
+					if (!unit->is_enemy)
+						unit_view->AddUnitView(unit);
 
 					// go directly to last step
 					unit->move_step = unit->move_nodes.size() - 1;
@@ -9642,10 +9780,16 @@ int SpellMap::Tick()
 					// unit again visible:					
 
 					// update this unit view
-					unit_view->RestoreUnitsView();
+					unit_view->RestoreUnitsView(unit->is_enemy);
 					SpellMapEventsList events;
 					int new_contact;
-					unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+					if (!unit->is_enemy)
+						unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+					else
+					{
+						new_contact = 0;
+						UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, &new_contact);
+					}
 					if (new_contact)
 					{
 						unit->PlayContact();
@@ -9709,8 +9853,9 @@ int SpellMap::Tick()
 					// update view of all but this unit:
 					unit_view->ClearUnitsView();
 					unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true, unit);
-					unit_view->StoreUnitsView();
-					unit_view->AddUnitView(unit);
+					unit_view->StoreUnitsView(unit->is_enemy);
+					if (!unit->is_enemy)
+						unit_view->AddUnitView(unit);
 
 				}
 
@@ -9734,10 +9879,15 @@ int SpellMap::Tick()
 				SortUnits();
 
 				// update this unit view
-				unit_view->RestoreUnitsView();
+				unit_view->RestoreUnitsView(unit->is_enemy);
 				SpellMapEventsList events;
-				int new_contact;
-				unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+				int new_contact = 0;
+				if (!unit->is_enemy)
+					unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+				else
+				{
+					UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
+				}
 				if (new_contact)
 				{
 					// enemy contact event:
@@ -10486,10 +10636,15 @@ int SpellMap::Tick()
 			// resort units in map
 			//SortUnits();
 			// update this unit view
-			unit_view->RestoreUnitsView();
+			unit_view->RestoreUnitsView(unit->is_enemy);
 			SpellMapEventsList events;
-			int new_contact;
-			unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+			int new_contact = 0;
+			if (!unit->is_enemy)
+				unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+			else
+			{
+				UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
+			}
 			if (new_contact)
 			{
 				// enemy contact event:
