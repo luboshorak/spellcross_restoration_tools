@@ -685,6 +685,10 @@ SpellMap::SpellMap()
 	def_path = L"";
 
 	unit_selection = NULL;
+	unit_group_active = -1;
+	unit_group_assign = -1;
+	unit_group_assign_list.clear();
+	unit_group_force_select = false;
 	hud_enabled = true;
 	selected_event = NULL;
 
@@ -1198,6 +1202,12 @@ void SpellMap::Close()
 		delete units[k];
 	units.clear();
 	unit_selection = NULL;
+	for (auto& group : unit_groups)
+		group.clear();
+	unit_group_active = -1;
+	unit_group_assign = -1;
+	unit_group_assign_list.clear();
+	unit_group_force_select = false;
 	// loose selection array
 	select.clear();
 	L1_flags.clear();
@@ -6040,6 +6050,23 @@ int SpellMap::CanUnitMove(MapXY target)
 	if (!unit)
 		return(false);
 
+	if (unit_group_active >= 0)
+	{
+		NormalizeUnitGroup(unit_group_active);
+		auto& group = unit_groups[unit_group_active];
+		if (group.empty())
+			return(false);
+		for (int id : group)
+		{
+			auto* group_unit = GetUnit(id);
+			if (!group_unit || group_unit->is_enemy || group_unit->panic_turns > 0)
+				return(false);
+			if (group_unit->radar_up || !group_unit->isActive() || IsUnitBusy(group_unit) || group_unit->action_points <= 0)
+				return(false);
+		}
+		return(true);
+	}
+
 	// runtime created unit cannot move until activated (next turn)
 	if (!unit->isActive())
 		return(false);
@@ -6065,9 +6092,86 @@ int SpellMap::CanUnitMove(MapXY target)
 	return(true);
 }
 
+int SpellMap::MoveUnitGroup(MapXY target)
+{
+	if (unit_group_active < 0)
+		return(1);
+	NormalizeUnitGroup(unit_group_active);
+	auto& group = unit_groups[unit_group_active];
+	if (group.empty())
+		return(1);
+
+	if (!target.IsSelected())
+		return(1);
+
+	std::vector<MapUnit*> group_units;
+	group_units.reserve(group.size());
+	std::vector<std::vector<AStarNode>> paths;
+	paths.reserve(group.size());
+	int min_step = INT_MAX;
+
+	for (int id : group)
+	{
+		auto* unit = GetUnit(id);
+		if (!unit || unit->radar_up || !unit->isActive() || IsUnitBusy(unit) || unit->action_points <= 0)
+			return(1);
+		if (unit->is_enemy || unit->panic_turns > 0)
+			return(1);
+		int ap_saved = unit->action_points;
+		unit->action_points = 200000;
+		auto path = unit_range->FindPath(unit, target);
+		unit->action_points = ap_saved;
+		if (path.empty())
+			return(1);
+		int max_step = 0;
+		for (int idx = 0; idx < (int)path.size(); idx++)
+		{
+			if (path[idx].g_cost <= ap_saved)
+				max_step = idx;
+			else
+				break;
+		}
+		if (max_step <= 0)
+			return(1);
+		min_step = std::min(min_step, max_step);
+		group_units.push_back(unit);
+		paths.push_back(std::move(path));
+	}
+
+	if (min_step <= 0 || min_step == INT_MAX)
+		return(1);
+
+	LockMap();
+	for (size_t idx = 0; idx < group_units.size(); idx++)
+	{
+		auto* unit = group_units[idx];
+		auto& path = paths[idx];
+
+		unit->move_state = MapUnit::MOVE_STATE::IDLE;
+		unit->move_nodes.clear();
+
+		int max_idx = std::min(min_step, (int)path.size() - 1);
+		for (int nid = 1; nid <= max_idx; nid++)
+			unit->move_nodes.push_back(path[nid]);
+
+		if (!unit->move_nodes.empty())
+		{
+			unit->move_state = MapUnit::MOVE_STATE::TURRET;
+			unit->move_step = 0;
+			unit->ClearDigLevel();
+			unit->ResetTurnsCounter();
+		}
+	}
+	ReleaseMap();
+
+	return(0);
+}
+
 // move unit (in game mode)
 int SpellMap::MoveUnit(MapXY target)
 {
+	if (unit_group_active >= 0)
+		return(MoveUnitGroup(target));
 	// selected unit
 	auto* unit = GetSelectedUnit();
 	if (!unit)
@@ -6125,6 +6229,7 @@ int SpellMap::GetUnitOptions(TScroll* scroll)
 
 	auto select_pos = GetSelection(scroll);
 	int options = 0;
+	const bool group_selected = (unit_group_active >= 0);
 
 	// v8: make sure attack_map corresponds to the currently selected unit (avoid stale target selection on stacked tiles)
 	if (unit_selection && g_attack_map_dirty_for == unit_selection)
@@ -6133,17 +6238,17 @@ int SpellMap::GetUnitOptions(TScroll* scroll)
 		g_attack_map_dirty_for = nullptr;
 	}
 
-	if (unit_selection && CanUnitAttackLand(select_pos))
+	if (!group_selected && unit_selection && CanUnitAttackLand(select_pos))
 	{
 		// can attack land unit
 		options |= UNIT_OPT_LOWER;
 	}
-	if (unit_selection && CanUnitAttackAir(select_pos))
+	if (!group_selected && unit_selection && CanUnitAttackAir(select_pos))
 	{
 		// can attakc air unit
 		options |= UNIT_OPT_UPPER;
 	}
-	if (unit_selection && CanUnitAttackObject(select_pos))
+	if (!group_selected && unit_selection && CanUnitAttackObject(select_pos))
 	{
 		// can attack object
 		options |= UNIT_OPT_LOWER;
@@ -7251,6 +7356,29 @@ MapUnit* SpellMap::CanSelectUnit(MapXY pos)
 	return(NULL);
 }
 
+bool SpellMap::IsUnitInGroup(MapUnit* unit, int group_idx) const
+{
+	if (!unit || group_idx < 0 || group_idx >= MAX_UNIT_GROUPS)
+		return(false);
+	const auto& group = unit_groups[group_idx];
+	return(std::find(group.begin(), group.end(), unit->id) != group.end());
+}
+
+void SpellMap::NormalizeUnitGroup(int group_idx)
+{
+	if (group_idx < 0 || group_idx >= MAX_UNIT_GROUPS)
+		return;
+	auto& group = unit_groups[group_idx];
+	group.erase(std::remove_if(group.begin(), group.end(),
+		[this](int id)
+		{
+			auto* unit = GetUnit(id);
+			return(!unit || unit->is_enemy);
+		}), group.end());
+	std::sort(group.begin(), group.end());
+	group.erase(std::unique(group.begin(), group.end()), group.end());
+}
+
 // select unit, if currently selected at the same position, switch between air-land
 MapUnit* SpellMap::SelectUnit(MapUnit* new_unit, bool scroll_to)
 {
@@ -7280,6 +7408,8 @@ MapUnit* SpellMap::SelectUnit(MapUnit* new_unit, bool scroll_to)
 		}
 	}
 	unit_selection = new_unit;
+	if (!unit_group_force_select)
+		unit_group_active = -1;
 	// v8: selection changed -> mark attack_map dirty for this unit
 	g_attack_map_dirty_for = unit_selection;
 	// unit selected
@@ -7354,6 +7484,83 @@ MapUnit* SpellMap::GetCursorUnit(TScroll* scroll)
 MapUnit* SpellMap::GetSelectedUnit()
 {
 	return(unit_selection);
+}
+
+bool SpellMap::IsUnitGroupAssignActive() const
+{
+	return(unit_group_assign >= 0 && unit_group_assign < MAX_UNIT_GROUPS);
+}
+
+int SpellMap::GetUnitGroupAssignIndex() const
+{
+	return(unit_group_assign);
+}
+
+void SpellMap::StartUnitGroupAssign(int group_idx)
+{
+	if (group_idx < 0 || group_idx >= MAX_UNIT_GROUPS)
+		return;
+	unit_group_assign = group_idx;
+	unit_group_active = -1;
+	unit_group_assign_list.clear();
+}
+
+void SpellMap::ToggleUnitGroupAssignUnit(MapUnit* unit)
+{
+	if (!IsUnitGroupAssignActive() || !unit || unit->is_enemy)
+		return;
+	auto it = std::find(unit_group_assign_list.begin(), unit_group_assign_list.end(), unit->id);
+	if (it != unit_group_assign_list.end())
+		unit_group_assign_list.erase(it);
+	else
+		unit_group_assign_list.push_back(unit->id);
+}
+
+void SpellMap::ConfirmUnitGroupAssign()
+{
+	if (!IsUnitGroupAssignActive())
+		return;
+	int group_idx = unit_group_assign;
+	auto& group = unit_groups[unit_group_assign];
+	group = unit_group_assign_list;
+	NormalizeUnitGroup(group_idx);
+	unit_group_assign = -1;
+	unit_group_assign_list.clear();
+	if (!group.empty())
+		SelectUnitGroup(group_idx);
+}
+
+bool SpellMap::SelectUnitGroup(int group_idx)
+{
+	if (group_idx < 0 || group_idx >= MAX_UNIT_GROUPS)
+		return(false);
+	NormalizeUnitGroup(group_idx);
+	auto& group = unit_groups[group_idx];
+	if (group.empty())
+		return(false);
+
+	unit_group_assign = -1;
+	unit_group_assign_list.clear();
+	unit_group_active = group_idx;
+
+	MapUnit* first_unit = NULL;
+	for (int id : group)
+	{
+		auto* unit = GetUnit(id);
+		if (!unit || unit->is_enemy || unit->panic_turns > 0)
+			continue;
+		first_unit = unit;
+		break;
+	}
+	if (!first_unit)
+	{
+		unit_group_active = -1;
+		return(false);
+	}
+	unit_group_force_select = true;
+	SelectUnit(first_unit, true);
+	unit_group_force_select = false;
+	return(true);
 }
 
 
@@ -10719,6 +10926,12 @@ int SpellMap::RemoveAllUnits()
 		delete unit;
 	units.clear();
 	unit_selection = NULL;
+	for (auto& group : unit_groups)
+		group.clear();
+	unit_group_active = -1;
+	unit_group_assign = -1;
+	unit_group_assign_list.clear();
+	unit_group_force_select = false;
 	return(0);
 }
 
@@ -10740,6 +10953,8 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 		// delete unit
 		if (GetSelectedUnit() == unit)
 			SelectUnit(NULL);
+		for (auto& group : unit_groups)
+			group.erase(std::remove(group.begin(), group.end(), unit->id), group.end());
 		delete unit;
 		units.erase(uid);
 	}
@@ -10753,6 +10968,8 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 			{
 				if (GetSelectedUnit() == unit)
 					SelectUnit(NULL);
+				for (auto& group : unit_groups)
+					group.erase(std::remove(group.begin(), group.end(), unit->id), group.end());
 				delete unit;
 				break;
 			}
@@ -10761,6 +10978,8 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 
 	// cleanup events in case trigger unit was removed
 	events->CleanupEvents();
+	if (unit_group_active >= 0 && unit_groups[unit_group_active].empty())
+		unit_group_active = -1;
 
 	ReleaseMap();
 	ResumeUnitRanging(false);

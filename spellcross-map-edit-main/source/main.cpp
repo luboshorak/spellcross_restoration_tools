@@ -2571,6 +2571,13 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
             else
             {
                 // game mode:
+                if (spell_map->IsUnitGroupAssignActive())
+                {
+                    if (cur_unit)
+                        spell_map->ToggleUnitGroupAssignUnit(cur_unit);
+                    canvas->Refresh();
+                    return;
+                }
                 int options = spell_map->GetUnitOptions();
                 
                 // reduce attack options if only one target is possible
@@ -2747,9 +2754,46 @@ void MainFrame::OnCanvasMouseWheel(wxMouseEvent& event)
 void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
 {
     int key = event.GetKeyCode();
+    if(!spell_map || !spell_map->IsLoaded() || !spell_map->isGameMode())
+    {
+        event.Skip();
+        return;
+    }
+
+    if(key == WXK_RETURN || key == WXK_NUMPAD_ENTER)
+    {
+        if(spell_map->IsUnitGroupAssignActive())
+        {
+            spell_map->ConfirmUnitGroupAssign();
+            canvas->Refresh();
+            return;
+        }
+    }
+
+    int group_idx = -1;
+    if(key >= '1' && key <= '9')
+        group_idx = key - '1';
+    else if(key >= WXK_NUMPAD1 && key <= WXK_NUMPAD9)
+        group_idx = key - WXK_NUMPAD1;
+
+    if(group_idx >= 0)
+    {
+        if(spell_map->IsUnitGroupAssignActive())
+        {
+            spell_map->StartUnitGroupAssign(group_idx);
+        }
+        else if(!spell_map->SelectUnitGroup(group_idx))
+        {
+            spell_map->StartUnitGroupAssign(group_idx);
+        }
+        canvas->Refresh();
+        return;
+    }
+
     if(event.ControlDown())
     {
     }
+    event.Skip();
 }
 
 
