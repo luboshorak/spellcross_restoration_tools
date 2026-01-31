@@ -410,9 +410,8 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     menuFile->AppendSeparator();
     menuFile->Append(ID_OpenLevelDef, "Open &Level DEF...\tCtrl-L", "Open strategic level definition (.DEF).");
 
-// Strategic campaign loading (opens Strategic Level from saved state)
-wxMenuItem* miLoadStrategic = menuFile->Append(wxID_ANY, "&Load Level...	Ctrl+Alt+L",
-    "Load saved Strategic Level (strategic_state.json) and open its Level DEF.");
+    // Strategic campaign loading (opens Strategic Level from saved state)
+    wxMenuItem* miLoadStrategic = menuFile->Append(wxID_ANY, "&Load Level...	Ctrl+Alt+L", "Load saved Strategic Level (strategic_state.json) and open its Level DEF.");
     menuFile->Append(wxID_EXIT);
 
     // Game menu

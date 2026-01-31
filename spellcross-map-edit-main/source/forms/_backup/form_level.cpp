@@ -120,6 +120,80 @@ static bool ParseJsonIntField(const std::string& obj, const char* key, int& outV
     return true;
 }
 
+static bool ParseJsonStringField(const std::string& obj, const char* key, std::string& outValue)
+{
+    if(!key)
+        return false;
+
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t pos = obj.find(needle);
+    if(pos == std::string::npos)
+        return false;
+
+    pos = obj.find(':', pos + needle.size());
+    if(pos == std::string::npos)
+        return false;
+
+    ++pos;
+    while(pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos])))
+        ++pos;
+
+    if(pos >= obj.size() || obj[pos] != '"')
+        return false;
+    ++pos;
+
+    std::string s;
+    bool escaped = false;
+    for(; pos < obj.size(); ++pos)
+    {
+        char c = obj[pos];
+        if(escaped)
+        {
+            switch(c)
+            {
+                case '"': case '\\': case '/': s.push_back(c); break;
+                case 'n': s.push_back('\n'); break;
+                case 'r': s.push_back('\r'); break;
+                case 't': s.push_back('\t'); break;
+                default: s.push_back(c); break;
+            }
+            escaped = false;
+            continue;
+        }
+        if(c == '\\')
+        {
+            escaped = true;
+            continue;
+        }
+        if(c == '"')
+            break;
+        s.push_back(c);
+    }
+
+    outValue = std::move(s);
+    return true;
+}
+
+static std::string JsonEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size() + 8);
+    for(char c : s)
+    {
+        switch(c)
+        {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+
 static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unordered_map<int, int>& outCosts)
 {
     std::ifstream file(path);
@@ -1136,10 +1210,11 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level)
     return base / "strategic_state.json";
 }
 
-static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money, std::vector<LevelData::PlayerUnitAdd>& units)
+static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money, StrategicLevelFrame::PlayerProgress& player, std::vector<LevelData::PlayerUnitAdd>& units)
 {
     units.clear();
     money = 0;
+    player = StrategicLevelFrame::PlayerProgress{};
 
     std::ifstream f(path);
     if(!f)
@@ -1153,6 +1228,18 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
     std::smatch m;
     if(std::regex_search(data, m, money_re) && m.size() > 1)
         money = std::stoi(m[1].str());
+
+
+    // Optional player block (backward compatible).
+    std::regex player_obj_re("\"player\"\\s*:\\s*\\{([^}]*)\\}");
+    if(std::regex_search(data, m, player_obj_re) && m.size() > 1)
+    {
+        const std::string pobj = m[1].str();
+        (void)ParseJsonStringField(pobj, "name", player.name);
+        (void)ParseJsonIntField(pobj, "rank", player.rank);
+        (void)ParseJsonIntField(pobj, "experience", player.experience);
+        (void)ParseJsonIntField(pobj, "actions", player.actions);
+    }
 
     std::regex unit_re("\\{\\s*\"unit_id\"\\s*:\\s*(\\d+)\\s*,\\s*\"count\"\\s*:\\s*(\\d+)\\s*,\\s*\"health\"\\s*:\\s*(\\d+)\\s*\\}");
     auto begin = std::sregex_iterator(data.begin(), data.end(), unit_re);
@@ -1173,7 +1260,7 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
     return true;
 }
 
-static void SaveStrategicStateFile(const std::filesystem::path& path, int money, const std::vector<LevelData::PlayerUnitAdd>& units)
+static void SaveStrategicStateFile(const std::filesystem::path& path, int money, const StrategicLevelFrame::PlayerProgress& player, const std::vector<LevelData::PlayerUnitAdd>& units)
 {
     std::ofstream f(path);
     if(!f)
@@ -1181,6 +1268,7 @@ static void SaveStrategicStateFile(const std::filesystem::path& path, int money,
 
     f << "{\n";
     f << "  \"money\": " << money << ",\n";
+    f << "  \"player\": {\"name\": \"" << JsonEscape(player.name) << "\", \"rank\": " << player.rank << ", \"experience\": " << player.experience << ", \"actions\": " << player.actions << "},\n";
     f << "  \"units\": [\n";
     for(size_t i = 0; i < units.size(); ++i)
     {
@@ -1199,7 +1287,7 @@ void StrategicLevelFrame::LoadStrategicState()
     int money = 0;
     std::vector<LevelData::PlayerUnitAdd> units;
     const auto path = GetStrategicStatePath(m_level);
-    if(LoadStrategicStateFile(path, money, units))
+    if(LoadStrategicStateFile(path, money, m_player, units))
     {
         m_money = money;
         m_playerUnits = std::move(units);
@@ -1209,7 +1297,7 @@ void StrategicLevelFrame::LoadStrategicState()
 void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
-    SaveStrategicStateFile(path, m_money, m_playerUnits);
+    SaveStrategicStateFile(path, m_money, m_player, m_playerUnits);
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const

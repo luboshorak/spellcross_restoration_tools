@@ -1,5 +1,4 @@
 #include "form_level.h"
-#include "form_strategic.h"
 
 #include "main.h"
 #include "other.h"
@@ -16,6 +15,8 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
+#include <cstdio>
 #include <regex>
 #include <array>
 #include <sstream>
@@ -120,6 +121,7 @@ static bool ParseJsonIntField(const std::string& obj, const char* key, int& outV
     return true;
 }
 
+
 static bool ParseJsonStringField(const std::string& obj, const char* key, std::string& outValue)
 {
     if(!key)
@@ -174,7 +176,9 @@ static bool ParseJsonStringField(const std::string& obj, const char* key, std::s
     return true;
 }
 
-static std::string JsonEscape(const std::string& s)
+
+
+static std::string EscapeJson(const std::string& s)
 {
     std::string out;
     out.reserve(s.size() + 8);
@@ -193,6 +197,38 @@ static std::string JsonEscape(const std::string& s)
     return out;
 }
 
+static std::string NowIsoLocal()
+{
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return std::string(buf);
+}
+
+
+static wxString RankNameCz(int rank)
+{
+    switch(rank)
+    {
+        case 0: return wxString(L"Lieutenant");
+        case 1: return wxString(L"First Lieutenant");
+        case 2: return wxString(L"Captain");
+        case 3: return wxString(L"Major");
+        case 4: return wxString(L"Lieutenant Colonel");
+        case 5: return wxString(L"Colonel");
+        case 6: return wxString(L"Major General");
+        case 7: return wxString(L"Lieutenant General");
+        case 8: return wxString(L"General");
+        default: return wxString::Format(L"Hodnost %d", rank);
+    }
+}
 
 static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unordered_map<int, int>& outCosts)
 {
@@ -390,13 +426,283 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
         m_territoryLaunchCount[t.id] = 0;
     }
 
-    LoadStrategicState();
-    BuildUI();
+    BuildMenu();
+
+    BuildUI();          // UI musí existovat døív, než zaèneš “klikat” na territory
     TryLoadBackground();
+
+    LoadStrategicState();  // mùže volat SelectTerritoryById -> OnTerritory, už bezpeènì
     RefreshUI();
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
+
 }
+
+
+
+// Forward declarations (definitions are later in this file)
+static bool LoadStrategicStateFile(
+    const std::filesystem::path& path,
+    const LevelData& level,
+    int& turn,
+    int& money,
+    int& research,
+    int& selected_territory,
+    StrategicLevelFrame::PlayerProgress& player,
+    std::unordered_map<int, std::string>& territoryMission,
+    std::unordered_map<int, int>& territoryLaunchCount,
+    std::vector<LevelData::PlayerUnitAdd>& units,
+    std::string* out_level_def,
+    std::string* out_timestamp);
+
+static void SaveStrategicStateFile(
+    const std::filesystem::path& path,
+    const LevelData& level,
+    int turn,
+    int money,
+    int research,
+    int selected_territory,
+    const StrategicLevelFrame::PlayerProgress& player,
+    const std::unordered_map<int, std::string>& territoryMission,
+    const std::unordered_map<int, int>& territoryLaunchCount,
+    const std::vector<LevelData::PlayerUnitAdd>& units,
+    const std::string& timestamp);
+
+void StrategicLevelFrame::BuildMenu()
+{
+    // Only build once
+    if(GetMenuBar() != nullptr)
+        return;
+
+    auto* bar = new wxMenuBar();
+    auto* file = new wxMenu();
+
+    file->Append(ID_MENU_SAVE_GAME, (L"&Save game...\tCtrl+S"));
+    file->Append(ID_MENU_LOAD_GAME, (L"&Load game...\tCtrl+L"));
+
+    bar->Append(file, "&File");
+    SetMenuBar(bar);
+
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnSaveGame, this, ID_MENU_SAVE_GAME);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnLoadGame, this, ID_MENU_LOAD_GAME);
+}
+
+static std::filesystem::path GetStrategicSaveSlotPath(const LevelData& level, int slot)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path base = fs::path(level.source_path).parent_path();
+    if(base.empty() || !fs::exists(base, ec))
+        base = fs::current_path(ec);
+
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "strategic_save_%02d.json", slot);
+    return base / buf;
+}
+
+static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& outMoney, int& outRank, int& outExp, std::string& outTs)
+{
+    outMoney = 0; outRank = 0; outExp = 0; outTs.clear();
+
+    std::ifstream f(path);
+    if(!f)
+        return false;
+
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if(data.empty())
+        return false;
+
+    std::smatch m;
+    if(std::regex_search(data, m, std::regex("\"money\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+        outMoney = std::stoi(m[1].str());
+
+    // timestamp optional
+    std::regex ts_re("\"timestamp\"\\s*:\\s*\"([^\"]*)\"");
+    if(std::regex_search(data, m, ts_re) && m.size() > 1)
+        outTs = m[1].str();
+
+    // player object optional
+    std::regex player_obj_re("\"player\"\\s*:\\s*\\{([^}]*)\\}");
+    if(std::regex_search(data, m, player_obj_re) && m.size() > 1)
+    {
+        const std::string pobj = m[1].str();
+        (void)ParseJsonIntField(pobj, "rank", outRank);
+        (void)ParseJsonIntField(pobj, "experience", outExp);
+    }
+
+    return true;
+}
+
+void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
+{
+    wxArrayString choices;
+    choices.reserve(10);
+
+    for(int i = 1; i <= 10; ++i)
+    {
+        const auto p = GetStrategicSaveSlotPath(m_level, i);
+        std::error_code ec;
+        if(std::filesystem::exists(p, ec))
+        {
+            int money=0, rank=0, xp=0;
+            std::string ts;
+            PeekStrategicSaveSummary(p, money, rank, xp, ts);
+            wxString line = wxString::Format("Slot %02d  |  %s  |  $%d  |  XP %d  |  %s",
+                i,
+                ts.empty() ? wxString(L"(no time)") : wxString::FromUTF8(ts),
+                money,
+                xp,
+                RankNameCz(rank));
+            choices.Add(line);
+        }
+        else
+        {
+            choices.Add(wxString::Format("Slot %02d  |  (empty)", i));
+        }
+    }
+
+    wxSingleChoiceDialog dlg(this, "Choose a slot to save:", "Save game", choices);
+    dlg.SetSelection(0);
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    const int slot = dlg.GetSelection() + 1;
+    const auto path = GetStrategicSaveSlotPath(m_level, slot);
+
+    // Save full strategic state into slot file
+    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
+                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits, /*timestamp*/NowIsoLocal());
+
+    wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
+}
+
+void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
+{
+    wxArrayString choices;
+    choices.reserve(10);
+
+    std::vector<bool> exists(10, false);
+    for(int i = 1; i <= 10; ++i)
+    {
+        const auto p = GetStrategicSaveSlotPath(m_level, i);
+        std::error_code ec;
+        exists[i-1] = std::filesystem::exists(p, ec);
+        if(exists[i-1])
+        {
+            int money=0, rank=0, xp=0;
+            std::string ts;
+            PeekStrategicSaveSummary(p, money, rank, xp, ts);
+            wxString line = wxString::Format("Slot %02d  |  %s  |  $%d  |  XP %d  |  %s",
+                i,
+                ts.empty() ? wxString(L"(no time)") : wxString::FromUTF8(ts),
+                money,
+                xp,
+                RankNameCz(rank));
+            choices.Add(line);
+        }
+        else
+        {
+            choices.Add(wxString::Format("Slot %02d  |  (empty)", i));
+        }
+    }
+
+    wxSingleChoiceDialog dlg(this, "Choose a slot to load:", "Load game", choices);
+    dlg.SetSelection(0);
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    const int slot = dlg.GetSelection() + 1;
+    if(!exists[slot-1])
+    {
+        wxMessageBox("This slot is empty.", "Load game", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    const auto path = GetStrategicSaveSlotPath(m_level, slot);
+
+    std::string loaded_level_def;
+    std::string ts;
+    if(!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
+                              m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+                              &loaded_level_def, &ts))
+    {
+        wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    
+// Save slot may belong to a different strategic LEVEL_XX.DEF.
+// In that case, automatically switch to the correct level and load there.
+if(!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
+{
+    if(!m_main)
+    {
+        wxString msg;
+        msg << L"This save belongs to a different level/DEF:\n\n";
+        msg << wxString::FromUTF8(loaded_level_def) << L"\n\n";
+        msg << L"Current level is:\n\n";
+        msg << wxString::FromUTF8(m_level.source_path) << L"\n";
+        wxMessageBox(msg, L"Load game", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    LevelData lvl;
+    std::string err;
+    LevelLoader loader;
+    if(!loader.LoadLevelDef(loaded_level_def, lvl, &err))
+    {
+        wxMessageBox(L"Failed to load the level DEF from this save:\n" + wxString::FromUTF8(err),
+                     L"Load game", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    // Re-load the save file using the correct level, so territory defaults match.
+    int turn=1, money=0, research=0, selTerr=-1;
+    PlayerProgress pl;
+    std::unordered_map<int, std::string> terrMission;
+    std::unordered_map<int, int> terrLaunch;
+    std::vector<LevelData::PlayerUnitAdd> units;
+    std::string def2, ts2;
+
+    if(!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
+                              terrMission, terrLaunch, units, &def2, &ts2))
+    {
+        wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    // Open new Strategic Level window for that DEF and apply loaded state.
+    auto* win = new StrategicLevelFrame(m_main, lvl);
+
+    win->m_turn = turn;
+    win->m_money = money;
+    win->m_research = research;
+    win->m_selectedTerritory = selTerr;
+    win->m_player = pl;
+    win->m_territoryCurrentMission = std::move(terrMission);
+    win->m_territoryLaunchCount = std::move(terrLaunch);
+    win->m_playerUnits = std::move(units);
+
+    win->TryLoadBackground();
+    win->RefreshUI();
+    if(win->m_selectedTerritory >= 0)
+        win->SelectTerritoryById(win->m_selectedTerritory);
+
+    win->Show();
+    win->Raise();
+
+    // Close this (wrong-level) window.
+    Close(true);
+    return;
+}
+
+    if(m_selectedTerritory >= 0)
+        SelectTerritoryById(m_selectedTerritory);
+
+    RefreshUI();
+    wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
+}
+
 
 bool StrategicLevelFrame::EnsureUnitCostsLoaded()
 {
@@ -569,26 +875,16 @@ controlsSizer->Add(m_territoryButtonsPanel, 0, wxALL | wxEXPAND, 6);
 
     auto btnSizer = new wxBoxSizer(wxVERTICAL);
     m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
-    m_btnBuy = new wxButton(right, ID_BTN_BUY, "Buy units");
-    m_btnSell = new wxButton(right, ID_BTN_SELL, "Sell units");
+    m_btnBuy      = new wxButton(right, ID_BTN_BUY, "Buy units");
+    m_btnSell     = new wxButton(right, ID_BTN_SELL, "Sell units");
+    m_btnLaunch   = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
+    m_btnEndTurn  = new wxButton(right, ID_BTN_ENDTURN, "End turn");
 
-    // NEW: Strategic info (opens new frame)
-    auto* btnStrategicInfo = new wxButton(right, wxID_ANY, "Strategic info");
-    btnStrategicInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent&)
-        {
-            auto* frm = new StrategicInfoFrame(this, m_level);
-            frm->Show(true);
-        });
-
-    m_btnLaunch = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
-    m_btnEndTurn = new wxButton(right, ID_BTN_ENDTURN, "End turn");
-    
     btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnBuy,      0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnSell,     0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnStrategicInfo, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 12);
+    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND);
 
     rightSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
     right->SetSizer(rightSizer);
@@ -799,6 +1095,12 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
     }
 
     // Show in the scrollbox under the map (no popup)
+    if (!m_mapPanel)
+    {
+        RefreshUI();
+        return;
+    }
+
     if(auto* box = wxDynamicCast(m_mapPanel->FindWindow(ID_TERRITORY_TEXTBOX), wxTextCtrl))
     {
         box->SetValue(info);
@@ -1210,11 +1512,40 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level)
     return base / "strategic_state.json";
 }
 
-static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money, StrategicLevelFrame::PlayerProgress& player, std::vector<LevelData::PlayerUnitAdd>& units)
+
+static bool LoadStrategicStateFile(
+    const std::filesystem::path& path,
+    const LevelData& level,
+    int& turn,
+    int& money,
+    int& research,
+    int& selected_territory,
+    StrategicLevelFrame::PlayerProgress& player,
+    std::unordered_map<int, std::string>& territoryMission,
+    std::unordered_map<int, int>& territoryLaunchCount,
+    std::vector<LevelData::PlayerUnitAdd>& units,
+    std::string* out_level_def = nullptr,
+    std::string* out_timestamp = nullptr)
 {
     units.clear();
+
+    // defaults
+    turn = 1;
     money = 0;
+    research = 0;
+    selected_territory = -1;
     player = StrategicLevelFrame::PlayerProgress{};
+
+    territoryMission.clear();
+    territoryLaunchCount.clear();
+    for(const auto& t : level.territories)
+    {
+        territoryMission[t.id] = t.mission;
+        territoryLaunchCount[t.id] = 0;
+    }
+
+    if(out_level_def) out_level_def->clear();
+    if(out_timestamp) out_timestamp->clear();
 
     std::ifstream f(path);
     if(!f)
@@ -1224,13 +1555,30 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
     if(data.empty())
         return false;
 
-    std::regex money_re("\"money\"\\s*:\\s*(-?\\d+)");
     std::smatch m;
-    if(std::regex_search(data, m, money_re) && m.size() > 1)
+
+    // version/level_def/timestamp are optional but recommended
+    std::regex leveldef_re("\"level_def\"\\s*:\\s*\"([^\"]*)\"");
+    if(out_level_def && std::regex_search(data, m, leveldef_re) && m.size() > 1)
+        *out_level_def = m[1].str();
+
+    std::regex ts_re("\"timestamp\"\\s*:\\s*\"([^\"]*)\"");
+    if(out_timestamp && std::regex_search(data, m, ts_re) && m.size() > 1)
+        *out_timestamp = m[1].str();
+
+    if(std::regex_search(data, m, std::regex("\"turn\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+        turn = std::stoi(m[1].str());
+
+    if(std::regex_search(data, m, std::regex("\"money\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         money = std::stoi(m[1].str());
 
+    if(std::regex_search(data, m, std::regex("\"research\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+        research = std::stoi(m[1].str());
 
-    // Optional player block (backward compatible).
+    if(std::regex_search(data, m, std::regex("\"selected_territory\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+        selected_territory = std::stoi(m[1].str());
+
+    // player object optional (backward compatible)
     std::regex player_obj_re("\"player\"\\s*:\\s*\\{([^}]*)\\}");
     if(std::regex_search(data, m, player_obj_re) && m.size() > 1)
     {
@@ -1241,6 +1589,22 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
         (void)ParseJsonIntField(pobj, "actions", player.actions);
     }
 
+    // territory list optional (backward compatible)
+    // {"id":7,"mission":"M02_01","launches":2}
+    std::regex terr_re("\\{\\s*\"id\"\\s*:\\s*(\\d+)\\s*,\\s*\"mission\"\\s*:\\s*\"([^\"]*)\"\\s*,\\s*\"launches\"\\s*:\\s*(\\d+)\\s*\\}");
+    for(auto it = std::sregex_iterator(data.begin(), data.end(), terr_re); it != std::sregex_iterator(); ++it)
+    {
+        const auto& mm = *it;
+        if(mm.size() < 4)
+            continue;
+        const int id = std::stoi(mm[1].str());
+        const std::string mission = mm[2].str();
+        const int launches = std::stoi(mm[3].str());
+        territoryMission[id] = mission;
+        territoryLaunchCount[id] = launches;
+    }
+
+    // units list (as before)
     std::regex unit_re("\\{\\s*\"unit_id\"\\s*:\\s*(\\d+)\\s*,\\s*\"count\"\\s*:\\s*(\\d+)\\s*,\\s*\"health\"\\s*:\\s*(\\d+)\\s*\\}");
     auto begin = std::sregex_iterator(data.begin(), data.end(), unit_re);
     auto end = std::sregex_iterator();
@@ -1260,15 +1624,58 @@ static bool LoadStrategicStateFile(const std::filesystem::path& path, int& money
     return true;
 }
 
-static void SaveStrategicStateFile(const std::filesystem::path& path, int money, const StrategicLevelFrame::PlayerProgress& player, const std::vector<LevelData::PlayerUnitAdd>& units)
+static void SaveStrategicStateFile(
+    const std::filesystem::path& path,
+    const LevelData& level,
+    int turn,
+    int money,
+    int research,
+    int selected_territory,
+    const StrategicLevelFrame::PlayerProgress& player,
+    const std::unordered_map<int, std::string>& territoryMission,
+    const std::unordered_map<int, int>& territoryLaunchCount,
+    const std::vector<LevelData::PlayerUnitAdd>& units,
+    const std::string& timestamp)
 {
     std::ofstream f(path);
     if(!f)
         return;
 
     f << "{\n";
+    f << "  \"version\": 1,\n";
+    f << "  \"timestamp\": \"" << EscapeJson(timestamp) << "\",\n";
+    f << "  \"level_def\": \"" << EscapeJson(level.source_path) << "\",\n";
+    f << "  \"turn\": " << turn << ",\n";
     f << "  \"money\": " << money << ",\n";
-    f << "  \"player\": {\"name\": \"" << JsonEscape(player.name) << "\", \"rank\": " << player.rank << ", \"experience\": " << player.experience << ", \"actions\": " << player.actions << "},\n";
+    f << "  \"research\": " << research << ",\n";
+    f << "  \"selected_territory\": " << selected_territory << ",\n";
+    f << "  \"player\": {"
+      << "\"name\": \"" << EscapeJson(player.name) << "\", "
+      << "\"rank\": " << player.rank << ", "
+      << "\"experience\": " << player.experience << ", "
+      << "\"actions\": " << player.actions
+      << "},\n";
+
+    // territories
+    f << "  \"territories\": [\n";
+    for(size_t i = 0; i < level.territories.size(); ++i)
+    {
+        const auto& t = level.territories[i];
+        auto itM = territoryMission.find(t.id);
+        auto itL = territoryLaunchCount.find(t.id);
+        const std::string mission = (itM != territoryMission.end()) ? itM->second : t.mission;
+        const int launches = (itL != territoryLaunchCount.end()) ? itL->second : 0;
+
+        f << "    {\"id\": " << t.id
+          << ", \"mission\": \"" << EscapeJson(mission)
+          << "\", \"launches\": " << launches << "}";
+        if(i + 1 < level.territories.size())
+            f << ",";
+        f << "\n";
+    }
+    f << "  ],\n";
+
+    // units
     f << "  \"units\": [\n";
     for(size_t i = 0; i < units.size(); ++i)
     {
@@ -1284,20 +1691,36 @@ static void SaveStrategicStateFile(const std::filesystem::path& path, int money,
 
 void StrategicLevelFrame::LoadStrategicState()
 {
-    int money = 0;
-    std::vector<LevelData::PlayerUnitAdd> units;
     const auto path = GetStrategicStatePath(m_level);
-    if(LoadStrategicStateFile(path, money, m_player, units))
+
+    int turn = 1, money = 0, research = 0, selected = -1;
+    PlayerProgress player{};
+    std::unordered_map<int, std::string> terrM;
+    std::unordered_map<int, int> terrL;
+    std::vector<LevelData::PlayerUnitAdd> units;
+    std::string level_def, ts;
+
+    if(LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units, &level_def, &ts))
     {
+        m_turn = turn;
         m_money = money;
+        m_research = research;
+        m_selectedTerritory = selected;
+        m_player = player;
+        m_territoryCurrentMission = std::move(terrM);
+        m_territoryLaunchCount = std::move(terrL);
         m_playerUnits = std::move(units);
+
+        if(m_selectedTerritory >= 0)
+            SelectTerritoryById(m_selectedTerritory);
     }
 }
 
 void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
-    SaveStrategicStateFile(path, m_money, m_player, m_playerUnits);
+    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
+                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits, NowIsoLocal());
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const

@@ -19,7 +19,6 @@ class StrategicLevelFrame : public wxFrame
 public:
     StrategicLevelFrame(MainFrame* parent, const LevelData& level);
 
-private:
     void BuildUI();
     void RefreshUI();
 
@@ -42,6 +41,20 @@ private:
     void OnShowStrategicMap(wxCommandEvent& ev);
     void OnShowHierarchy(wxCommandEvent& ev);
 
+
+// menu (Strategic Level saves)
+void BuildMenu();
+void OnSaveGame(wxCommandEvent& ev);
+void OnLoadGame(wxCommandEvent& ev);
+
+struct PlayerProgress
+{
+    std::string name = "John Alexander";
+    int rank = 0;
+    int experience = 0;
+    int actions = 0;
+};
+
     void LoadStrategicState();
     void SaveStrategicState() const;
     wxString GetUnitDisplayName(int unit_id) const;
@@ -53,7 +66,7 @@ private:
     std::wstring ResolveMapDefPathForMissionToken(const std::string& mission_token) const;
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
-public:
+private:
     MainFrame* m_main = nullptr;
     SpellData* m_spellData = nullptr;
     LevelData m_level;
@@ -63,15 +76,6 @@ public:
     int m_money = 0;
     int m_research = 0;
     int m_selectedTerritory = -1;
-
-    // Player progression (saved in strategic_state.json)
-    struct PlayerProgress
-    {
-        std::string name = "John Alexander";
-        int rank = 0;
-        int experience = 0;
-        int actions = 0;
-    };
 
     PlayerProgress m_player;
 
@@ -132,7 +136,9 @@ public:
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
-        ID_BTN_HIERARCHY
+        ID_BTN_HIERARCHY,
+        ID_MENU_SAVE_GAME,
+        ID_MENU_LOAD_GAME
     };
 
     wxDECLARE_EVENT_TABLE();
