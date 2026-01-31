@@ -18,6 +18,7 @@
 #include <list>
 #include <string>
 #include <tuple>
+#include <array>
 #include "fs_archive.h"
 #include "fsu_archive.h"
 #include "spell_units.h"
@@ -252,8 +253,11 @@ class SpellMap
 		void EndPanicTurn();
 		bool PanicTurnStep();
 		bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
+		int MoveUnitGroup(MapXY target);
 		bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
 		bool IsUnitBusy(MapUnit* unit);
+		bool IsUnitInGroup(MapUnit* unit, int group_idx) const;
+		void NormalizeUnitGroup(int group_idx);
 		// map state
 		bool is_valid;
 		// last error string
@@ -309,6 +313,12 @@ class SpellMap
 		MapUnit *unit_selection;
 		int unit_selection_mod;
 		int unit_sel_land_preference;
+		static constexpr int MAX_UNIT_GROUPS = 9;
+		std::array<std::vector<int>, MAX_UNIT_GROUPS> unit_groups;
+		int unit_group_active;
+		int unit_group_assign;
+		std::vector<int> unit_group_assign_list;
+		bool unit_group_force_select;
 
 		// sound selection
 		MapSound *sound_selection;
@@ -816,6 +826,12 @@ class SpellMap
 		MapUnit *SelectUnit(MapUnit* new_unit,bool scroll_to=false);
 		int UnitChanged(int clear=false);
 		MapUnit* GetSelectedUnit();
+		bool IsUnitGroupAssignActive() const;
+		int GetUnitGroupAssignIndex() const;
+		void StartUnitGroupAssign(int group_idx);
+		void ToggleUnitGroupAssignUnit(MapUnit* unit);
+		void ConfirmUnitGroupAssign();
+		bool SelectUnitGroup(int group_idx);
 		//int PrepareUnitsViewMask();
 		//wxBitmap *ExportUnitsViewZmap();
 		//int ClearUnitsView(int to_unseen=false);
