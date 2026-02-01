@@ -409,6 +409,9 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     menuFile->Append(ID_MainMenu,"Main &menu\tCtrl-M","Open main game menu.");
     menuFile->AppendSeparator();
     menuFile->Append(ID_OpenLevelDef, "Open &Level DEF...\tCtrl-L", "Open strategic level definition (.DEF).");
+
+    // Strategic campaign loading (opens Strategic Level from saved state)
+    wxMenuItem* miLoadStrategic = menuFile->Append(wxID_ANY, "&Load Level...	Ctrl+Alt+L", "Load saved Strategic Level (strategic_state.json) and open its Level DEF.");
     menuFile->Append(wxID_EXIT);
 
     // Game menu
@@ -588,6 +591,80 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     Bind(wxEVT_MENU,&MainFrame::OnNewMap,this,ID_NewMap);
     Bind(wxEVT_MENU,&MainFrame::OnOpenMainMenu,this,ID_MainMenu);
 	Bind(wxEVT_MENU, &MainFrame::OnOpenLevelDef, this, ID_OpenLevelDef);
+
+// Load saved Strategic Level (strategic_state.json) and open the corresponding Level DEF.
+Bind(wxEVT_MENU, [this](wxCommandEvent&)
+{
+    wxFileDialog dlg(
+        this,
+        "Load Strategic Level (saved state)",
+        "",
+        "strategic_state.json",
+        "Strategic State (strategic_state.json)|strategic_state.json|JSON files (*.json)|*.json|All files|*.*",
+        wxFD_OPEN | wxFD_FILE_MUST_EXIST
+    );
+
+    if (dlg.ShowModal() != wxID_OK)
+        return;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path statePath = fs::path(dlg.GetPath().ToStdWstring());
+    fs::path dir = statePath.has_parent_path() ? statePath.parent_path() : fs::current_path(ec);
+
+    // Find candidate DEF files in the same directory.
+    std::vector<fs::path> defs;
+    for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
+    {
+        if (ec)
+        {
+            ec.clear();
+            break;
+        }
+        if (!de.is_regular_file(ec) || ec)
+        {
+            ec.clear();
+            continue;
+        }
+
+        auto ext = to_lower(de.path().extension().string());
+        if (ext == ".def")
+            defs.push_back(de.path());
+    }
+
+    if (defs.empty())
+    {
+        wxMessageBox("No Level DEF (*.def) found next to the selected strategic_state.json."
+                     "Put the save next to the corresponding Level DEF, or use File -> Open Level DEF...",
+                     "Load Level", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    // Prefer filenames containing "level" (case-insensitive), else alphabetical.
+    std::sort(defs.begin(), defs.end());
+    auto itPref = std::find_if(defs.begin(), defs.end(), [](const fs::path& p)
+    {
+        const std::string fn = to_lower(p.filename().string());
+        return fn.find("level") != std::string::npos;
+    });
+    fs::path defPath = (itPref != defs.end()) ? *itPref : defs.front();
+
+    LevelData lvl;
+    std::string err;
+    LevelLoader loader;
+    if (!loader.LoadLevelDef(defPath.string(), lvl, &err))
+    {
+        wxMessageBox("Failed to load level DEF:" + err, "Load Level", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    // Open Strategic Level (it will load strategic_state.json from lvl.source_path folder).
+    auto* win = new StrategicLevelFrame(this, lvl);
+    win->Show();
+    win->Raise();
+}, miLoadStrategic->GetId());
+
     Bind(wxEVT_MENU,&MainFrame::OnAbout, this, wxID_ABOUT);
     Bind(wxEVT_MENU,&MainFrame::OnExit, this, wxID_EXIT);
 

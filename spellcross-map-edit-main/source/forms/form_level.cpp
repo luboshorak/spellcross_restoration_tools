@@ -36,6 +36,7 @@ wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_STATS, StrategicLevelFrame::OnShowStats)
 wxEND_EVENT_TABLE()
 
 // UI-only: readonly text panel under the territory grid (instead of popups)
@@ -87,6 +88,30 @@ static void UpdateSpellLabel(wxStaticBitmap* target, const SpellData* data, cons
     if(auto bmp = RenderSpellLabel(data, text); bmp.IsOk())
         target->SetBitmap(bmp);
 }
+
+static wxStaticBitmap* CreateSpellLabel(wxWindow* parent, const SpellData* data, const std::string& text)
+{
+    auto* b = new wxStaticBitmap(parent, wxID_ANY, wxBitmap(1, 1));
+    UpdateSpellLabel(b, data, text);
+    return b;
+}
+
+static wxBitmapButton* CreateSpellButton(wxWindow* parent, int id, const SpellData* data, const std::string& text, const wxSize& minSize = wxDefaultSize)
+{
+    wxBitmap bmp = RenderSpellLabel(data, text);
+    if(!bmp.IsOk())
+        bmp = wxBitmap(1, 1);
+
+    auto* b = new wxBitmapButton(parent, id, bmp);
+    if(minSize != wxDefaultSize)
+        b->SetMinSize(minSize);
+
+    // Try to keep the button background consistent with the parent panel.
+    b->SetBackgroundColour(parent->GetBackgroundColour());
+    return b;
+}
+
+
 
 static std::filesystem::path GetUnitsJsonPath()
 {
@@ -212,6 +237,21 @@ static std::string NowIsoLocal()
     return std::string(buf);
 }
 
+
+
+static wxFont MakeOldschoolFont(int pt)
+{
+    // Prefer a pixel/teletype look. FaceName may fail; wxWidgets will fallback gracefully.
+    wxFont f(pt, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false);
+#if defined(_WIN32)
+    f.SetFaceName("Terminal");
+    if(!f.IsOk())
+        f.SetFaceName("Fixedsys");
+#endif
+    if(!f.IsOk())
+        f = wxFont(pt, wxFONTFAMILY_MODERN, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false);
+    return f;
+}
 
 static wxString RankNameCz(int rank)
 {
@@ -409,7 +449,7 @@ static void try_append_text_set(wxString& info, const std::filesystem::path& bas
 }
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
-    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1100, 700),
+    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1320, 820),
               wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
       m_main(parent),
       m_spellData(parent ? parent->spell_data : nullptr),
@@ -428,10 +468,10 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     BuildMenu();
 
-    BuildUI();          // UI musí existovat døív, než zaèneš “klikat” na territory
+        BuildUI();          // UI must exist before we start selecting territories.
     TryLoadBackground();
 
-    LoadStrategicState();  // mùže volat SelectTerritoryById -> OnTerritory, už bezpeènì
+        LoadStrategicState();  // May call SelectTerritoryById -> OnTerritory.
     RefreshUI();
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
@@ -730,170 +770,213 @@ int StrategicLevelFrame::GetUnitBuyCost(int unit_id) const
     return it->second;
 }
 
+
 void StrategicLevelFrame::BuildUI()
 {
-    auto root = new wxPanel(this);
+    auto* root = new wxPanel(this);
+    root->SetBackgroundColour(wxColour(0, 35, 0));
 
-    // --- Top bar (Money / Research / Turn) ---
-    auto topBar = new wxPanel(root);
-    topBar->SetBackgroundColour(wxColour(20, 70, 20));
-    auto topSizer = new wxBoxSizer(wxHORIZONTAL);
+    const wxColour cText(230, 255, 230);
+    const wxColour cPanel(10, 55, 10);
+    const wxColour cPanelDark(0, 45, 0);
+    const wxColour cMapBg(30, 30, 30);
 
-    wxBitmap placeholder(1, 1);
-    m_lblMoney = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
-    m_lblResearch = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
-    m_lblTurn = new wxStaticBitmap(topBar, wxID_ANY, placeholder);
+    const wxFont font = MakeOldschoolFont(8);
+    const wxFont fontBig = MakeOldschoolFont(8);
 
-    topSizer->AddStretchSpacer(1);
-    topSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
-    topSizer->AddSpacer(20);
-    topSizer->Add(m_lblResearch, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
-    topSizer->AddSpacer(20);
-    topSizer->Add(m_lblTurn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
-    topSizer->AddSpacer(10);
-    topBar->SetSizer(topSizer);
+    auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
-    // --- Main split: Map (left) + Right panel ---
-    auto mainSizer = new wxBoxSizer(wxHORIZONTAL);
+    // ============================================================
+    // LEFT: content book (Strategic map / Hierarchy)
+    // ============================================================
+    m_leftBook = new wxSimplebook(root, wxID_ANY);
+    m_leftBook->SetBackgroundColour(cPanelDark);
 
-    // Left "map" panel
-    m_mapPanel = new wxPanel(root);
-    m_mapPanel->SetBackgroundColour(wxColour(30, 30, 30));
+    // --- Page 0: Strategic map ---
+    m_mapPanel = new wxPanel(m_leftBook);
+    m_mapPanel->SetBackgroundColour(cMapBg);
 
-    // IMPORTANT: separate paint surface so the background isn't completely covered by child controls.
-    // The canvas shows the composed strategic map; controls live below it.
     m_mapSizer = new wxBoxSizer(wxVERTICAL);
 
+    // Paint surface for the strategic background (map) - fills the top area.
     m_mapCanvas = new wxPanel(m_mapPanel);
-    m_mapCanvas->SetBackgroundColour(wxColour(30, 30, 30));
+    m_mapCanvas->SetBackgroundColour(cMapBg);
     m_mapCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_mapCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
     m_mapCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
-    m_mapCanvas->SetMinSize(wxSize(640, 360));
-    m_mapSizer->Add(m_mapCanvas, 1, wxALL | wxEXPAND, 8);
+    m_mapSizer->Add(m_mapCanvas, 3, wxALL | wxEXPAND, 8);
 
-    auto controls = new wxPanel(m_mapPanel);
-    controls->SetBackgroundColour(wxColour(20, 20, 20));
-    auto controlsSizer = new wxBoxSizer(wxVERTICAL);
+    // Under-map panel: (optional) territory grid fallback + briefing/info text.
+    auto* under = new wxPanel(m_mapPanel);
+    under->SetBackgroundColour(cPanelDark);
+    auto* underSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto mapTitle = new wxStaticText(controls, wxID_ANY, "Strategic map (click territory)");
-    mapTitle->SetForegroundColour(*wxLIGHT_GREY);
-    controlsSizer->Add(mapTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
+    // Territory buttons (fallback UI). When CLK is available (click map regions), this stays hidden.
+    m_territoryButtonsPanel = new wxPanel(under);
+    m_territoryButtonsPanel->SetBackgroundColour(cPanelDark);
+    auto* grid = new wxGridSizer(0, 4, 6, 6);
+    for(size_t i = 0; i < m_level.territories.size(); ++i)
+    {
+        const auto& t = m_level.territories[i];
+        const auto id = ID_TERRITORY_BASE + (int)i;
 
-    // Territory buttons (temporary UI).
-// When CLK is available we can click directly on regions, so this grid will be hidden.
-m_territoryButtonsPanel = new wxPanel(controls);
-m_territoryButtonsPanel->SetBackgroundColour(wxColour(30, 30, 30));
-auto grid = new wxGridSizer(0, 4, 6, 6);
-for(size_t i = 0; i < m_level.territories.size(); ++i)
-{
-    const auto& t = m_level.territories[i];
-    auto id = ID_TERRITORY_BASE + (int)i;
+        wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
+        auto* btn = new wxButton(m_territoryButtonsPanel, id, label, wxDefaultPosition, wxSize(140, 60));
+        btn->SetFont(font);
+        btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
+        grid->Add(btn, 0, wxEXPAND);
+    }
+    m_territoryButtonsPanel->SetSizer(grid);
+    // Hidden by default; TryLoadBackground() will show it only if CLK is missing.
+    m_territoryButtonsPanel->Hide();
+    underSizer->Add(m_territoryButtonsPanel, 0, wxALL | wxEXPAND, 6);
 
-    wxString label = wxString::Format("T%02d\n%s", t.id, t.mission);
-    auto btn = new wxButton(m_territoryButtonsPanel, id, label, wxDefaultPosition, wxSize(140, 60));
-    btn->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnTerritory, this);
-    grid->Add(btn, 0, wxEXPAND);
-}
-m_territoryButtonsPanel->SetSizer(grid);
-controlsSizer->Add(m_territoryButtonsPanel, 0, wxALL | wxEXPAND, 6);
-
-// Scrollbox with territory + briefing texts (replaces wxMessageBox popup)
-    auto txtTitle = new wxStaticText(controls, wxID_ANY, "Territory / briefing text");
-    txtTitle->SetForegroundColour(*wxLIGHT_GREY);
-    controlsSizer->Add(txtTitle, 0, wxLEFT | wxRIGHT | wxTOP, 6);
-
-    auto txt = new wxTextCtrl(
-        controls,
+    // Briefing / mission info (read-only)
+    auto* info = new wxTextCtrl(
+        under,
         ID_TERRITORY_TEXTBOX,
         "",
         wxDefaultPosition,
         wxDefaultSize,
-        wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2 | wxTE_DONTWRAP);
-    txt->SetMinSize(wxSize(-1, 180));
-    controlsSizer->Add(txt, 0, wxALL | wxEXPAND, 6);
+        wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+    info->SetFont(font);
+    info->SetBackgroundColour(wxColour(0, 35, 0));
+    info->SetForegroundColour(cText);
+    info->SetMinSize(wxSize(-1, 240));
+    underSizer->Add(info, 1, wxALL | wxEXPAND, 6);
 
-    controls->SetSizer(controlsSizer);
-    m_mapSizer->Add(controls, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    under->SetSizer(underSizer);
+    m_mapSizer->Add(under, 2, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     m_mapPanel->SetSizer(m_mapSizer);
 
-    // Right panel: roster + actions
-    auto right = new wxPanel(root);
-    right->SetBackgroundColour(wxColour(10, 50, 10));
-    auto rightSizer = new wxBoxSizer(wxVERTICAL);
+    // --- Page 1: Hierarchy ---
+    auto* hierarchyPanel = new wxPanel(m_leftBook);
+    hierarchyPanel->SetBackgroundColour(cPanelDark);
+    auto* hs = new wxBoxSizer(wxVERTICAL);
 
-    auto rightNavSizer = new wxBoxSizer(wxHORIZONTAL);
-    m_btnStrategicMap = new wxButton(right, ID_BTN_STRATEGIC_MAP, "Strategick\u00e1 mapa");
-    m_btnHierarchy = new wxButton(right, ID_BTN_HIERARCHY, "Hierarchie");
-    rightNavSizer->Add(m_btnStrategicMap, 1, wxRIGHT, 6);
-    rightNavSizer->Add(m_btnHierarchy, 1);
-    rightSizer->Add(rightNavSizer, 0, wxALL | wxEXPAND, 10);
+    auto* hTitle = CreateSpellLabel(hierarchyPanel, m_spellData, "Units / Hierarchy");
+    hs->Add(hTitle, 0, wxALL, 8);
 
-    auto rosterTitle = new wxStaticText(right, wxID_ANY, "Forces / Hierarchy");
-    rosterTitle->SetForegroundColour(*wxWHITE);
-    // Ped tmto dkem pidejte zskn fontu z m_spellData
-    wxFont font = m_spellData && m_spellData->font ? wxFont(wxFontInfo(m_spellData->font->GetHeight())) : wxFont(wxFontInfo(12));
-    rosterTitle->SetFont(font);
-    rightSizer->Add(rosterTitle, 0, wxALL, 10);
-
-    m_rightBook = new wxSimplebook(right, wxID_ANY);
-    auto rosterPage = new wxPanel(m_rightBook);
-    auto rosterSizer = new wxBoxSizer(wxVERTICAL);
-    m_roster = new wxListCtrl(rosterPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-    m_roster->InsertColumn(0, "Unit");
-    m_roster->InsertColumn(1, "Count");
-    m_roster->InsertColumn(2, "HP");
-    rosterSizer->Add(m_roster, 1, wxEXPAND);
-    rosterPage->SetSizer(rosterSizer);
-
-    auto hierarchyPage = new wxPanel(m_rightBook);
-    auto hierarchySizer = new wxBoxSizer(wxVERTICAL);
-    auto hierarchyIntro = new wxStaticText(
-        hierarchyPage,
+    auto* hIntro = new wxTextCtrl(
+        hierarchyPanel,
         wxID_ANY,
-        "P\u0159ehled hierarchie\n\n"
-        "- Z\u00e1kladn\u00ed formac\u00ed je prapor.\n"
-        "- 2 prapory tvo\u0159\u00ed pluk.\n"
-        "- 2 pluky (4 prapory) tvo\u0159\u00ed brig\u00e1du.\n\n"
-        "Velitel\u00e9 jsou vz\u00e1cn\u00e9 jednotky ur\u010den\u00e9 pro formace.\n"
-        "Vy\u0161\u0161\u00ed hodnosti umo\u017e\u0148uj\u00ed vy\u0161\u0161\u00ed formace.\n"
-        "Pokud je jednotka s velitelem zni\u010dena, velitel je ztracen.");
-    hierarchyIntro->SetForegroundColour(*wxWHITE);
-    hierarchySizer->Add(hierarchyIntro, 0, wxBOTTOM | wxEXPAND, 10);
+        "Hierarchy overview"
+        "- Basic formation is a battalion."
+        "- Two battalions form a regiment."
+        "- Two regiments (four battalions) form a brigade."
+        "Commanders are special units assigned to formations."
+        "Higher ranks allow higher formations."
+        "If a unit with a commander is destroyed, the commander is lost.",
+        wxDefaultPosition,
+        wxDefaultSize,
+        wxTE_MULTILINE | wxTE_READONLY | wxBORDER_NONE);
+    hIntro->SetFont(font);
+    hIntro->SetBackgroundColour(wxColour(0, 35, 0));
+    hIntro->SetForegroundColour(cText);
+    hIntro->SetMinSize(wxSize(-1, 160));
+    hs->Add(hIntro, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-    m_hierarchyList = new wxListCtrl(hierarchyPage, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_hierarchyList = new wxListCtrl(hierarchyPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_hierarchyList->SetFont(font);
+    m_hierarchyList->SetBackgroundColour(wxColour(0, 35, 0));
+    m_hierarchyList->SetForegroundColour(cText);
     m_hierarchyList->InsertColumn(0, "Formation");
     m_hierarchyList->InsertColumn(1, "Commander");
     m_hierarchyList->InsertColumn(2, "Units");
-    hierarchySizer->Add(m_hierarchyList, 1, wxEXPAND);
-    hierarchyPage->SetSizer(hierarchySizer);
+    hs->Add(m_hierarchyList, 1, wxALL | wxEXPAND, 8);
 
-    m_rightBook->AddPage(rosterPage, "Strategick\u00e1 mapa", true);
-    m_rightBook->AddPage(hierarchyPage, "Hierarchie", false);
-    rightSizer->Add(m_rightBook, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+    hierarchyPanel->SetSizer(hs);
 
-    auto btnSizer = new wxBoxSizer(wxVERTICAL);
-    m_btnResearch = new wxButton(right, ID_BTN_RESEARCH, "Research");
-    m_btnBuy      = new wxButton(right, ID_BTN_BUY, "Buy units");
-    m_btnSell     = new wxButton(right, ID_BTN_SELL, "Sell units");
-    m_btnLaunch   = new wxButton(right, ID_BTN_LAUNCH, "Launch mission");
-    m_btnEndTurn  = new wxButton(right, ID_BTN_ENDTURN, "End turn");
+    // --- Page 2: Statistics (integrated into this frame) ---
+    m_statsPanel = new wxPanel(m_leftBook);
+    m_statsPanel->SetBackgroundColour(cPanelDark);
+    BuildStatsPage();
 
-    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuy,      0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnSell,     0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnLaunch,   0, wxEXPAND | wxBOTTOM, 12);
-    btnSizer->Add(m_btnEndTurn,  0, wxEXPAND);
+    m_leftBook->AddPage(m_mapPanel, "Strategic map", true);
+    m_leftBook->AddPage(hierarchyPanel, "Hierarchy", false);
+    m_leftBook->AddPage(m_statsPanel, "Statistics", false);
 
-    rightSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+    mainSizer->Add(m_leftBook, 4, wxEXPAND);
+
+    // ============================================================
+    // MIDDLE: player units (always visible)
+    // ============================================================
+    auto* mid = new wxPanel(root);
+    mid->SetBackgroundColour(cPanel);
+    auto* midSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* midTitle = CreateSpellLabel(mid, m_spellData, "Player units");
+    midSizer->Add(midTitle, 0, wxALL, 8);
+
+    m_roster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_roster->SetFont(font);
+    m_roster->SetBackgroundColour(wxColour(0, 35, 0));
+    m_roster->SetForegroundColour(cText);
+    m_roster->InsertColumn(0, "Unit");
+    m_roster->InsertColumn(1, "Count");
+    m_roster->InsertColumn(2, "HP");
+    midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
+
+    mid->SetSizer(midSizer);
+    mainSizer->Add(mid, 2, wxEXPAND);
+
+    // ============================================================
+    // RIGHT: status + actions (always visible, consistent layout)
+    // ============================================================
+    auto* right = new wxPanel(root);
+    right->SetBackgroundColour(cPanelDark);
+    auto* rightSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Status box (Money / Research / Turn)
+    auto* status = new wxPanel(right);
+    status->SetBackgroundColour(cPanelDark);
+    auto* statusSizer = new wxBoxSizer(wxVERTICAL);
+
+    wxBitmap placeholder(1, 1);
+    m_lblMoney = new wxStaticBitmap(status, wxID_ANY, placeholder);
+    m_lblResearch = new wxStaticBitmap(status, wxID_ANY, placeholder);
+    m_lblTurn = new wxStaticBitmap(status, wxID_ANY, placeholder);
+
+    statusSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_HORIZONTAL, 6);
+    statusSizer->Add(m_lblResearch, 0, wxALL | wxALIGN_CENTER_HORIZONTAL, 6);
+    statusSizer->Add(m_lblTurn, 0, wxALL | wxALIGN_CENTER_HORIZONTAL, 6);
+
+    status->SetSizer(statusSizer);
+    rightSizer->Add(status, 0, wxALL | wxEXPAND, 8);
+
+    auto makeBtn = [&](int id, const wxString& label) -> wxBitmapButton*
+    {
+        // Render button captions using SpellFont (same pipeline as Money/Research/Turn).
+        return CreateSpellButton(right, id, m_spellData, label.ToStdString(), wxSize(-1, 44));
+    };
+
+    // Buttons (order matches original-ish layout)
+    m_btnResearch      = makeBtn(ID_BTN_RESEARCH, "Research");
+    m_btnBuy           = makeBtn(ID_BTN_BUY, "Buy units");
+    m_btnSell          = makeBtn(ID_BTN_SELL, "Sell units");
+    m_btnStrategicMap  = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
+    m_btnHierarchy     = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
+    m_btnStats         = makeBtn(ID_BTN_STATS, "Statistics");
+    m_btnLaunch        = makeBtn(ID_BTN_LAUNCH, "Launch mission");
+    m_btnEndTurn       = makeBtn(ID_BTN_ENDTURN, "End turn");
+
+    auto* btnSizer = new wxBoxSizer(wxVERTICAL);
+    btnSizer->Add(m_btnResearch,     0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuy,          0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnSell,         0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnHierarchy,    0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnStats,        0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnLaunch,       0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnEndTurn,      0, wxEXPAND);
+
+    rightSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     right->SetSizer(rightSizer);
 
-    mainSizer->Add(m_mapPanel, 2, wxEXPAND);
     mainSizer->Add(right, 1, wxEXPAND);
 
-    auto rootSizer = new wxBoxSizer(wxVERTICAL);
-    rootSizer->Add(topBar, 0, wxEXPAND);
+    auto* rootSizer = new wxBoxSizer(wxVERTICAL);
     rootSizer->Add(mainSizer, 1, wxEXPAND);
     root->SetSizer(rootSizer);
 }
@@ -922,18 +1005,31 @@ void StrategicLevelFrame::RefreshUI()
         m_btnSell->Enable(!m_playerUnits.empty());
 }
 
+
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
-    if(m_rightBook)
-        m_rightBook->SetSelection(0);
+    if(m_leftBook)
+        m_leftBook->SetSelection(0);
 }
 
 void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 {
-    if(m_rightBook)
-        m_rightBook->SetSelection(1);
+    if(m_leftBook)
+        m_leftBook->SetSelection(1);
 }
 
+void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
+{
+    // Ensure the stats page sees the latest state.
+    SaveStrategicState();
+    LoadRanksTable();
+    LoadMissionStatsIfPresent();
+    RecomputePlayerRank();
+    RefreshStatsPage();
+
+    if(m_leftBook)
+        m_leftBook->SetSelection(2);
+}
 void StrategicLevelFrame::SelectTerritoryById(int territory_id)
 {
     // Find index in LevelData by id.
@@ -2160,10 +2256,10 @@ void StrategicLevelFrame::TryLoadBackground()
             m_clkH = ch;
             m_hasClk = ((size_t)m_clkW * (size_t)m_clkH == m_clkValues.size());
 
-            // Hide the temporary territory grid when region click-detection is available.
-            if(m_hasClk && m_territoryButtonsPanel)
+            // Hide the territory button grid when region click-detection is available.
+            if(m_territoryButtonsPanel)
             {
-                m_territoryButtonsPanel->Hide();
+                m_territoryButtonsPanel->Show(!m_hasClk);
                 if(m_mapPanel) m_mapPanel->Layout();
             }
 
@@ -2260,89 +2356,89 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
 // Territory labels directly on the map (replacement for the temporary button grid).
 // Prefer centroids computed from CLK (exact), fallback to LEVEL_XX.DEF "strategic_x/y".
-{
-    wxFont f = wxFontInfo(10).Bold();
-    dc.SetFont(f);
-
-    // Heuristic: many DEFs store strategic_x/y in a 0..255 logical space (not pixel coords).
-    int maxSX = 0, maxSY = 0;
-    for(const auto& t : m_level.territories)
-    {
-        maxSX = std::max(maxSX, t.strategic_x);
-        maxSY = std::max(maxSY, t.strategic_y);
-    }
-    const bool defLooksLike256 =
-        (maxSX > 0 && maxSY > 0 && maxSX <= 255 && maxSY <= 255 && (bw > 255 || bh > 255));
-
-    auto getPx = [&](const LevelTerritory& t, int& px, int& py) -> bool
-    {
-        // 1) Exact centroid from CLK
-        auto it = m_territoryCentroids.find(t.id);
-        if(it != m_territoryCentroids.end())
         {
-            px = it->second.x;
-            py = it->second.y;
-            return true;
-        }
+            wxFont f = wxFontInfo(10).Bold();
+            dc.SetFont(f);
 
-        // 2) Fallback: DEF point
-        if(t.strategic_x <= 0 || t.strategic_y <= 0)
-            return false;
+            // Heuristic: many DEFs store strategic_x/y in a 0..255 logical space (not pixel coords).
+            int maxSX = 0, maxSY = 0;
+            for (const auto& t : m_level.territories)
+            {
+                maxSX = std::max(maxSX, t.strategic_x);
+                maxSY = std::max(maxSY, t.strategic_y);
+            }
+            const bool defLooksLike256 =
+                (maxSX > 0 && maxSY > 0 && maxSX <= 255 && maxSY <= 255 && (bw > 255 || bh > 255));
 
-        if(defLooksLike256)
-        {
-            px = (int)std::lround(((double)t.strategic_x * (double)bw) / 256.0);
-            py = (int)std::lround(((double)t.strategic_y * (double)bh) / 256.0);
-        }
-        else
-        {
-            px = t.strategic_x;
-            py = t.strategic_y;
-        }
-        return true;
-    };
+            auto getPx = [&](const LevelTerritory& t, int& px, int& py) -> bool
+                {
+                    // 1) Exact centroid from CLK
+                    auto it = m_territoryCentroids.find(t.id);
+                    if (it != m_territoryCentroids.end())
+                    {
+                        px = it->second.x;
+                        py = it->second.y;
+                        return true;
+                    }
 
-    // Draw all territory IDs.
-    for(const auto& t : m_level.territories)
-    {
-        int px = 0, py = 0;
-        if(!getPx(t, px, py))
-            continue;
+                    // 2) Fallback: DEF point
+                    if (t.strategic_x <= 0 || t.strategic_y <= 0)
+                        return false;
 
-        const int tx = x + (int)std::lround((double)px * s);
-        const int ty = y + (int)std::lround((double)py * s);
+                    if (defLooksLike256)
+                    {
+                        px = (int)std::lround(((double)t.strategic_x * (double)bw) / 256.0);
+                        py = (int)std::lround(((double)t.strategic_y * (double)bh) / 256.0);
+                    }
+                    else
+                    {
+                        px = t.strategic_x;
+                        py = t.strategic_y;
+                    }
+                    return true;
+                };
 
-        wxString label = wxString::Format("T%02d", t.id);
+            // Draw all territory IDs.
+            for (const auto& t : m_level.territories)
+            {
+                int px = 0, py = 0;
+                if (!getPx(t, px, py))
+                    continue;
 
-        // Tiny shadow for readability.
-        dc.SetTextForeground(wxColour(0, 0, 0));
-        dc.DrawText(label, tx + 1, ty + 1);
-        dc.SetTextForeground(wxColour(255, 255, 255));
-        dc.DrawText(label, tx, ty);
-    }
+                const int tx = x + (int)std::lround((double)px * s);
+                const int ty = y + (int)std::lround((double)py * s);
 
-    // Simple selection marker at the selected territory point.
-    if(m_selectedTerritory > 0)
-    {
-        const LevelTerritory* sel = nullptr;
-        for(const auto& t : m_level.territories)
-        {
-            if(t.id == m_selectedTerritory) { sel = &t; break; }
-        }
+                wxString label = wxString::Format("T%02d", t.id);
 
-        int px = 0, py = 0;
-        if(sel && getPx(*sel, px, py))
-        {
-            const int tx = x + (int)std::lround((double)px * s);
-            const int ty = y + (int)std::lround((double)py * s);
-            const int r  = std::max(6, (int)std::lround(6.0 * s));
+                // Tiny shadow for readability.
+                dc.SetTextForeground(wxColour(0, 0, 0));
+                dc.DrawText(label, tx + 1, ty + 1);
+                dc.SetTextForeground(wxColour(255, 255, 255));
+                dc.DrawText(label, tx, ty);
+            }
 
-            dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
-            dc.SetBrush(*wxTRANSPARENT_BRUSH);
-            dc.DrawCircle(tx, ty, r);
-        }
-    }
-}
+            // Simple selection marker at the selected territory point.
+            if (m_selectedTerritory > 0)
+            {
+                const LevelTerritory* sel = nullptr;
+                for (const auto& t : m_level.territories)
+                {
+                    if (t.id == m_selectedTerritory) { sel = &t; break; }
+                }
+
+                int px = 0, py = 0;
+                if (sel && getPx(*sel, px, py))
+                {
+                    const int tx = x + (int)std::lround((double)px * s);
+                    const int ty = y + (int)std::lround((double)py * s);
+                    const int r = std::max(6, (int)std::lround(6.0 * s));
+
+                    dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
+                    dc.SetBrush(*wxTRANSPARENT_BRUSH);
+                    dc.DrawCircle(tx, ty, r);
+                }
+            }
+        };
     }
 }
 
@@ -2352,3 +2448,325 @@ void StrategicLevelFrame::OnActivate(wxActivateEvent& ev)
         Raise();
     ev.Skip();
 }
+
+
+// ============================================================
+// Statistics page (integrated from former form_strategic.*)
+// ============================================================
+
+void StrategicLevelFrame::BuildStatsPage()
+{
+    if(!m_statsPanel)
+        return;
+
+    auto* rootSizer = new wxBoxSizer(wxVERTICAL);
+
+    // ---- Overall stats ----
+    rootSizer->Add(CreateSpellLabel(m_statsPanel, m_spellData, "Overall statistics"), 0, wxALL, 10);
+
+    auto* overallBox = new wxPanel(m_statsPanel);
+    overallBox->SetBackgroundColour(wxColour(0, 35, 0));
+    auto* overallSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto addHeader = [&](wxWindow* parent) {
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        row->Add(CreateSpellLabel(parent, m_spellData, ""), 1, wxRIGHT, 8);
+        row->Add(CreateSpellLabel(parent, m_spellData, "Alliance"), 0, wxRIGHT, 12);
+        row->Add(CreateSpellLabel(parent, m_spellData, "Enemy"), 0);
+        return row;
+    };
+
+    overallSizer->Add(addHeader(overallBox), 0, wxALL | wxEXPAND, 8);
+
+    auto addRow = [&](wxWindow* parent, const char* caption, wxStaticBitmap*& outA, wxStaticBitmap*& outE)
+    {
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        row->Add(CreateSpellLabel(parent, m_spellData, caption), 1, wxRIGHT, 8);
+
+        outA = CreateSpellLabel(parent, m_spellData, "0");
+        outE = CreateSpellLabel(parent, m_spellData, "0");
+        row->Add(outA, 0, wxRIGHT, 12);
+        row->Add(outE, 0);
+        return row;
+    };
+
+    overallSizer->Add(addRow(overallBox, "Light units", m_lblAllLightA, m_lblAllLightE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    overallSizer->Add(addRow(overallBox, "Heavy units", m_lblAllHeavyA, m_lblAllHeavyE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    overallSizer->Add(addRow(overallBox, "Air units",   m_lblAllAirA,  m_lblAllAirE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    overallSizer->Add(addRow(overallBox, "Commanders",  m_lblAllCmdA,  m_lblAllCmdE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    overallBox->SetSizer(overallSizer);
+    rootSizer->Add(overallBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    // ---- Level stats ----
+    rootSizer->Add(CreateSpellLabel(m_statsPanel, m_spellData, "Current level statistics"), 0, wxALL, 10);
+
+    auto* levelBox = new wxPanel(m_statsPanel);
+    levelBox->SetBackgroundColour(wxColour(0, 35, 0));
+    auto* levelSizer = new wxBoxSizer(wxVERTICAL);
+
+    levelSizer->Add(addHeader(levelBox), 0, wxALL | wxEXPAND, 8);
+
+    levelSizer->Add(addRow(levelBox, "Light units", m_lblLvlLightA, m_lblLvlLightE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    levelSizer->Add(addRow(levelBox, "Heavy units", m_lblLvlHeavyA, m_lblLvlHeavyE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    levelSizer->Add(addRow(levelBox, "Air units",   m_lblLvlAirA,  m_lblLvlAirE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    levelSizer->Add(addRow(levelBox, "Commanders",  m_lblLvlCmdA,  m_lblLvlCmdE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    levelBox->SetSizer(levelSizer);
+    rootSizer->Add(levelBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    // ---- Player box ----
+    rootSizer->Add(CreateSpellLabel(m_statsPanel, m_spellData, "Player"), 0, wxALL, 10);
+
+    auto* playerBox = new wxPanel(m_statsPanel);
+    playerBox->SetBackgroundColour(wxColour(0, 35, 0));
+    auto* playerSizer = new wxBoxSizer(wxVERTICAL);
+
+    m_lblPlayerName = CreateSpellLabel(playerBox, m_spellData, "Player - John Alexander");
+    m_lblPlayerRank = CreateSpellLabel(playerBox, m_spellData, "Rank: 0");
+    m_lblPlayerExp  = CreateSpellLabel(playerBox, m_spellData, "Experience: 0");
+    m_lblPlayerMaxUnits = CreateSpellLabel(playerBox, m_spellData, "Max units: 0");
+    m_lblPlayerMaxCmds  = CreateSpellLabel(playerBox, m_spellData, "Max commanders: 0");
+
+    playerSizer->Add(m_lblPlayerName, 0, wxALL, 8);
+    playerSizer->Add(m_lblPlayerRank, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    playerSizer->Add(m_lblPlayerExp,  0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    playerSizer->Add(m_lblPlayerMaxUnits, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    playerSizer->Add(m_lblPlayerMaxCmds,  0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+
+    playerBox->SetSizer(playerSizer);
+    rootSizer->Add(playerBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    m_statsPanel->SetSizer(rootSizer);
+}
+
+void StrategicLevelFrame::RefreshStatsPage()
+{
+    if(!m_statsPanel)
+        return;
+
+    UpdateSpellLabel(m_lblAllLightA, m_spellData, wxString::Format("%d", m_lossStats.alliance_all.light).ToStdString());
+    UpdateSpellLabel(m_lblAllLightE, m_spellData, wxString::Format("%d", m_lossStats.enemy_all.light).ToStdString());
+    UpdateSpellLabel(m_lblAllHeavyA, m_spellData, wxString::Format("%d", m_lossStats.alliance_all.heavy).ToStdString());
+    UpdateSpellLabel(m_lblAllHeavyE, m_spellData, wxString::Format("%d", m_lossStats.enemy_all.heavy).ToStdString());
+    UpdateSpellLabel(m_lblAllAirA, m_spellData, wxString::Format("%d", m_lossStats.alliance_all.air).ToStdString());
+    UpdateSpellLabel(m_lblAllAirE, m_spellData, wxString::Format("%d", m_lossStats.enemy_all.air).ToStdString());
+    UpdateSpellLabel(m_lblAllCmdA, m_spellData, wxString::Format("%d", m_lossStats.alliance_all.commanders).ToStdString());
+    UpdateSpellLabel(m_lblAllCmdE, m_spellData, wxString::Format("%d", m_lossStats.enemy_all.commanders).ToStdString());
+
+    UpdateSpellLabel(m_lblLvlLightA, m_spellData, wxString::Format("%d", m_lossStats.alliance_level.light).ToStdString());
+    UpdateSpellLabel(m_lblLvlLightE, m_spellData, wxString::Format("%d", m_lossStats.enemy_level.light).ToStdString());
+    UpdateSpellLabel(m_lblLvlHeavyA, m_spellData, wxString::Format("%d", m_lossStats.alliance_level.heavy).ToStdString());
+    UpdateSpellLabel(m_lblLvlHeavyE, m_spellData, wxString::Format("%d", m_lossStats.enemy_level.heavy).ToStdString());
+    UpdateSpellLabel(m_lblLvlAirA, m_spellData, wxString::Format("%d", m_lossStats.alliance_level.air).ToStdString());
+    UpdateSpellLabel(m_lblLvlAirE, m_spellData, wxString::Format("%d", m_lossStats.enemy_level.air).ToStdString());
+    UpdateSpellLabel(m_lblLvlCmdA, m_spellData, wxString::Format("%d", m_lossStats.alliance_level.commanders).ToStdString());
+    UpdateSpellLabel(m_lblLvlCmdE, m_spellData, wxString::Format("%d", m_lossStats.enemy_level.commanders).ToStdString());
+
+    const CommanderRankRec* rec = FindRankRec(m_player.rank);
+    const int maxUnits = rec ? rec->max_units : 0;
+    const int maxCmds  = rec ? rec->max_commanders : 0;
+    const int nextExp  = FindNextRankExp(m_player.rank);
+
+    UpdateSpellLabel(m_lblPlayerName, m_spellData, wxString::Format("Player - %s", wxString::FromUTF8(m_player.name)).ToStdString());
+    UpdateSpellLabel(m_lblPlayerRank, m_spellData, wxString::Format("Rank: %s", GetRankNameCz(m_player.rank)).ToStdString());
+    UpdateSpellLabel(m_lblPlayerExp, m_spellData, wxString::Format("Experience: %d (%d)", m_player.experience, nextExp).ToStdString());
+    UpdateSpellLabel(m_lblPlayerMaxUnits, m_spellData, wxString::Format("Max units: %d", maxUnits).ToStdString());
+    UpdateSpellLabel(m_lblPlayerMaxCmds, m_spellData, wxString::Format("Max commanders: %d", maxCmds).ToStdString());
+
+    m_statsPanel->Layout();
+}
+
+// ---------------- Data loading ----------------
+
+wxString StrategicLevelFrame::FindStrategicStatsPath() const
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path base = fs::path(m_level.source_path).parent_path();
+    if(base.empty() || !fs::exists(base, ec))
+        base = fs::current_path(ec);
+    return wxString::FromUTF8((base / "strategic_stats.json").string());
+}
+
+wxString StrategicLevelFrame::FindHodnostiDefPath() const
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path base = fs::path(m_level.source_path).parent_path();
+    if(base.empty() || !fs::exists(base, ec))
+        base = fs::current_path(ec);
+
+    const std::array<fs::path, 6> candidates = {
+        base / "HODNOSTI.DEF",
+        base / "hodnosti.def",
+        base / "DATA" / "HODNOSTI.DEF",
+        base / "data" / "HODNOSTI.DEF",
+        fs::current_path(ec) / "data" / "HODNOSTI.DEF",
+        fs::current_path(ec) / "HODNOSTI.DEF"
+    };
+
+    for(const auto& p : candidates)
+    {
+        if(fs::exists(p, ec) && fs::is_regular_file(p, ec))
+            return wxString::FromUTF8(p.string());
+    }
+    return "";
+}
+
+void StrategicLevelFrame::LoadRanksTable()
+{
+    if(!m_ranks.empty())
+        return;
+
+    wxString p = FindHodnostiDefPath();
+    if(p.empty())
+    {
+        // Fallback defaults (kept identical to former form_strategic.*)
+        m_ranks = {
+            {0,  2,  2,     0,  0},
+            {1,  4,  6,     0,  0},
+            {2,  9, 10,     0,  2},
+            {3, 12, 18,   300,  4},
+            {4, 14, 26,  2550,  6},
+            {5, 18, 36,  5350,  8},
+            {6, 22, 48, 10000, 10},
+            {7, 26, 66, 16000, 12},
+            {8, 32, 84, 26000, 14},
+        };
+        return;
+    }
+
+    std::ifstream f(p.ToStdString());
+    if(!f)
+        return;
+
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if(data.empty())
+        return;
+
+    std::regex re(R"(DefineCommander\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*,\s*(\d+)\s*\))");
+    for(auto it = std::sregex_iterator(data.begin(), data.end(), re); it != std::sregex_iterator(); ++it)
+    {
+        const auto& m = *it;
+        if(m.size() < 6)
+            continue;
+
+        CommanderRankRec r;
+        r.rank = std::stoi(m[1].str());
+        r.max_units = std::stoi(m[2].str());
+        r.actions_required = std::stoi(m[3].str());
+        r.exp_required = std::stoi(m[4].str());
+        r.max_commanders = std::stoi(m[5].str());
+        m_ranks.push_back(r);
+    }
+
+    std::sort(m_ranks.begin(), m_ranks.end(),
+              [](const CommanderRankRec& a, const CommanderRankRec& b) { return a.rank < b.rank; });
+}
+
+static bool ReadLossBlockFromObj_StrategicLevel(const std::string& obj, StrategicLevelFrame::LossBlock& out)
+{
+    bool any = false;
+    any |= ParseJsonIntField(obj, "light", out.light);
+    any |= ParseJsonIntField(obj, "heavy", out.heavy);
+    any |= ParseJsonIntField(obj, "air", out.air);
+    any |= ParseJsonIntField(obj, "commanders", out.commanders);
+    return any;
+}
+
+void StrategicLevelFrame::LoadMissionStatsIfPresent()
+{
+    // Optional file:
+    // {
+    //   "all":   {"alliance":{"light":..,"heavy":..,"air":..,"commanders":..}, "enemy":{...}},
+    //   "level": {"alliance":{...}, "enemy":{...}}
+    // }
+    wxString p = FindStrategicStatsPath();
+    std::ifstream f(p.ToStdString());
+    if(!f)
+        return;
+
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if(data.empty())
+        return;
+
+    auto extractObj = [&](const char* section, const char* side, std::string& outObj) -> bool
+    {
+        std::regex re(std::string("\"") + section + "\"\\s*:\\s*\\{([^}]*)\\}");
+        std::smatch m;
+        if(!std::regex_search(data, m, re) || m.size() < 2)
+            return false;
+        std::string sec = m[1].str();
+
+        std::regex re2(std::string("\"") + side + "\"\\s*:\\s*\\{([^}]*)\\}");
+        if(!std::regex_search(sec, m, re2) || m.size() < 2)
+            return false;
+        outObj = m[1].str();
+        return true;
+    };
+
+    std::string obj;
+    if(extractObj("all", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_all);
+    if(extractObj("all", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_all);
+
+    if(extractObj("level", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_level);
+    if(extractObj("level", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_level);
+}
+
+// ---------------- Rank helpers ----------------
+
+void StrategicLevelFrame::RecomputePlayerRank()
+{
+    int best = 0;
+    for(const auto& r : m_ranks)
+    {
+        if(m_player.experience >= r.exp_required && m_player.actions >= r.actions_required)
+            best = std::max(best, r.rank);
+    }
+    m_player.rank = best;
+}
+
+const StrategicLevelFrame::CommanderRankRec* StrategicLevelFrame::FindRankRec(int rank) const
+{
+    for(const auto& r : m_ranks)
+        if(r.rank == rank)
+            return &r;
+    return nullptr;
+}
+
+int StrategicLevelFrame::FindNextRankExp(int current_rank) const
+{
+    int nextExp = 0;
+    bool found = false;
+    for(const auto& r : m_ranks)
+    {
+        if(r.rank == current_rank) { found = true; continue; }
+        if(found && r.rank > current_rank) { nextExp = r.exp_required; break; }
+    }
+    if(nextExp <= 0)
+    {
+        for(const auto& r : m_ranks)
+            nextExp = std::max(nextExp, r.exp_required);
+    }
+    return nextExp;
+}
+
+wxString StrategicLevelFrame::GetRankNameCz(int rank) const
+{
+    switch(rank)
+    {
+    case 0: return "PoruÄÃ­k";
+    case 1: return "NadporuÄÃ­k";
+    case 2: return "KapitÃ¡n";
+    case 3: return "Major";
+    case 4: return "PodplukovnÃ­k";
+    case 5: return "PlukovnÃ­k";
+    case 6: return "GenerÃ¡lmajor";
+    case 7: return "GenerÃ¡lporuÄÃ­k";
+    case 8: return "ArmÃ¡dnÃ­ generÃ¡l";
+    default: return wxString::Format("Rank %d", rank);
+    }
+}
+

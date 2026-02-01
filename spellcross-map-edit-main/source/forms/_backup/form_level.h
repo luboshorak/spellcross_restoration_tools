@@ -7,6 +7,7 @@
 #include <wx/wx.h>
 #include <wx/listctrl.h>
 #include <wx/statbmp.h>
+#include <wx/bmpbuttn.h>
 #include <wx/simplebook.h>
 
 #include "level.h"
@@ -19,7 +20,6 @@ class StrategicLevelFrame : public wxFrame
 public:
     StrategicLevelFrame(MainFrame* parent, const LevelData& level);
 
-private:
     void BuildUI();
     void RefreshUI();
 
@@ -41,6 +41,47 @@ private:
     void OnLaunch(wxCommandEvent& ev);
     void OnShowStrategicMap(wxCommandEvent& ev);
     void OnShowHierarchy(wxCommandEvent& ev);
+    void OnShowStats(wxCommandEvent& ev);
+
+
+// menu (Strategic Level saves)
+void BuildMenu();
+void OnSaveGame(wxCommandEvent& ev);
+void OnLoadGame(wxCommandEvent& ev);
+
+struct PlayerProgress
+{
+    std::string name = "John Alexander";
+    int rank = 0;
+    int experience = 0;
+    int actions = 0;
+};
+
+    struct CommanderRankRec
+    {
+        int rank = 0;
+        int max_units = 0;
+        int actions_required = 0;
+        int exp_required = 0;
+        int max_commanders = 0;
+    };
+
+    struct LossBlock
+    {
+        int light = 0;
+        int heavy = 0;
+        int air = 0;
+        int commanders = 0;
+    };
+
+    struct LossStats
+    {
+        LossBlock alliance_all;
+        LossBlock enemy_all;
+        LossBlock alliance_level;
+        LossBlock enemy_level;
+    };
+
 
     void LoadStrategicState();
     void SaveStrategicState() const;
@@ -53,7 +94,20 @@ private:
     std::wstring ResolveMapDefPathForMissionToken(const std::string& mission_token) const;
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
-public:
+private:
+    // stats page helpers (integrated from former form_strategic.*)
+    void BuildStatsPage();
+    void RefreshStatsPage();
+    void LoadRanksTable();
+    void LoadMissionStatsIfPresent();
+    void RecomputePlayerRank();
+    const CommanderRankRec* FindRankRec(int rank) const;
+    int FindNextRankExp(int current_rank) const;
+    wxString GetRankNameCz(int rank) const;
+
+    wxString FindHodnostiDefPath() const;
+    wxString FindStrategicStatsPath() const;
+
     MainFrame* m_main = nullptr;
     SpellData* m_spellData = nullptr;
     LevelData m_level;
@@ -63,15 +117,6 @@ public:
     int m_money = 0;
     int m_research = 0;
     int m_selectedTerritory = -1;
-
-    // Player progression (saved in strategic_state.json)
-    struct PlayerProgress
-    {
-        std::string name = "John Alexander";
-        int rank = 0;
-        int experience = 0;
-        int actions = 0;
-    };
 
     PlayerProgress m_player;
 
@@ -97,6 +142,37 @@ public:
     wxBitmap m_bgBitmap;
     bool m_hasBg = false;
 
+    // statistics model (integrated from former form_strategic.*)
+    std::vector<CommanderRankRec> m_ranks;
+    LossStats m_lossStats;
+
+    // stats page widgets (spell-font rendered bitmaps)
+    wxPanel* m_statsPanel = nullptr;
+
+    wxStaticBitmap* m_lblAllLightA = nullptr;
+    wxStaticBitmap* m_lblAllLightE = nullptr;
+    wxStaticBitmap* m_lblAllHeavyA = nullptr;
+    wxStaticBitmap* m_lblAllHeavyE = nullptr;
+    wxStaticBitmap* m_lblAllAirA = nullptr;
+    wxStaticBitmap* m_lblAllAirE = nullptr;
+    wxStaticBitmap* m_lblAllCmdA = nullptr;
+    wxStaticBitmap* m_lblAllCmdE = nullptr;
+
+    wxStaticBitmap* m_lblLvlLightA = nullptr;
+    wxStaticBitmap* m_lblLvlLightE = nullptr;
+    wxStaticBitmap* m_lblLvlHeavyA = nullptr;
+    wxStaticBitmap* m_lblLvlHeavyE = nullptr;
+    wxStaticBitmap* m_lblLvlAirA = nullptr;
+    wxStaticBitmap* m_lblLvlAirE = nullptr;
+    wxStaticBitmap* m_lblLvlCmdA = nullptr;
+    wxStaticBitmap* m_lblLvlCmdE = nullptr;
+
+    wxStaticBitmap* m_lblPlayerName = nullptr;
+    wxStaticBitmap* m_lblPlayerRank = nullptr;
+    wxStaticBitmap* m_lblPlayerExp = nullptr;
+    wxStaticBitmap* m_lblPlayerMaxUnits = nullptr;
+    wxStaticBitmap* m_lblPlayerMaxCmds = nullptr;
+
     // widgets
     wxStaticBitmap* m_lblMoney = nullptr;
     wxStaticBitmap* m_lblResearch = nullptr;
@@ -109,15 +185,16 @@ public:
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_roster = nullptr;
     wxListCtrl* m_hierarchyList = nullptr;
-    wxSimplebook* m_rightBook = nullptr;
+    wxSimplebook* m_leftBook = nullptr;
 
-    wxButton* m_btnResearch = nullptr;
-    wxButton* m_btnBuy = nullptr;
-    wxButton* m_btnSell = nullptr;
-    wxButton* m_btnEndTurn = nullptr;
-    wxButton* m_btnLaunch = nullptr;
-    wxButton* m_btnStrategicMap = nullptr;
-    wxButton* m_btnHierarchy = nullptr;
+    wxBitmapButton* m_btnResearch = nullptr;
+    wxBitmapButton* m_btnBuy = nullptr;
+    wxBitmapButton* m_btnSell = nullptr;
+    wxBitmapButton* m_btnEndTurn = nullptr;
+    wxBitmapButton* m_btnLaunch = nullptr;
+    wxBitmapButton* m_btnStrategicMap = nullptr;
+    wxBitmapButton* m_btnHierarchy = nullptr;
+    wxBitmapButton* m_btnStats = nullptr;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
@@ -132,7 +209,10 @@ public:
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
-        ID_BTN_HIERARCHY
+        ID_BTN_HIERARCHY,
+        ID_BTN_STATS,
+                ID_MENU_SAVE_GAME,
+        ID_MENU_LOAD_GAME
     };
 
     wxDECLARE_EVENT_TABLE();

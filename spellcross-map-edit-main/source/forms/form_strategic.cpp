@@ -7,31 +7,41 @@
 #include <cctype>
 #include <array>
 
+static wxFont MakeUiFont(int px, bool bold = false)
+{
+    wxFont f(wxFontInfo(px).Family(wxFONTFAMILY_TELETYPE));
+    f.SetFaceName("Terminal");
+    if(bold)
+        f.SetWeight(wxFONTWEIGHT_BOLD);
+    return f;
+}
+
 static wxStaticText* MakeCell(wxWindow* parent, const wxString& text, int align = wxALIGN_LEFT)
 {
     auto* t = new wxStaticText(parent, wxID_ANY, text);
-    t->SetForegroundColour(*wxWHITE);
-    if (align == wxALIGN_RIGHT)
+    t->SetForegroundColour(wxColour(210, 255, 210));
+    t->SetFont(MakeUiFont(11, false));
+    if(align == wxALIGN_RIGHT)
         t->SetWindowStyleFlag(t->GetWindowStyleFlag() | wxALIGN_RIGHT);
     return t;
 }
 
 static void ApplyHeaderStyle(wxStaticText* t)
 {
-    if (!t) return;
-    t->SetForegroundColour(*wxWHITE);
-    t->SetFont(wxFontInfo(11).Bold());
+    if(!t) return;
+    t->SetForegroundColour(wxColour(255, 230, 80));
+    t->SetFont(MakeUiFont(11, true));
 }
 
 static void ApplySectionTitleStyle(wxStaticText* t)
 {
-    if (!t) return;
-    t->SetForegroundColour(*wxWHITE);
-    t->SetFont(wxFontInfo(12).Bold());
+    if(!t) return;
+    t->SetForegroundColour(wxColour(255, 230, 80));
+    t->SetFont(MakeUiFont(13, true));
 }
 
 StrategicInfoFrame::StrategicInfoFrame(wxWindow* parent, const LevelData& level)
-    : wxFrame(parent, wxID_ANY, "Statistic Level", wxDefaultPosition, wxSize(760, 620),
+    : wxFrame(parent, wxID_ANY, "Statistiky", wxDefaultPosition, wxSize(760, 620),
         wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
     m_level(level)
 {
@@ -53,9 +63,9 @@ void StrategicInfoFrame::BuildUI()
 
     auto* main = new wxBoxSizer(wxVERTICAL);
 
-    // ---- Statistika celé hry ----
+    // ---- Statistika celï¿½ hry ----
     {
-        auto* title = new wxStaticText(root, wxID_ANY, "Statistika celé hry");
+        auto* title = new wxStaticText(root, wxID_ANY, "Statistika celï¿½ hry");
         ApplySectionTitleStyle(title);
         main->Add(title, 0, wxLEFT | wxRIGHT | wxTOP, 14);
 
@@ -69,8 +79,8 @@ void StrategicInfoFrame::BuildUI()
         grid->AddGrowableCol(2, 0);
 
         auto* h0 = MakeCell(box, "");
-        auto* h1 = MakeCell(box, "Aliance - ztráty", wxALIGN_RIGHT);
-        auto* h2 = MakeCell(box, "Other Side - ztráty", wxALIGN_RIGHT);
+        auto* h1 = MakeCell(box, "Aliance - ztrï¿½ty", wxALIGN_RIGHT);
+        auto* h2 = MakeCell(box, "Other Side - ztrï¿½ty", wxALIGN_RIGHT);
         ApplyHeaderStyle(h1);
         ApplyHeaderStyle(h2);
 
@@ -79,25 +89,25 @@ void StrategicInfoFrame::BuildUI()
         grid->Add(h2, 0, wxEXPAND);
 
         // rows
-        grid->Add(MakeCell(box, "Lehké j."), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Lehkï¿½ j."), 0, wxEXPAND);
         m_lblAllLightA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblAllLightE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblAllLightA, 0, wxEXPAND);
         grid->Add(m_lblAllLightE, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Tìžké j."), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Tï¿½kï¿½ j."), 0, wxEXPAND);
         m_lblAllHeavyA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblAllHeavyE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblAllHeavyA, 0, wxEXPAND);
         grid->Add(m_lblAllHeavyE, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Vzdušné j."), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Vzduï¿½nï¿½ j."), 0, wxEXPAND);
         m_lblAllAirA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblAllAirE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblAllAirA, 0, wxEXPAND);
         grid->Add(m_lblAllAirE, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Velitelé"), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Velitelï¿½"), 0, wxEXPAND);
         m_lblAllCmdA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblAllCmdE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblAllCmdA, 0, wxEXPAND);
@@ -110,9 +120,9 @@ void StrategicInfoFrame::BuildUI()
         main->Add(box, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, 14);
     }
 
-    // ---- Statistika aktuálního levelu ----
+    // ---- Statistika aktuï¿½lnï¿½ho levelu ----
     {
-        auto* title = new wxStaticText(root, wxID_ANY, "Statistika aktuálního levelu");
+        auto* title = new wxStaticText(root, wxID_ANY, "Statistika aktuï¿½lnï¿½ho levelu");
         ApplySectionTitleStyle(title);
         main->Add(title, 0, wxLEFT | wxRIGHT | wxTOP, 14);
 
@@ -125,8 +135,8 @@ void StrategicInfoFrame::BuildUI()
         grid->AddGrowableCol(2, 0);
 
         auto* h0 = MakeCell(box, "");
-        auto* h1 = MakeCell(box, "Aliance - ztráty", wxALIGN_RIGHT);
-        auto* h2 = MakeCell(box, "Other Side - ztráty", wxALIGN_RIGHT);
+        auto* h1 = MakeCell(box, "Aliance - ztrï¿½ty", wxALIGN_RIGHT);
+        auto* h2 = MakeCell(box, "Other Side - ztrï¿½ty", wxALIGN_RIGHT);
         ApplyHeaderStyle(h1);
         ApplyHeaderStyle(h2);
 
@@ -134,25 +144,25 @@ void StrategicInfoFrame::BuildUI()
         grid->Add(h1, 0, wxEXPAND);
         grid->Add(h2, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Lehké j."), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Lehkï¿½ j."), 0, wxEXPAND);
         m_lblLvlLightA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblLvlLightE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblLvlLightA, 0, wxEXPAND);
         grid->Add(m_lblLvlLightE, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Tìžké j."), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Tï¿½kï¿½ j."), 0, wxEXPAND);
         m_lblLvlHeavyA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblLvlHeavyE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblLvlHeavyA, 0, wxEXPAND);
         grid->Add(m_lblLvlHeavyE, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Vzdušné j."), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Vzduï¿½nï¿½ j."), 0, wxEXPAND);
         m_lblLvlAirA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblLvlAirE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblLvlAirA, 0, wxEXPAND);
         grid->Add(m_lblLvlAirE, 0, wxEXPAND);
 
-        grid->Add(MakeCell(box, "Velitelé"), 0, wxEXPAND);
+        grid->Add(MakeCell(box, "Velitelï¿½"), 0, wxEXPAND);
         m_lblLvlCmdA = MakeCell(box, "0", wxALIGN_RIGHT);
         m_lblLvlCmdE = MakeCell(box, "0", wxALIGN_RIGHT);
         grid->Add(m_lblLvlCmdA, 0, wxEXPAND);
@@ -172,19 +182,23 @@ void StrategicInfoFrame::BuildUI()
 
         auto* s = new wxBoxSizer(wxVERTICAL);
 
-        m_lblPlayerName = new wxStaticText(box, wxID_ANY, "Hráè - John Alexander");
-        m_lblPlayerRank = new wxStaticText(box, wxID_ANY, "Hodnost: Poruèík");
-        m_lblPlayerExp = new wxStaticText(box, wxID_ANY, "Zkušenost: 0 (0)");
-        m_lblPlayerMaxUnits = new wxStaticText(box, wxID_ANY, "Max. poèet stálých jednotek: 0");
-        m_lblPlayerMaxCmds = new wxStaticText(box, wxID_ANY, "Max. poèet velitelù: 0");
+        m_lblPlayerName = new wxStaticText(box, wxID_ANY, "Hrï¿½ï¿½ - John Alexander");
+        m_lblPlayerRank = new wxStaticText(box, wxID_ANY, "Hodnost: Poruï¿½ï¿½k");
+        m_lblPlayerExp = new wxStaticText(box, wxID_ANY, "Zkuï¿½enost: 0 (0)");
+        m_lblPlayerMaxUnits = new wxStaticText(box, wxID_ANY, "Max. poï¿½et stï¿½lï¿½ch jednotek: 0");
+        m_lblPlayerMaxCmds = new wxStaticText(box, wxID_ANY, "Max. poï¿½et velitelï¿½: 0");
 
-        m_lblPlayerName->SetForegroundColour(*wxWHITE);
-        m_lblPlayerRank->SetForegroundColour(*wxWHITE);
-        m_lblPlayerExp->SetForegroundColour(*wxWHITE);
-        m_lblPlayerMaxUnits->SetForegroundColour(*wxWHITE);
-        m_lblPlayerMaxCmds->SetForegroundColour(*wxWHITE);
+        m_lblPlayerName->SetForegroundColour(wxColour(210, 255, 210));
+        m_lblPlayerRank->SetForegroundColour(wxColour(210, 255, 210));
+        m_lblPlayerExp->SetForegroundColour(wxColour(210, 255, 210));
+        m_lblPlayerMaxUnits->SetForegroundColour(wxColour(210, 255, 210));
+        m_lblPlayerMaxCmds->SetForegroundColour(wxColour(210, 255, 210));
 
-        m_lblPlayerName->SetFont(wxFontInfo(12).Bold());
+        m_lblPlayerName->SetFont(MakeUiFont(12, true));
+        m_lblPlayerRank->SetFont(MakeUiFont(11, false));
+        m_lblPlayerExp->SetFont(MakeUiFont(11, false));
+        m_lblPlayerMaxUnits->SetFont(MakeUiFont(11, false));
+        m_lblPlayerMaxCmds->SetFont(MakeUiFont(11, false));
 
         s->Add(m_lblPlayerName, 0, wxALL, 10);
         s->Add(m_lblPlayerRank, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -228,11 +242,11 @@ void StrategicInfoFrame::RefreshUI()
     const int maxCmds = rec ? rec->max_commanders : 0;
     const int nextExp = FindNextRankExp(m_player.rank);
 
-    m_lblPlayerName->SetLabel(wxString::Format("Hráè - %s", wxString::FromUTF8(m_player.name)));
+    m_lblPlayerName->SetLabel(wxString::Format("Hrï¿½ï¿½ - %s", wxString::FromUTF8(m_player.name)));
     m_lblPlayerRank->SetLabel(wxString::Format("Hodnost: %s", GetRankNameCz(m_player.rank)));
-    m_lblPlayerExp->SetLabel(wxString::Format("Zkušenost: %d (%d)", m_player.experience, nextExp));
-    m_lblPlayerMaxUnits->SetLabel(wxString::Format("Max. poèet stálých jednotek: %d", maxUnits));
-    m_lblPlayerMaxCmds->SetLabel(wxString::Format("Max. poèet velitelù: %d", maxCmds));
+    m_lblPlayerExp->SetLabel(wxString::Format("Zkuï¿½enost: %d (%d)", m_player.experience, nextExp));
+    m_lblPlayerMaxUnits->SetLabel(wxString::Format("Max. poï¿½et stï¿½lï¿½ch jednotek: %d", maxUnits));
+    m_lblPlayerMaxCmds->SetLabel(wxString::Format("Max. poï¿½et velitelï¿½: %d", maxCmds));
 
     Layout();
 }
@@ -509,15 +523,15 @@ wxString StrategicInfoFrame::GetRankNameCz(int rank) const
 {
     switch (rank)
     {
-    case 0: return "Poruèík";
-    case 1: return "Nadporuèík";
-    case 2: return "Kapitán";
+    case 0: return "Poruï¿½ï¿½k";
+    case 1: return "Nadporuï¿½ï¿½k";
+    case 2: return "Kapitï¿½n";
     case 3: return "Major";
-    case 4: return "Podplukovník";
-    case 5: return "Plukovník";
-    case 6: return "Generálmajor";
-    case 7: return "Generálporuèík";
-    case 8: return "Armádní generál";
+    case 4: return "Podplukovnï¿½k";
+    case 5: return "Plukovnï¿½k";
+    case 6: return "Generï¿½lmajor";
+    case 7: return "Generï¿½lporuï¿½ï¿½k";
+    case 8: return "Armï¿½dnï¿½ generï¿½l";
     default: return wxString::Format("Hodnost %d", rank);
     }
 }
