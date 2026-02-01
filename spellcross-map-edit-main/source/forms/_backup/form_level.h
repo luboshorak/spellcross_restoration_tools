@@ -95,6 +95,19 @@ struct PlayerProgress
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
 private:
+    struct UiPalette
+    {
+        wxColour text;
+        wxColour heading;
+        wxColour background;
+        wxColour inactive;
+        wxColour statusHeading;
+        wxColour statusNumber;
+        wxColour buttonText;
+        wxColour buttonBackground;
+        wxColour shadow;
+    };
+
     // stats page helpers (integrated from former form_strategic.*)
     void BuildStatsPage();
     void RefreshStatsPage();
@@ -146,7 +159,11 @@ private:
     std::vector<CommanderRankRec> m_ranks;
     LossStats m_lossStats;
 
-    // stats page widgets (spell-font rendered bitmaps)
+    UiPalette m_palette;
+    wxFont m_fontText;
+    wxFont m_fontHeading;
+
+    // stats page widgets (TTF-rendered bitmaps)
     wxPanel* m_statsPanel = nullptr;
 
     wxStaticBitmap* m_lblAllLightA = nullptr;
@@ -187,14 +204,14 @@ private:
     wxListCtrl* m_hierarchyList = nullptr;
     wxSimplebook* m_leftBook = nullptr;
 
-    wxBitmapButton* m_btnResearch = nullptr;
-    wxBitmapButton* m_btnBuy = nullptr;
-    wxBitmapButton* m_btnSell = nullptr;
-    wxBitmapButton* m_btnEndTurn = nullptr;
-    wxBitmapButton* m_btnLaunch = nullptr;
-    wxBitmapButton* m_btnStrategicMap = nullptr;
-    wxBitmapButton* m_btnHierarchy = nullptr;
-    wxBitmapButton* m_btnStats = nullptr;
+    wxButton* m_btnResearch = nullptr;
+    wxButton* m_btnBuy = nullptr;
+    wxButton* m_btnSell = nullptr;
+    wxButton* m_btnEndTurn = nullptr;
+    wxButton* m_btnLaunch = nullptr;
+    wxButton* m_btnStrategicMap = nullptr;
+    wxButton* m_btnHierarchy = nullptr;
+    wxButton* m_btnStats = nullptr;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;

@@ -68,7 +68,7 @@ static void EnsureStrategicFontLoaded()
 
     const auto fontPath = StrategicFontPath();
     if(std::filesystem::exists(fontPath))
-        wxFont::AddPrivateFont(wxString::FromUTF8(fontPath.string()));
+       // wxFont::AddPrivateFont(wxString::FromUTF8(fontPath.string()));
     loaded = true;
 }
 
@@ -101,7 +101,10 @@ static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans
     if(spans.empty())
         return wxBitmap(1, 1);
 
-    wxScreenDC measure;
+    //wxScreenDC measure;
+    wxMemoryDC measure;
+    wxBitmap tmp(1, 1);
+    measure.SelectObject(tmp);
     int totalW = 0;
     int maxH = 0;
     std::vector<wxSize> extents;
@@ -191,25 +194,50 @@ static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const wxString& te
     return CreateStrategicLabel(parent, spans, font, shadow);
 }
 
-static wxBitmapButton* CreateStrategicButton(wxWindow* parent, int id, const wxString& text,
-                                             const wxFont& font, const wxColour& textColor,
-                                             const wxColour& shadow, const wxColour& background,
-                                             const wxSize& minSize = wxDefaultSize)
+//static wxBitmapButton* CreateStrategicButton(wxWindow* parent, int id, const wxString& text,
+//                                             const wxFont& font, const wxColour& textColor,
+//                                             const wxColour& shadow, const wxColour& background,
+//                                             const wxSize& minSize = wxDefaultSize)
+//{
+//    std::vector<StrategicTextSpan> spans = { { text, textColor, &font } };
+//    wxBitmap bmp = RenderStrategicLabel(spans, font, shadow, &background);
+//    if(!bmp.IsOk())
+//        bmp = wxBitmap(1, 1);
+//
+//    auto* b = new wxBitmapButton(parent, id, bmp);
+//    if(minSize != wxDefaultSize)
+//        b->SetMinSize(minSize);
+//
+//    b->SetBackgroundColour(background);
+//    return b;
+//}
+
+// Oprava: změňte návratový typ na wxButton* (nebo použijte správný typ v místě volání)
+static wxButton* CreateStrategicButton(
+    wxWindow* parent,
+    int id,
+    const wxString& text,
+    const wxFont& font,
+    const wxColour& textColor,
+    const wxColour& background,
+    const wxSize& minSize = wxDefaultSize)
 {
-    std::vector<StrategicTextSpan> spans = { { text, textColor, &font } };
-    wxBitmap bmp = RenderStrategicLabel(spans, font, shadow, &background);
-    if(!bmp.IsOk())
-        bmp = wxBitmap(1, 1);
+    wxButton* btn = new wxButton(parent, id, text);
 
-    auto* b = new wxBitmapButton(parent, id, bmp);
-    if(minSize != wxDefaultSize)
-        b->SetMinSize(minSize);
+    btn->SetFont(font);
+    btn->SetForegroundColour(textColor);
+    btn->SetBackgroundColour(background);
 
-    b->SetBackgroundColour(background);
-    return b;
+    if (minSize != wxDefaultSize)
+    {
+        btn->SetMinSize(minSize);
+    }
+
+    // volitelně – trochu větší vnitřní okraje (padding), aby to vypadalo líp
+    // btn->SetMargins(12, 8);   // funguje od wx 3.1+, pokud máš starší verzi → ignoruj
+
+    return btn;
 }
-
-
 
 static std::filesystem::path GetUnitsJsonPath()
 {
@@ -864,12 +892,12 @@ void StrategicLevelFrame::BuildUI()
     m_palette.inactive = wxColour(0xA4, 0x9D, 0x9D);
     m_palette.statusHeading = wxColour(0x04, 0xDD, 0x04);
     m_palette.statusNumber = wxColour(0xA4, 0x9D, 0x9D);
-    m_palette.buttonText = wxColour(0xE8, 0xE0, 0xE0);
+    m_palette.buttonText = wxColour(0xFF, 0xFF, 0xFF);
     m_palette.buttonBackground = wxColour(0x84, 0x7C, 0x7C);
     m_palette.shadow = wxColour(0, 0, 0, 160);
 
-    m_fontText = MakeStrategicFont(12, false);
-    m_fontHeading = MakeStrategicFont(14, false);
+    m_fontText = MakeStrategicFont(20, false);
+    m_fontHeading = MakeStrategicFont(22, false);
 
     root->SetBackgroundColour(m_palette.background);
 
@@ -1036,10 +1064,16 @@ void StrategicLevelFrame::BuildUI()
     status->SetSizer(statusSizer);
     rightSizer->Add(status, 0, wxALL | wxEXPAND, 8);
 
-    auto makeBtn = [&](int id, const wxString& label) -> wxBitmapButton*
+    auto makeBtn = [&](int id, const wxString& label) -> wxButton*
     {
-        return CreateStrategicButton(right, id, label, m_fontText, m_palette.buttonText,
-                                     m_palette.shadow, m_palette.buttonBackground, wxSize(-1, 44));
+        //return CreateStrategicButton(right, id, label, m_fontText, m_palette.buttonText,
+        //                             m_palette.shadow, m_palette.buttonBackground, wxSize(-1, 44));
+       return CreateStrategicButton(right, id, label,
+           m_fontText,
+           m_palette.buttonText,
+           m_palette.buttonBackground,
+           wxSize(-1, 44));
+
     };
 
     // Buttons (order matches original-ish layout)
@@ -2923,15 +2957,15 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
 {
     switch(rank)
     {
-    case 0: return "Poručík";
-    case 1: return "Nadporučík";
-    case 2: return "Kapitán";
+    case 0: return "Lieutenant";
+    case 1: return "First Lieutenant";
+    case 2: return "Captain";
     case 3: return "Major";
-    case 4: return "Podplukovník";
-    case 5: return "Plukovník";
-    case 6: return "Generálmajor";
-    case 7: return "Generálporučík";
-    case 8: return "Armádní generál";
+    case 4: return "Lieutenant Colonel";
+    case 5: return "Colonel";
+    case 6: return "Major General";
+    case 7: return "Lieutenant General";
+    case 8: return "General of the Army";
     default: return wxString::Format("Rank %d", rank);
     }
 }

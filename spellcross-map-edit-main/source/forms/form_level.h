@@ -204,14 +204,14 @@ private:
     wxListCtrl* m_hierarchyList = nullptr;
     wxSimplebook* m_leftBook = nullptr;
 
-    wxBitmapButton* m_btnResearch = nullptr;
-    wxBitmapButton* m_btnBuy = nullptr;
-    wxBitmapButton* m_btnSell = nullptr;
-    wxBitmapButton* m_btnEndTurn = nullptr;
-    wxBitmapButton* m_btnLaunch = nullptr;
-    wxBitmapButton* m_btnStrategicMap = nullptr;
-    wxBitmapButton* m_btnHierarchy = nullptr;
-    wxBitmapButton* m_btnStats = nullptr;
+    wxButton* m_btnResearch = nullptr;
+    wxButton* m_btnBuy = nullptr;
+    wxButton* m_btnSell = nullptr;
+    wxButton* m_btnEndTurn = nullptr;
+    wxButton* m_btnLaunch = nullptr;
+    wxButton* m_btnStrategicMap = nullptr;
+    wxButton* m_btnHierarchy = nullptr;
+    wxButton* m_btnStats = nullptr;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
