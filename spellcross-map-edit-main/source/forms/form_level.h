@@ -95,6 +95,19 @@ struct PlayerProgress
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
 private:
+    struct UiPalette
+    {
+        wxColour text;
+        wxColour heading;
+        wxColour background;
+        wxColour inactive;
+        wxColour statusHeading;
+        wxColour statusNumber;
+        wxColour buttonText;
+        wxColour buttonBackground;
+        wxColour shadow;
+    };
+
     // stats page helpers (integrated from former form_strategic.*)
     void BuildStatsPage();
     void RefreshStatsPage();
@@ -146,7 +159,11 @@ private:
     std::vector<CommanderRankRec> m_ranks;
     LossStats m_lossStats;
 
-    // stats page widgets (spell-font rendered bitmaps)
+    UiPalette m_palette;
+    wxFont m_fontText;
+    wxFont m_fontHeading;
+
+    // stats page widgets (TTF-rendered bitmaps)
     wxPanel* m_statsPanel = nullptr;
 
     wxStaticBitmap* m_lblAllLightA = nullptr;
