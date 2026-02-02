@@ -47,7 +47,6 @@
     <ClCompile Include="forms\form_pal_view.cpp" />
     <ClCompile Include="forms\form_sound.cpp" />
     <ClCompile Include="forms\form_sprite_view.cpp" />
-    <ClCompile Include="forms\form_strategic.cpp" />
     <ClCompile Include="forms\form_units.cpp" />
     <ClCompile Include="forms\form_unit_options.cpp" />
     <ClCompile Include="forms\form_video.cpp" />

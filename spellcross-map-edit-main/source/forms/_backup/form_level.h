@@ -36,6 +36,7 @@ public:
     void SelectTerritoryById(int territory_id);
     void OnResearch(wxCommandEvent& ev);
     void OnBuyUnits(wxCommandEvent& ev);
+    void OnBuyCommander(wxCommandEvent& ev);
     void OnSellUnits(wxCommandEvent& ev);
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
@@ -118,6 +119,13 @@ private:
     int FindNextRankExp(int current_rank) const;
     wxString GetRankNameCz(int rank) const;
 
+public:
+
+    // commanders
+    wxString GetRankAbbrev(int rank) const;
+    void MaybeGenerateCommanderOffer();
+    bool EnsureCommanderNamesLoaded();
+
     wxString FindHodnostiDefPath() const;
     wxString FindStrategicStatsPath() const;
 
@@ -140,6 +148,27 @@ private:
     std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
     std::unordered_map<int, int> m_unitCosts;
     bool m_unitCostsLoaded = false;
+
+
+struct CommanderRec
+{
+    std::string name;
+    int rank = 0;
+};
+
+// owned commanders (max 14)
+std::vector<CommanderRec> m_playerCommanders;
+
+// available commanders to buy in current turn (usually 0 or 1)
+std::vector<CommanderRec> m_availableCommanders;
+
+// generation limits: max 2 commanders per 25 turns window
+int m_cmdGenWindowStartTurn = 1;
+int m_cmdGenCountInWindow = 0;
+
+// commander names source
+std::vector<std::string> m_commanderNames;
+bool m_commanderNamesLoaded = false;
 
     // decoded CLK territory map for click-detection
     std::vector<unsigned char> m_clkValues;
@@ -200,12 +229,14 @@ private:
     // Dedicated paint surface for the strategic background (so it isn't fully covered by child controls).
     wxPanel* m_mapCanvas = nullptr;
     wxBoxSizer* m_mapSizer = nullptr;
+    wxListCtrl* m_cmdRoster = nullptr;
     wxListCtrl* m_roster = nullptr;
     wxListCtrl* m_hierarchyList = nullptr;
     wxSimplebook* m_leftBook = nullptr;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnBuy = nullptr;
+    wxButton* m_btnBuyCmd = nullptr;
     wxButton* m_btnSell = nullptr;
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
@@ -222,6 +253,7 @@ private:
         ID_TERRITORY_BASE = 20000,
         ID_BTN_RESEARCH,
         ID_BTN_BUY,
+        ID_BTN_BUY_CMD,
         ID_BTN_SELL,
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
