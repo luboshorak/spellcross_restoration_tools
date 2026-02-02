@@ -1259,7 +1259,7 @@ wxPanel* StrategicLevelFrame::BuildHierarchyFormation(wxWindow* parent,
     auto* borderSizer = new wxBoxSizer(wxVERTICAL);
     auto* title = CreateStrategicLabel(panel, label, m_fontText, color, m_palette.shadow);
     borderSizer->Add(title, 0, wxALL, 6);
-    borderSizer->Add(contents, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 6);
+    borderSizer->Add(contents, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
     panel->SetSizer(borderSizer);
     return panel;
 }
@@ -1291,10 +1291,11 @@ wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
     return panel;
 }
 
-wxPanel* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex)
+wxScrolledWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex)
 {
-    auto* page = new wxPanel(parent);
+    auto* page = new wxScrolledWindow(parent, wxID_ANY);
     page->SetBackgroundColour(m_palette.background);
+    page->SetScrollRate(10, 10);
 
     const wxColour brigadeColor = wxColour(200, 60, 60);
     const wxColour regimentColor = wxColour(50, 120, 210);
@@ -1382,9 +1383,10 @@ wxPanel* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int briga
         wxString::Format("Brigade %d", brigadeIndex),
         brigadeColor,
         brigadeSizer);
-    pageSizer->Add(brigadePanel, 0, wxEXPAND);
+    pageSizer->Add(brigadePanel, 0, wxALL, 8);
 
     page->SetSizer(pageSizer);
+    page->FitInside();
     return page;
 }
 

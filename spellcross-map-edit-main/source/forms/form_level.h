@@ -10,6 +10,7 @@
 #include <wx/bmpbuttn.h>
 #include <wx/simplebook.h>
 #include <wx/dnd.h>
+#include <wx/scrolwin.h>
 
 #include "level.h"
 
@@ -129,7 +130,7 @@ private:
     wxString GetRankNameCz(int rank) const;
 
     void BuildHierarchyPage(wxPanel* parent);
-    wxPanel* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
+    wxScrolledWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
     wxPanel* BuildHierarchyFormation(wxWindow* parent,
                                      const wxString& label,
                                      const wxColour& color,
