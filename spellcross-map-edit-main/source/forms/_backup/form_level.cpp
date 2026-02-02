@@ -590,7 +590,9 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
 }
 
-
+static std::filesystem::path GetStableBaseDir() {
+    return std::filesystem::current_path();
+}
 
 // Forward declarations (definitions are later in this file)
 static bool LoadStrategicStateFile(
@@ -1028,13 +1030,15 @@ void StrategicLevelFrame::BuildUI()
     auto* midTitle = CreateStrategicLabel(mid, "Player units", m_fontHeading, m_palette.heading, m_palette.shadow);
     midSizer->Add(midTitle, 0, wxALL, 8);
 
+    // v BuildUI(): úprava definice sloupců m_roster
     m_roster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->SetFont(m_fontText);
     m_roster->SetBackgroundColour(m_palette.background);
     m_roster->SetForegroundColour(m_palette.text);
+    // PŮVODNĚ: InsertColumn(0, "Unit"); InsertColumn(1, "Count"); InsertColumn(2, "HP");
+    // NOVĚ: jen dva sloupce: Unit a HP
     m_roster->InsertColumn(0, "Unit");
-    m_roster->InsertColumn(1, "Count");
-    m_roster->InsertColumn(2, "HP");
+    m_roster->InsertColumn(1, "HP");
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
@@ -1077,11 +1081,12 @@ void StrategicLevelFrame::BuildUI()
     };
 
     // Buttons (order matches original-ish layout)
+    
+    m_btnStrategicMap  = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
+    m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
     m_btnResearch      = makeBtn(ID_BTN_RESEARCH, "Research");
     m_btnBuy           = makeBtn(ID_BTN_BUY, "Buy units");
     m_btnSell          = makeBtn(ID_BTN_SELL, "Sell units");
-    m_btnStrategicMap  = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
-    m_btnHierarchy     = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
     m_btnStats         = makeBtn(ID_BTN_STATS, "Statistics");
     m_btnLaunch        = makeBtn(ID_BTN_LAUNCH, "Launch mission");
     m_btnEndTurn       = makeBtn(ID_BTN_ENDTURN, "End turn");
@@ -1127,24 +1132,52 @@ void StrategicLevelFrame::RefreshUI()
         m_fontText,
         m_palette.shadow);
 
+    // Reset sloupců: vynutit přesně 2 sloupce (Unit, HP)
+    // Smaž existující sloupce bez ohledu na stav
+    while (m_roster->GetColumnCount() > 0)
+        m_roster->DeleteColumn(0);
+
+    m_roster->InsertColumn(0, "Unit");
+    m_roster->InsertColumn(1, "HP");
+
+    // v RefreshUI(): rozbalení jednotek podle count a odstranění sloupce Count
     m_roster->DeleteAllItems();
-    for(size_t i = 0; i < m_playerUnits.size(); ++i)
+
+    // Každou jednotku vložit 'count' krát jako samostatnou položku (count implicitně 1)
+    long row = 0;
+    for (const auto& u : m_playerUnits)
     {
-        const auto& u = m_playerUnits[i];
-        long idx = m_roster->InsertItem((long)i, GetUnitDisplayName(u.unit_id));
-        m_roster->SetItem(idx, 1, wxString::Format("%d", u.count));
-        m_roster->SetItem(idx, 2, wxString::Format("%d", u.health));
+        for (int i = 0; i < u.count; ++i)
+        {
+            long idx = m_roster->InsertItem(row++, GetUnitDisplayName(u.unit_id));
+            // sloupec 1 = HP
+            m_roster->SetItem(idx, 1, wxString::Format("%d", u.health));
+        }
     }
 
-    m_roster->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
-    m_roster->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
-    m_roster->SetColumnWidth(2, wxLIST_AUTOSIZE_USEHEADER);
+//    // Automatická šířka sloupců (jen 2 sloupce)
+//    m_roster->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
+//    m_roster->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
+//
+//    m_btnLaunch->Enable(m_selectedTerritory >= 0);
+//    if(m_btnSell)
+//        m_btnSell->Enable(!m_playerUnits.empty());
+//}
+
+    // Pevná šířka pro HP, zbytek pro název jednotky
+    int clientW = 0, clientH = 0;
+    m_roster->GetClientSize(&clientW, &clientH);
+
+    const int hpWidth = 80;                // upravte dle potřeby (např. 70–100)
+    const int unitWidth = std::max(100, clientW - hpWidth - 4); // rezerva na okraj/scrollbar
+
+    m_roster->SetColumnWidth(1, hpWidth);
+    m_roster->SetColumnWidth(0, unitWidth);
 
     m_btnLaunch->Enable(m_selectedTerritory >= 0);
-    if(m_btnSell)
+    if (m_btnSell)
         m_btnSell->Enable(!m_playerUnits.empty());
 }
-
 
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
@@ -1239,11 +1272,52 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     if(m_clkW != bw || m_clkH != bh || (size_t)m_clkW * (size_t)m_clkH != m_clkValues.size())
         return;
 
+    //const unsigned char tid = m_clkValues[(size_t)my * (size_t)m_clkW + (size_t)mx];
+    //if(tid == 0)
+    //    return;
+
+    //SelectTerritoryById((int)tid);
+
     const unsigned char tid = m_clkValues[(size_t)my * (size_t)m_clkW + (size_t)mx];
-    if(tid == 0)
+    if (tid == 0)
         return;
 
-    SelectTerritoryById((int)tid);
+    // CLK value can be either:
+    // - territory id (matches LevelTerritory::id), or
+    // - 1-based region index (1..N) into m_level.territories
+    int chosenTerritoryId = (int)tid;
+
+    // 1) Try direct match by id
+    bool idFound = false;
+    for (const auto& t : m_level.territories)
+    {
+        if (t.id == chosenTerritoryId)
+        {
+            idFound = true;
+            break;
+        }
+    }
+
+    if (idFound)
+    {
+        SelectTerritoryById(chosenTerritoryId);
+        return;
+    }
+
+    // 2) Fallback: treat tid as 1-based index
+    const size_t idx = (size_t)tid - 1;
+    if (idx < m_level.territories.size())
+    {
+        SelectTerritoryById(m_level.territories[idx].id);
+        return;
+    }
+
+    wxLogMessage("[CLK] tid=%u -> fallback idx=%zu -> territory_id=%d",
+        (unsigned)tid, idx, m_level.territories[idx].id);
+
+    // Out of range -> ignore click
+    wxLogWarning("[CLK] tid=%u out of range (territories=%zu)", (unsigned)tid, m_level.territories.size());
+
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
@@ -1455,21 +1529,34 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
         return;
     }
 
-    LevelData::PlayerUnitAdd add;
-    add.unit_id = unit_ids[sel];
-    add.count = count;
-    add.health = 100;
-    add.extra = "-";
+    //LevelData::PlayerUnitAdd add;
+    //add.unit_id = unit_ids[sel];
+    //add.count = count;
+    //add.health = 100;
+    //add.extra = "-";
 
-    auto it = std::find_if(m_playerUnits.begin(), m_playerUnits.end(),
-        [&](const LevelData::PlayerUnitAdd& u)
-        {
-            return u.unit_id == add.unit_id && u.health == add.health;
-        });
-    if(it != m_playerUnits.end())
-        it->count += add.count;
-    else
+    //auto it = std::find_if(m_playerUnits.begin(), m_playerUnits.end(),
+    //    [&](const LevelData::PlayerUnitAdd& u)
+    //    {
+    //        return u.unit_id == add.unit_id && u.health == add.health;
+    //    });
+    //if(it != m_playerUnits.end())
+    //    it->count += add.count;
+    //else
+    //    m_playerUnits.push_back(add);
+    
+    // v OnBuyUnits(): místo agregace přidej 'count' kusů jako samostatné položky
+    LevelData::PlayerUnitAdd addProto;
+    addProto.unit_id = unit_ids[sel];
+    addProto.health = 100;
+    addProto.extra = "-";
+
+    for (int i = 0; i < count; ++i)
+    {
+        LevelData::PlayerUnitAdd add = addProto;
+        add.count = 1; // per-instance
         m_playerUnits.push_back(add);
+    }
 
     m_money -= totalCost;
     SaveStrategicState();
@@ -1651,78 +1738,73 @@ std::string StrategicLevelFrame::ResolveMissionTokenForTerritory(int territory_i
 
 std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::string& mission_token) const
 {
-    if(mission_token.empty() || mission_token == "none")
+    wxLogMessage(
+        "[RESOLVE] token='%s'",
+        mission_token.c_str()
+    );
+
+    if (mission_token.empty() || mission_token == "none")
         return L"";
 
     namespace fs = std::filesystem;
-    fs::path base = fs::path(m_level.source_path).parent_path();
-
-    // 0) prefer "A" variant when base token ends with digit (m02_02 -> m02_02a.def)
-    if(!mission_token.empty())
-    {
-        char last = mission_token.back();
-        if(last >= '0' && last <= '9')
-        {
-            const std::string token_lower = to_lower(mission_token) + "a";
-            const std::string token_upper = to_upper(mission_token) + "A";
-            fs::path pVar1 = base / (token_lower + ".def");
-            fs::path pVar2 = base / (token_lower + ".DEF");
-            fs::path pVar3 = base / (token_upper + ".DEF");
-            if(fs::exists(pVar1)) return pVar1.wstring();
-            if(fs::exists(pVar2)) return pVar2.wstring();
-            if(fs::exists(pVar3)) return pVar3.wstring();
-        }
-    }
-
-    // 1) exact match (preferred)
-    fs::path pExact1 = base / (to_upper(mission_token) + ".DEF");
-    fs::path pExact2 = base / (mission_token + ".DEF");
-    fs::path pExact3 = base / (mission_token + ".def");
-
-    if(fs::exists(pExact1)) return pExact1.wstring();
-    if(fs::exists(pExact2)) return pExact2.wstring();
-    if(fs::exists(pExact3)) return pExact3.wstring();
-
-    // 2) if token is base (e.g. m02_03) and multiple variants exist (m02_03a/b/c), offer choice
-    std::string up = to_upper(mission_token);
-
-    std::vector<fs::path> candidates;
     std::error_code ec;
-    if(fs::exists(base, ec))
-    {
-        for(fs::directory_iterator it(base, ec); !ec && it != fs::directory_iterator(); ++it)
-        {
-            if(!it->is_regular_file()) continue;
-            auto ext = to_upper(it->path().extension().string());
-            if(ext != ".DEF") continue;
 
-            std::string stem = to_upper(it->path().stem().string());
-            if(stem.rfind(up, 0) == 0) // starts with
-                candidates.push_back(it->path());
-        }
+    std::vector<std::filesystem::path> bases;
+
+    // 1) Prefer runtime extracted location
+    bases.push_back(std::filesystem::path(GetStableBaseDir()) / "temp" / "COMMON");
+
+    // 2) Fallback: where LEVEL DEF lives (often spell_extractfs/data_extracted)
+    bases.push_back(std::filesystem::path(m_level.source_path).parent_path());
+
+    // Fallback
+    bases.push_back(fs::current_path(ec));
+
+    auto try_in_base = [&](const fs::path& base) -> std::wstring
+        {
+            if (base.empty() || !fs::exists(base, ec))
+                return L"";
+
+            // 0) prefer A variant when token ends with digit
+            if (!mission_token.empty())
+            {
+                char last = mission_token.back();
+                if (last >= '0' && last <= '9')
+                {
+                    const std::string token_lower = to_lower(mission_token) + "a";
+                    const std::string token_upper = to_upper(mission_token) + "A";
+                    fs::path pVar1 = base / (token_lower + ".def");
+                    fs::path pVar2 = base / (token_lower + ".DEF");
+                    fs::path pVar3 = base / (token_upper + ".DEF");
+                    if (fs::exists(pVar1)) return pVar1.wstring();
+                    if (fs::exists(pVar2)) return pVar2.wstring();
+                    if (fs::exists(pVar3)) return pVar3.wstring();
+                }
+            }
+
+            // 1) exact match
+            fs::path pExact1 = base / (to_upper(mission_token) + ".DEF");
+            fs::path pExact2 = base / (mission_token + ".DEF");
+            fs::path pExact3 = base / (mission_token + ".def");
+            if (fs::exists(pExact1)) return pExact1.wstring();
+            if (fs::exists(pExact2)) return pExact2.wstring();
+            if (fs::exists(pExact3)) return pExact3.wstring();
+
+            // 2) multi-variant choice (optional – nechal bych jen v prvním base,
+            // ale klidně můžeš i tady – já bych to pro temp\COMMON nechal)
+            // ... (tvůj stávající blok s candidates)
+
+            return L"";
+        };
+
+    for (const auto& base : bases)
+    {
+        std::wstring p = try_in_base(base);
+        if (!p.empty())
+            return p;
     }
 
-    if(candidates.empty())
-        return L"";
-
-    if(candidates.size() == 1)
-        return candidates[0].wstring();
-
-    std::sort(candidates.begin(), candidates.end());
-
-    wxArrayString choices;
-    for(const auto& c : candidates)
-        choices.Add(wxString(c.filename().wstring()));
-
-    wxSingleChoiceDialog dlg(const_cast<StrategicLevelFrame*>(this), "Multiple mission variants found. Which one to load?", "Select mission", choices);
-    if(dlg.ShowModal() != wxID_OK)
-        return L"";
-
-    int sel = dlg.GetSelection();
-    if(sel < 0 || sel >= (int)candidates.size())
-        return L"";
-
-    return candidates[sel].wstring();
+    return L"";
 }
 
 void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
@@ -1732,18 +1814,46 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 
     const int terr_id = m_selectedTerritory;
     std::string token = ResolveMissionTokenForTerritory(terr_id);
+    wxLogMessage(
+        "[LAUNCH] territory_id=%d token='%s'",
+        terr_id,
+        token.c_str()
+    );
     if(token.empty() || token == "none")
         return;
 
     std::wstring defPath = ResolveMapDefPathForMissionToken(token);
+
     if(defPath.empty())
     {
         wxMessageBox("Map DEF not found for mission: " + wxString(token), "Launch", wxOK | wxICON_WARNING, this);
         return;
     }
 
-    if(!m_main->LoadMapFromDefPath(defPath, m_playerUnits))
+    wxLogMessage("[LAUNCH] DEF: %ls", defPath.c_str());
+    wxLogMessage("[LAUNCH] playerUnits.count=%zu", m_playerUnits.size());
+    for (size_t i = 0; i < m_playerUnits.size(); ++i)
+    {
+        const auto& u = m_playerUnits[i];
+        wxLogMessage("[LAUNCH] unit[%zu]: id=%d count=%d health=%d",
+            i, u.unit_id, u.count, u.health);
+    }
+
+    bool ok = m_main->LoadMapFromDefPath(defPath, m_playerUnits);
+
+    if (!ok && !m_playerUnits.empty())
+    {
+        wxLogWarning("[LAUNCH] Load failed WITH units, retrying WITHOUT units...");
+        const decltype(m_playerUnits) empty_units;
+        ok = m_main->LoadMapFromDefPath(defPath, empty_units);
+    }
+
+    if (!ok)
+    {
+        wxMessageBox("LoadMapFromDefPath FAILED (even without units)\nDEF:\n" + wxString(defPath),
+            "Launch", wxOK | wxICON_ERROR, this);
         return;
+    }
 
     // update launch count
     m_territoryLaunchCount[terr_id] += 1;
@@ -1782,12 +1892,22 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
-    fs::path base = fs::path(level.source_path).parent_path();
-    if(base.empty() || !fs::exists(base, ec))
-        base = fs::current_path(ec);
-    return base / "strategic_state.json";
-}
 
+    // Put saves next to stable base dir, not into temp\COMMON
+    fs::path save_dir = fs::path(GetStableBaseDir()) / "save";
+    fs::create_directories(save_dir, ec);
+
+    // Use LEVEL_XX (stem) as unique key
+    fs::path src(level.source_path);
+    std::string stem = src.stem().string(); // e.g. "LEVEL_03" or "level_03"
+    if (stem.empty())
+        stem = "unknown";
+
+    // Normalize filename a bit
+    stem = to_lower(stem);
+
+    return save_dir / ("strategic_state_" + stem + ".json");
+}
 
 static bool LoadStrategicStateFile(
     const std::filesystem::path& path,
@@ -1976,8 +2096,19 @@ void StrategicLevelFrame::LoadStrategicState()
     std::vector<LevelData::PlayerUnitAdd> units;
     std::string level_def, ts;
 
-    if(LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units, &level_def, &ts))
+    if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units, &level_def, &ts))
     {
+        // Validate that this save matches current level (compare stem)
+        const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
+        const std::string saveStem = to_lower(std::filesystem::path(level_def).stem().string());
+
+        if (!curStem.empty() && !saveStem.empty() && curStem != saveStem)
+        {
+            wxLogWarning("[STRATEGIC] Ignoring state file for different level: save='%s' cur='%s'",
+                saveStem.c_str(), curStem.c_str());
+            return; // keep defaults initialized in ctor
+        }
+
         m_turn = turn;
         m_money = money;
         m_research = research;
@@ -1987,9 +2118,10 @@ void StrategicLevelFrame::LoadStrategicState()
         m_territoryLaunchCount = std::move(terrL);
         m_playerUnits = std::move(units);
 
-        if(m_selectedTerritory >= 0)
+        if (m_selectedTerritory >= 0)
             SelectTerritoryById(m_selectedTerritory);
     }
+
 }
 
 void StrategicLevelFrame::SaveStrategicState() const

@@ -32,6 +32,7 @@
 wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY,      StrategicLevelFrame::OnBuyUnits)
+    EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY_CMD,  StrategicLevelFrame::OnBuyCommander)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_SELL,     StrategicLevelFrame::OnSellUnits)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN,  StrategicLevelFrame::OnEndTurn)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
@@ -567,6 +568,8 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
       m_spellData(parent ? parent->spell_data : nullptr),
       m_level(level)
 {
+    static bool seeded = false;
+    if(!seeded) { std::srand((unsigned)std::time(nullptr)); seeded = true; }
     m_money = 0;
     m_research = 0;
     m_playerUnits = m_level.start_units;
@@ -606,6 +609,10 @@ static bool LoadStrategicStateFile(
     std::unordered_map<int, std::string>& territoryMission,
     std::unordered_map<int, int>& territoryLaunchCount,
     std::vector<LevelData::PlayerUnitAdd>& units,
+    std::vector<StrategicLevelFrame::CommanderRec>& playerCommanders,
+    std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
+    int& cmdGenWindowStartTurn,
+    int& cmdGenCountInWindow,
     std::string* out_level_def,
     std::string* out_timestamp);
 
@@ -620,6 +627,10 @@ static void SaveStrategicStateFile(
     const std::unordered_map<int, std::string>& territoryMission,
     const std::unordered_map<int, int>& territoryLaunchCount,
     const std::vector<LevelData::PlayerUnitAdd>& units,
+    const std::vector<StrategicLevelFrame::CommanderRec>& playerCommanders,
+    const std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
+    int cmdGenWindowStartTurn,
+    int cmdGenCountInWindow,
     const std::string& timestamp);
 
 void StrategicLevelFrame::BuildMenu()
@@ -725,7 +736,9 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
 
     // Save full strategic state into slot file
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits, /*timestamp*/NowIsoLocal());
+                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+                          m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+                          /*timestamp*/NowIsoLocal());
 
     wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
 }
@@ -778,6 +791,7 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     std::string ts;
     if(!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
                               m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+                              m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
                               &loaded_level_def, &ts))
     {
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
@@ -818,9 +832,17 @@ if(!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
     std::vector<LevelData::PlayerUnitAdd> units;
     std::string def2, ts2;
 
-    if(!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
-                              terrMission, terrLaunch, units, &def2, &ts2))
-    {
+    
+std::vector<CommanderRec> playerCmds2;
+std::vector<CommanderRec> availCmds2;
+int windowStart2 = 1;
+int genCount2 = 0;
+
+if(!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
+                          terrMission, terrLaunch, units,
+                          playerCmds2, availCmds2, windowStart2, genCount2,
+                          &def2, &ts2))
+{
         wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
         return;
     }
@@ -836,6 +858,10 @@ if(!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
     win->m_territoryCurrentMission = std::move(terrMission);
     win->m_territoryLaunchCount = std::move(terrLaunch);
     win->m_playerUnits = std::move(units);
+    win->m_playerCommanders = std::move(playerCmds2);
+    win->m_availableCommanders = std::move(availCmds2);
+    win->m_cmdGenWindowStartTurn = windowStart2;
+    win->m_cmdGenCountInWindow = genCount2;
 
     win->TryLoadBackground();
     win->RefreshUI();
@@ -1027,10 +1053,32 @@ void StrategicLevelFrame::BuildUI()
     mid->SetBackgroundColour(m_palette.background);
     auto* midSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* midTitle = CreateStrategicLabel(mid, "Player units", m_fontHeading, m_palette.heading, m_palette.shadow);
-    midSizer->Add(midTitle, 0, wxALL, 8);
 
-    // v BuildUI(): úprava definice sloupců m_roster
+// Commanders (owned) - list (max 14 commanders)
+auto* cmdTitle = CreateStrategicLabel(mid, "Commanders", m_fontHeading, m_palette.heading, m_palette.shadow);
+midSizer->Add(cmdTitle, 0, wxALL, 8);
+
+m_cmdRoster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+m_cmdRoster->SetFont(m_fontText);
+m_cmdRoster->SetBackgroundColour(m_palette.background);
+m_cmdRoster->SetForegroundColour(m_palette.text);
+m_cmdRoster->InsertColumn(0, "Commander");
+m_cmdRoster->InsertColumn(1, "Rank");
+// Keep the commanders list compact (14 rows max)
+// NOVĚ: výška podle fontu + menší počet řádků
+{
+    const int rowsVisible = 8;                   // uprav dle potřeby (např. 6–8)
+    const int ch = m_cmdRoster->GetCharHeight(); // výška znaku dle aktuálního fontu
+    const int rowH = ch + 8;                     // odhad výšky řádku (font + padding)
+    const int headerH = ch + 18;                 // odhad výšky headeru
+    m_cmdRoster->SetMinSize(wxSize(-1, headerH + rowsVisible * rowH));
+};
+midSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+auto* midTitle = CreateStrategicLabel(mid, "Player units", m_fontHeading, m_palette.heading, m_palette.shadow);
+midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+
+// v BuildUI(): úprava definice sloupců m_roster
     m_roster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->SetFont(m_fontText);
     m_roster->SetBackgroundColour(m_palette.background);
@@ -1086,6 +1134,7 @@ void StrategicLevelFrame::BuildUI()
     m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
     m_btnResearch      = makeBtn(ID_BTN_RESEARCH, "Research");
     m_btnBuy           = makeBtn(ID_BTN_BUY, "Buy units");
+    m_btnBuyCmd        = makeBtn(ID_BTN_BUY_CMD, "Buy commander");
     m_btnSell          = makeBtn(ID_BTN_SELL, "Sell units");
     m_btnStats         = makeBtn(ID_BTN_STATS, "Statistics");
     m_btnLaunch        = makeBtn(ID_BTN_LAUNCH, "Launch mission");
@@ -1094,6 +1143,7 @@ void StrategicLevelFrame::BuildUI()
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
     btnSizer->Add(m_btnResearch,     0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnBuy,          0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuyCmd,       0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnSell,         0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnHierarchy,    0, wxEXPAND | wxBOTTOM, 6);
@@ -1132,7 +1182,35 @@ void StrategicLevelFrame::RefreshUI()
         m_fontText,
         m_palette.shadow);
 
-    // Reset sloupců: vynutit přesně 2 sloupce (Unit, HP)
+    
+
+// Commanders list
+if(m_cmdRoster)
+{
+    while(m_cmdRoster->GetColumnCount() > 0)
+        m_cmdRoster->DeleteColumn(0);
+    m_cmdRoster->InsertColumn(0, "Commander");
+    m_cmdRoster->InsertColumn(1, "Rank");
+
+    m_cmdRoster->DeleteAllItems();
+
+    long crow = 0;
+    for(const auto& c : m_playerCommanders)
+    {
+        if(crow >= 14) break;
+        long cidx = m_cmdRoster->InsertItem(crow++, wxString::FromUTF8(c.name));
+        m_cmdRoster->SetItem(cidx, 1, GetRankAbbrev(c.rank));
+    }
+
+    int cW=0,cH=0;
+    m_cmdRoster->GetClientSize(&cW,&cH);
+    const int rankW = 90;
+    const int nameW = std::max(120, cW - rankW - 4);
+    m_cmdRoster->SetColumnWidth(1, rankW);
+    m_cmdRoster->SetColumnWidth(0, nameW);
+}
+
+// Reset sloupců: vynutit přesně 2 sloupce (Unit, HP)
     // Smaž existující sloupce bez ohledu na stav
     while (m_roster->GetColumnCount() > 0)
         m_roster->DeleteColumn(0);
@@ -1177,6 +1255,13 @@ void StrategicLevelFrame::RefreshUI()
     m_btnLaunch->Enable(m_selectedTerritory >= 0);
     if (m_btnSell)
         m_btnSell->Enable(!m_playerUnits.empty());
+
+    if(m_btnBuyCmd)
+    {
+        const bool haveOffer = !m_availableCommanders.empty();
+        const bool haveSpace = (int)m_playerCommanders.size() < 14;
+        m_btnBuyCmd->Enable(haveOffer && haveSpace);
+    }
 }
 
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
@@ -1427,6 +1512,199 @@ void StrategicLevelFrame::OnResearch(wxCommandEvent&)
     } else {
         wxMessageBox("Not enough money for research (demo cost 100).", "Research", wxOK | wxICON_WARNING, this);
     }
+    SaveStrategicState();
+    RefreshUI();
+}
+
+
+static std::filesystem::path FindCommanderNamesDefPath()
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const fs::path base = GetStableBaseDir();
+    const std::vector<fs::path> candidates = {
+        base / "data" / "C_NAMES.DEF",
+        base / "C_NAMES.DEF",
+        fs::current_path(ec) / "data" / "C_NAMES.DEF",
+        fs::current_path(ec) / "C_NAMES.DEF",
+        fs::path("C_NAMES.DEF"),
+    };
+
+    for(const auto& p : candidates)
+    {
+        if(!p.empty() && fs::exists(p, ec))
+            return p;
+    }
+    return {};
+}
+
+bool StrategicLevelFrame::EnsureCommanderNamesLoaded()
+{
+    if(m_commanderNamesLoaded)
+        return true;
+
+    m_commanderNames.clear();
+    const auto p = FindCommanderNamesDefPath();
+    if(p.empty())
+    {
+        wxLogWarning("[COMMANDERS] C_NAMES.DEF not found.");
+        m_commanderNamesLoaded = true; // avoid spamming warnings
+        return false;
+    }
+
+    std::ifstream f(p);
+    if(!f)
+        return false;
+
+    std::string line;
+    while(std::getline(f, line))
+    {
+        line = trim(line);
+        if(line.empty())
+            continue;
+        m_commanderNames.push_back(line);
+    }
+
+    m_commanderNamesLoaded = true;
+    return !m_commanderNames.empty();
+}
+
+wxString StrategicLevelFrame::GetRankAbbrev(int rank) const
+{
+    // Abbreviations (Czech-ish). Keep stable for UI.
+    static const char* kAbbr[] = {
+        "2Lt.", "1Lt.", "Cpt.", "Maj.", "LtCol.", "Col.", "MajGen.", "LtGen.", "Gen."
+    };
+    if(rank < 0) rank = 0;
+    if(rank >= (int)(sizeof(kAbbr)/sizeof(kAbbr[0])))
+        return wxString::Format("R%d", rank);
+    return wxString::FromUTF8(kAbbr[rank]);
+}
+
+void StrategicLevelFrame::MaybeGenerateCommanderOffer()
+{
+    // Enforce windowed limit: max 2 per 25 turns.
+    if(m_turn >= m_cmdGenWindowStartTurn + 25)
+    {
+        m_cmdGenWindowStartTurn = m_turn;
+        m_cmdGenCountInWindow = 0;
+    }
+    if(m_cmdGenCountInWindow >= 2)
+        return;
+
+    if(!EnsureCommanderNamesLoaded())
+        return;
+
+    // Already have an offer in this turn (shouldn't happen if we clear on end-turn).
+    if(!m_availableCommanders.empty())
+        return;
+
+    // Chance: tweak here if you want different pacing.
+    const int chancePercent = 20; // 20% per turn => many "rolls" but capped to 2 per 25 turns.
+    if((std::rand() % 100) >= chancePercent)
+        return;
+
+    // Pick random unique name (avoid duplicates among owned + current offer).
+    auto nameTaken = [&](const std::string& n) -> bool
+    {
+        for(const auto& c : m_playerCommanders) if(to_upper(c.name) == to_upper(n)) return true;
+        for(const auto& c : m_availableCommanders) if(to_upper(c.name) == to_upper(n)) return true;
+        return false;
+    };
+
+    std::string name;
+    for(int tries = 0; tries < 32; ++tries)
+    {
+        const std::string& cand = m_commanderNames[(size_t)(std::rand() % (int)m_commanderNames.size())];
+        if(!cand.empty() && !nameTaken(cand))
+        {
+            name = cand;
+            break;
+        }
+    }
+    if(name.empty())
+        name = m_commanderNames[(size_t)(std::rand() % (int)m_commanderNames.size())];
+
+    // Rank is never higher than player's rank.
+    int rankMax = std::max(0, m_player.rank);
+    int rank = 0;
+    if(rankMax > 0)
+        rank = std::rand() % (rankMax + 1);
+
+    CommanderRec rec;
+    rec.name = name;
+    rec.rank = rank;
+
+    m_availableCommanders.push_back(rec);
+    m_cmdGenCountInWindow += 1;
+}
+
+void StrategicLevelFrame::OnBuyCommander(wxCommandEvent&)
+{
+    if((int)m_playerCommanders.size() >= 14)
+    {
+        wxMessageBox("Commander limit reached (14).", "Buy commander", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    if(m_availableCommanders.empty())
+    {
+        wxMessageBox("No commanders available this turn.", "Buy commander", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    wxDialog dlg(this, wxID_ANY, "Buy commander", wxDefaultPosition, wxSize(420, 360));
+    dlg.SetBackgroundColour(m_palette.background);
+    dlg.SetForegroundColour(m_palette.text);
+    dlg.SetFont(m_fontText);
+    auto* rootSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* lbl = new wxStaticText(&dlg, wxID_ANY, "Available commanders:");
+    lbl->SetFont(m_fontText);
+    lbl->SetForegroundColour(m_palette.text);
+    rootSizer->Add(lbl, 0, wxLEFT | wxRIGHT | wxTOP, 10);
+
+    auto* list = new wxListBox(&dlg, wxID_ANY);
+    list->SetFont(m_fontText);
+    list->SetBackgroundColour(m_palette.background);
+    list->SetForegroundColour(m_palette.text);
+
+    for(const auto& c : m_availableCommanders)
+        list->Append(wxString::FromUTF8(c.name) + " (" + GetRankAbbrev(c.rank) + ")");
+
+    if(list->GetCount() > 0)
+        list->SetSelection(0);
+
+    rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
+
+    auto* btnSizer = new wxBoxSizer(wxHORIZONTAL);
+    auto* btnBuy = new wxButton(&dlg, wxID_OK, "Buy");
+    auto* btnCancel = new wxButton(&dlg, wxID_CANCEL, "Cancel");
+    btnBuy->SetFont(m_fontText);
+    btnBuy->SetBackgroundColour(m_palette.buttonBackground);
+    btnBuy->SetForegroundColour(m_palette.buttonText);
+    btnCancel->SetFont(m_fontText);
+    btnCancel->SetBackgroundColour(m_palette.buttonBackground);
+    btnCancel->SetForegroundColour(m_palette.buttonText);
+    btnSizer->AddStretchSpacer(1);
+    btnSizer->Add(btnBuy, 0, wxRIGHT, 8);
+    btnSizer->Add(btnCancel, 0);
+    rootSizer->Add(btnSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+
+    dlg.SetSizerAndFit(rootSizer);
+
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    int sel = list->GetSelection();
+    if(sel == wxNOT_FOUND || sel >= (int)m_availableCommanders.size())
+        return;
+
+    // Buy: move from offers to owned. (No selling.)
+    m_playerCommanders.push_back(m_availableCommanders[(size_t)sel]);
+    m_availableCommanders.clear();
+
     SaveStrategicState();
     RefreshUI();
 }
@@ -1884,6 +2162,13 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {
     m_turn += 1;
     m_money += 250;
+
+    // Commander offers are generated on end-turn (for the *new* turn).
+    // Offers do not carry over between turns.
+	// Store offer of commanders only for the current turn.
+    // m_availableCommanders.clear();
+    MaybeGenerateCommanderOffer();
+
     SaveStrategicState();
     RefreshUI();
 }
@@ -1920,10 +2205,18 @@ static bool LoadStrategicStateFile(
     std::unordered_map<int, std::string>& territoryMission,
     std::unordered_map<int, int>& territoryLaunchCount,
     std::vector<LevelData::PlayerUnitAdd>& units,
+    std::vector<StrategicLevelFrame::CommanderRec>& playerCommanders,
+    std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
+    int& cmdGenWindowStartTurn,
+    int& cmdGenCountInWindow,
     std::string* out_level_def = nullptr,
     std::string* out_timestamp = nullptr)
 {
     units.clear();
+    playerCommanders.clear();
+    availableCommanders.clear();
+    cmdGenWindowStartTurn = 1;
+    cmdGenCountInWindow = 0;
 
     // defaults
     turn = 1;
@@ -2017,6 +2310,40 @@ static bool LoadStrategicStateFile(
         units.push_back(entry);
     }
 
+
+    // commander generation (optional)
+    std::regex gen_re("\"commander_generation\"\\s*:\\s*\\{([^}]*)\\}");
+    if(std::regex_search(data, m, gen_re) && m.size() > 1)
+    {
+        const std::string g = m[1].str();
+        (void)ParseJsonIntField(g, "window_start_turn", cmdGenWindowStartTurn);
+        (void)ParseJsonIntField(g, "generated_in_window", cmdGenCountInWindow);
+    }
+
+    auto parse_commander_array = [&](const char* key, std::vector<StrategicLevelFrame::CommanderRec>& out)
+    {
+        out.clear();
+        std::smatch mm;
+        std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript);
+        if(!std::regex_search(data, mm, arr_re) || mm.size() < 2)
+            return;
+
+        const std::string arr = mm[1].str();
+        std::regex item_re("\\{([^}]*)\\}");
+        for(auto it = std::sregex_iterator(arr.begin(), arr.end(), item_re); it != std::sregex_iterator(); ++it)
+        {
+            const std::string obj = (*it)[1].str();
+            StrategicLevelFrame::CommanderRec c;
+            (void)ParseJsonStringField(obj, "name", c.name);
+            (void)ParseJsonIntField(obj, "rank", c.rank);
+            if(!c.name.empty())
+                out.push_back(c);
+        }
+    };
+
+    parse_commander_array("player_commanders", playerCommanders);
+    parse_commander_array("available_commanders", availableCommanders);
+
     return true;
 }
 
@@ -2031,6 +2358,10 @@ static void SaveStrategicStateFile(
     const std::unordered_map<int, std::string>& territoryMission,
     const std::unordered_map<int, int>& territoryLaunchCount,
     const std::vector<LevelData::PlayerUnitAdd>& units,
+    const std::vector<StrategicLevelFrame::CommanderRec>& playerCommanders,
+    const std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
+    int cmdGenWindowStartTurn,
+    int cmdGenCountInWindow,
     const std::string& timestamp)
 {
     std::ofstream f(path);
@@ -2071,7 +2402,36 @@ static void SaveStrategicStateFile(
     }
     f << "  ],\n";
 
-    // units
+
+// commanders
+f << "  \"commander_generation\": {"
+  << "\"window_start_turn\": " << cmdGenWindowStartTurn << ", "
+  << "\"generated_in_window\": " << cmdGenCountInWindow
+  << "},\n";
+
+f << "  \"player_commanders\": [\n";
+for(size_t i = 0; i < playerCommanders.size(); ++i)
+{
+    const auto& c = playerCommanders[i];
+    f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
+    if(i + 1 < playerCommanders.size())
+        f << ",";
+    f << "\n";
+}
+f << "  ],\n";
+
+f << "  \"available_commanders\": [\n";
+for(size_t i = 0; i < availableCommanders.size(); ++i)
+{
+    const auto& c = availableCommanders[i];
+    f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
+    if(i + 1 < availableCommanders.size())
+        f << ",";
+    f << "\n";
+}
+f << "  ],\n";
+
+// units
     f << "  \"units\": [\n";
     for(size_t i = 0; i < units.size(); ++i)
     {
@@ -2094,9 +2454,14 @@ void StrategicLevelFrame::LoadStrategicState()
     std::unordered_map<int, std::string> terrM;
     std::unordered_map<int, int> terrL;
     std::vector<LevelData::PlayerUnitAdd> units;
+    std::vector<CommanderRec> playerCmds;
+    std::vector<CommanderRec> availCmds;
+    int windowStart = 1;
+    int genCount = 0;
     std::string level_def, ts;
 
-    if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units, &level_def, &ts))
+    if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
+                              playerCmds, availCmds, windowStart, genCount, &level_def, &ts))
     {
         // Validate that this save matches current level (compare stem)
         const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
@@ -2117,6 +2482,10 @@ void StrategicLevelFrame::LoadStrategicState()
         m_territoryCurrentMission = std::move(terrM);
         m_territoryLaunchCount = std::move(terrL);
         m_playerUnits = std::move(units);
+        m_playerCommanders = std::move(playerCmds);
+        m_availableCommanders = std::move(availCmds);
+        m_cmdGenWindowStartTurn = windowStart;
+        m_cmdGenCountInWindow = genCount;
 
         if (m_selectedTerritory >= 0)
             SelectTerritoryById(m_selectedTerritory);
@@ -2128,7 +2497,9 @@ void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits, NowIsoLocal());
+                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+                          m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+                          NowIsoLocal());
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
