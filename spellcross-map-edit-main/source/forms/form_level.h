@@ -9,6 +9,8 @@
 #include <wx/statbmp.h>
 #include <wx/bmpbuttn.h>
 #include <wx/simplebook.h>
+#include <wx/dnd.h>
+#include <wx/scrolwin.h>
 
 #include "level.h"
 
@@ -96,6 +98,14 @@ struct PlayerProgress
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
 private:
+    struct HierarchySlot
+    {
+        std::string id;
+        std::string type;
+        wxStaticText* label = nullptr;
+        wxString placeholder;
+    };
+
     struct UiPalette
     {
         wxColour text;
@@ -118,6 +128,27 @@ private:
     const CommanderRankRec* FindRankRec(int rank) const;
     int FindNextRankExp(int current_rank) const;
     wxString GetRankNameCz(int rank) const;
+
+    void BuildHierarchyPage(wxPanel* parent);
+    wxScrolledWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
+    wxPanel* BuildHierarchyFormation(wxWindow* parent,
+                                     const wxString& label,
+                                     const wxColour& color,
+                                     wxSizer* contents);
+    wxPanel* BuildHierarchySlot(wxWindow* parent,
+                                const wxString& placeholder,
+                                const std::string& slotId,
+                                const std::string& type);
+    void RegisterHierarchySlot(const std::string& slotId,
+                               const std::string& type,
+                               wxStaticText* label,
+                               const wxString& placeholder);
+    void ApplyHierarchyDrop(const std::string& slotId, const wxString& data);
+    void ClearHierarchySlot(const std::string& slotId);
+    void BeginHierarchySlotDrag(const std::string& slotId, wxWindow* source);
+    void OnHierarchyTogglePage(wxCommandEvent& ev);
+    void OnRosterBeginDrag(wxListEvent& event);
+    void OnCommanderBeginDrag(wxListEvent& event);
 
 public:
 
@@ -231,8 +262,11 @@ bool m_commanderNamesLoaded = false;
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_cmdRoster = nullptr;
     wxListCtrl* m_roster = nullptr;
-    wxListCtrl* m_hierarchyList = nullptr;
     wxSimplebook* m_leftBook = nullptr;
+    wxSimplebook* m_hierarchyBook = nullptr;
+    wxButton* m_btnHierarchyPageToggle = nullptr;
+    std::vector<HierarchySlot> m_hierarchySlots;
+    std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnBuy = nullptr;
