@@ -129,6 +129,8 @@ private:
     int FindNextRankExp(int current_rank) const;
     wxString GetRankNameCz(int rank) const;
 
+public:
+
     void BuildHierarchyPage(wxPanel* parent);
     wxScrolledWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
     wxPanel* BuildHierarchyFormation(wxWindow* parent,
