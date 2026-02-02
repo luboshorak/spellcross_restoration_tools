@@ -1303,81 +1303,126 @@ wxScrolledWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, 
 
     auto* pageSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* brigadeSizer = new wxBoxSizer(wxVERTICAL);
-    auto* brigadeRow = new wxBoxSizer(wxHORIZONTAL);
-    brigadeRow->Add(BuildHierarchySlot(page, "brigade commander (MajGen)", "brigade_" + std::to_string(brigadeIndex) + "_commander", "commander"), 0, wxALL, 4);
-    brigadeRow->Add(BuildHierarchySlot(page, "assigned unit (red pool)", "brigade_" + std::to_string(brigadeIndex) + "_unit", "unit"), 0, wxALL, 4);
-    brigadeSizer->Add(brigadeRow, 0, wxEXPAND);
-
-    auto* regimentsSizer = new wxBoxSizer(wxVERTICAL);
-    for(int regiment = 0; regiment < 2; ++regiment)
+    auto buildBattalionPanel = [&](int battalionIndex) -> wxPanel*
     {
-        const int regimentIndex = (brigadeIndex - 1) * 2 + regiment + 1;
-        auto* regimentSizer = new wxBoxSizer(wxVERTICAL);
-        auto* regimentHeader = new wxBoxSizer(wxHORIZONTAL);
-        regimentHeader->Add(BuildHierarchySlot(page, "regiment commander (Maj)", "regiment_" + std::to_string(regimentIndex) + "_commander", "commander"), 0, wxALL, 4);
-        regimentHeader->Add(BuildHierarchySlot(page, "assigned unit (blue pool)", "regiment_" + std::to_string(regimentIndex) + "_unit", "unit"), 0, wxALL, 4);
-        regimentSizer->Add(regimentHeader, 0, wxEXPAND);
+        auto* battalionSizer = new wxBoxSizer(wxHORIZONTAL);
+
+        auto* battalionUnits = new wxBoxSizer(wxVERTICAL);
+        for(int unitSlot = 0; unitSlot < 4; ++unitSlot)
+        {
+            const std::string slotId =
+                "battalion_" + std::to_string(battalionIndex) + "_unit_" + std::to_string(unitSlot + 1);
+            battalionUnits->Add(
+                BuildHierarchySlot(page, "unit", slotId, "unit"),
+                0,
+                wxBOTTOM,
+                4);
+        }
+
+        auto* battalionCommander = new wxBoxSizer(wxVERTICAL);
+        battalionCommander->Add(
+            BuildHierarchySlot(
+                page,
+                "commander",
+                "battalion_" + std::to_string(battalionIndex) + "_commander",
+                "commander"),
+            0,
+            wxBOTTOM,
+            4);
+        battalionCommander->Add(
+            BuildHierarchySlot(
+                page,
+                "assigned unit (green pool)",
+                "battalion_" + std::to_string(battalionIndex) + "_commander_unit",
+                "unit"),
+            0,
+            wxBOTTOM,
+            4);
+
+        battalionSizer->Add(battalionUnits, 0, wxRIGHT, 8);
+        battalionSizer->Add(battalionCommander, 0, wxALIGN_TOP);
+
+        return BuildHierarchyFormation(
+            page,
+            wxString::Format("Battalion %d", battalionIndex),
+            battalionColor,
+            battalionSizer);
+    };
+
+    auto buildRegimentPanel = [&](int regimentIndex) -> wxPanel*
+    {
+        auto* regimentSizer = new wxBoxSizer(wxHORIZONTAL);
 
         auto* battalionsSizer = new wxBoxSizer(wxVERTICAL);
         for(int battalion = 0; battalion < 2; ++battalion)
         {
             const int battalionIndex = (regimentIndex - 1) * 2 + battalion + 1;
-            auto* battalionSizer = new wxBoxSizer(wxHORIZONTAL);
-
-            auto* battalionUnits = new wxBoxSizer(wxVERTICAL);
-            for(int unitSlot = 0; unitSlot < 4; ++unitSlot)
-            {
-                const std::string slotId =
-                    "battalion_" + std::to_string(battalionIndex) + "_unit_" + std::to_string(unitSlot + 1);
-                battalionUnits->Add(
-                    BuildHierarchySlot(page, "unit", slotId, "unit"),
-                    0,
-                    wxBOTTOM,
-                    4);
-            }
-
-            auto* battalionCommander = new wxBoxSizer(wxVERTICAL);
-            battalionCommander->Add(
-                BuildHierarchySlot(
-                    page,
-                    "battalion commander",
-                    "battalion_" + std::to_string(battalionIndex) + "_commander",
-                    "commander"),
-                0,
-                wxBOTTOM,
-                4);
-            battalionCommander->Add(
-                BuildHierarchySlot(
-                    page,
-                    "assigned unit (green pool)",
-                    "battalion_" + std::to_string(battalionIndex) + "_commander_unit",
-                    "unit"),
-                0,
-                wxBOTTOM,
-                4);
-
-            battalionSizer->Add(battalionUnits, 0, wxRIGHT, 8);
-            battalionSizer->Add(battalionCommander, 0, wxALIGN_TOP);
-
-            auto* battalionPanel = BuildHierarchyFormation(
-                page,
-                wxString::Format("Battalion %d", battalionIndex),
-                battalionColor,
-                battalionSizer);
-            battalionsSizer->Add(battalionPanel, 0, wxBOTTOM | wxEXPAND, 8);
+            auto* battalionPanel = buildBattalionPanel(battalionIndex);
+            battalionsSizer->Add(battalionPanel, 0, wxBOTTOM, 8);
         }
 
-        regimentSizer->Add(battalionsSizer, 0, wxLEFT, 12);
-        auto* regimentPanel = BuildHierarchyFormation(
+        auto* regimentCommander = new wxBoxSizer(wxVERTICAL);
+        regimentCommander->Add(
+            BuildHierarchySlot(
+                page,
+                "commander (Maj)",
+                "regiment_" + std::to_string(regimentIndex) + "_commander",
+                "commander"),
+            0,
+            wxBOTTOM,
+            4);
+        regimentCommander->Add(
+            BuildHierarchySlot(
+                page,
+                "assigned unit (blue pool)",
+                "regiment_" + std::to_string(regimentIndex) + "_unit",
+                "unit"),
+            0,
+            wxBOTTOM,
+            4);
+
+        regimentSizer->Add(battalionsSizer, 0, wxRIGHT, 16);
+        regimentSizer->Add(regimentCommander, 0, wxALIGN_TOP);
+
+        return BuildHierarchyFormation(
             page,
             wxString::Format("Regiment %d", regimentIndex),
             regimentColor,
             regimentSizer);
-        regimentsSizer->Add(regimentPanel, 0, wxBOTTOM | wxEXPAND, 10);
+    };
+
+    auto* brigadeSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    auto* regimentsSizer = new wxBoxSizer(wxVERTICAL);
+    for(int regiment = 0; regiment < 2; ++regiment)
+    {
+        const int regimentIndex = (brigadeIndex - 1) * 2 + regiment + 1;
+        regimentsSizer->Add(buildRegimentPanel(regimentIndex), 0, wxBOTTOM, 10);
     }
 
-    brigadeSizer->Add(regimentsSizer, 0, wxLEFT, 12);
+    auto* brigadeCommander = new wxBoxSizer(wxVERTICAL);
+    brigadeCommander->Add(
+        BuildHierarchySlot(
+            page,
+            "commander (MajGen)",
+            "brigade_" + std::to_string(brigadeIndex) + "_commander",
+            "commander"),
+        0,
+        wxBOTTOM,
+        4);
+    brigadeCommander->Add(
+        BuildHierarchySlot(
+            page,
+            "assigned unit (red pool)",
+            "brigade_" + std::to_string(brigadeIndex) + "_unit",
+            "unit"),
+        0,
+        wxBOTTOM,
+        4);
+
+    brigadeSizer->Add(regimentsSizer, 0, wxRIGHT, 20);
+    brigadeSizer->Add(brigadeCommander, 0, wxALIGN_TOP);
+
     auto* brigadePanel = BuildHierarchyFormation(
         page,
         wxString::Format("Brigade %d", brigadeIndex),
