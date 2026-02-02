@@ -1232,24 +1232,6 @@ void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
     auto* hTitle = CreateStrategicLabel(parent, "Units / Hierarchy", m_fontHeading, m_palette.heading, m_palette.shadow);
     hs->Add(hTitle, 0, wxALL, 8);
 
-    auto* hIntro = new wxTextCtrl(
-        parent,
-        wxID_ANY,
-        "Hierarchy setup (drag & drop from the unit/commander pools).\n"
-        "- Battalion Formation (1) { Attack(1) AttackPT(0) Defence(1) Move(0) }\n"
-        "- Regiment Formation (2)  { Attack(2) AttackPT(0) Defence(1) Move(0) }\n"
-        "- Brigade Formation (3)   { Attack(4) AttackPT(1) Defence(3) Move(1) }\n"
-        "Commanders are assigned to formations with a unit under them.\n"
-        "Remove assignments by dragging a slot back to the pool.",
-        wxDefaultPosition,
-        wxDefaultSize,
-        wxTE_MULTILINE | wxTE_READONLY | wxBORDER_NONE);
-    hIntro->SetFont(m_fontText);
-    hIntro->SetBackgroundColour(m_palette.background);
-    hIntro->SetForegroundColour(m_palette.text);
-    hIntro->SetMinSize(wxSize(-1, 160));
-    hs->Add(hIntro, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
     m_hierarchyBook = new wxSimplebook(parent, wxID_ANY);
     m_hierarchyBook->SetBackgroundColour(m_palette.background);
     m_hierarchyBook->AddPage(BuildHierarchyBookPage(m_hierarchyBook, 1), "Page 1", true);
