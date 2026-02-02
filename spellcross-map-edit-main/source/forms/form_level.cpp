@@ -96,6 +96,99 @@ static wxFont MakeStrategicFont(int pixelSize, bool bold)
     return font;
 }
 
+namespace
+{
+struct HierarchyDragData
+{
+    bool valid = false;
+    bool fromSlot = false;
+    std::string slotId;
+    std::string type;
+    wxString name;
+};
+
+HierarchyDragData ParseHierarchyDragData(const wxString& data)
+{
+    HierarchyDragData parsed;
+    wxArrayString tokens = wxSplit(data, ':', '\0');
+    if(tokens.empty())
+        return parsed;
+
+    const wxString kind = tokens[0];
+    if(kind == "unit" && tokens.size() >= 2)
+    {
+        parsed.valid = true;
+        parsed.type = "unit";
+        parsed.name = tokens[1];
+        return parsed;
+    }
+    if(kind == "commander" && tokens.size() >= 2)
+    {
+        parsed.valid = true;
+        parsed.type = "commander";
+        parsed.name = tokens[1];
+        return parsed;
+    }
+    if(kind == "slot" && tokens.size() >= 4)
+    {
+        parsed.valid = true;
+        parsed.fromSlot = true;
+        parsed.slotId = tokens[1].ToStdString();
+        parsed.type = tokens[2].ToStdString();
+        parsed.name = tokens[3];
+        return parsed;
+    }
+    return parsed;
+}
+
+class HierarchySlotDropTarget : public wxTextDropTarget
+{
+public:
+    HierarchySlotDropTarget(StrategicLevelFrame* owner, std::string slotId)
+        : m_owner(owner)
+        , m_slotId(std::move(slotId))
+    {
+    }
+
+    bool OnDropText(wxCoord, wxCoord, const wxString& data) override
+    {
+        if(!m_owner)
+            return false;
+        m_owner->ApplyHierarchyDrop(m_slotId, data);
+        return true;
+    }
+
+private:
+    StrategicLevelFrame* m_owner = nullptr;
+    std::string m_slotId;
+};
+
+class HierarchyPoolDropTarget : public wxTextDropTarget
+{
+public:
+    HierarchyPoolDropTarget(StrategicLevelFrame* owner, std::string type)
+        : m_owner(owner)
+        , m_type(std::move(type))
+    {
+    }
+
+    bool OnDropText(wxCoord, wxCoord, const wxString& data) override
+    {
+        if(!m_owner)
+            return false;
+        HierarchyDragData parsed = ParseHierarchyDragData(data);
+        if(!parsed.valid || !parsed.fromSlot || parsed.type != m_type)
+            return false;
+        m_owner->ClearHierarchySlot(parsed.slotId);
+        return true;
+    }
+
+private:
+    StrategicLevelFrame* m_owner = nullptr;
+    std::string m_type;
+};
+} // namespace
+
 static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans, const wxFont& fallbackFont,
                                      const wxColour& shadow, const wxColour* background = nullptr)
 {
@@ -1000,40 +1093,7 @@ void StrategicLevelFrame::BuildUI()
     // --- Page 1: Hierarchy ---
     auto* hierarchyPanel = new wxPanel(m_leftBook);
     hierarchyPanel->SetBackgroundColour(m_palette.background);
-    auto* hs = new wxBoxSizer(wxVERTICAL);
-
-    auto* hTitle = CreateStrategicLabel(hierarchyPanel, "Units / Hierarchy", m_fontHeading, m_palette.heading, m_palette.shadow);
-    hs->Add(hTitle, 0, wxALL, 8);
-
-    auto* hIntro = new wxTextCtrl(
-        hierarchyPanel,
-        wxID_ANY,
-        "Hierarchy overview"
-        "- Basic formation is a battalion."
-        "- Two battalions form a regiment."
-        "- Two regiments (four battalions) form a brigade."
-        "Commanders are special units assigned to formations."
-        "Higher ranks allow higher formations."
-        "If a unit with a commander is destroyed, the commander is lost.",
-        wxDefaultPosition,
-        wxDefaultSize,
-        wxTE_MULTILINE | wxTE_READONLY | wxBORDER_NONE);
-    hIntro->SetFont(m_fontText);
-    hIntro->SetBackgroundColour(m_palette.background);
-    hIntro->SetForegroundColour(m_palette.text);
-    hIntro->SetMinSize(wxSize(-1, 160));
-    hs->Add(hIntro, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-    m_hierarchyList = new wxListCtrl(hierarchyPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-    m_hierarchyList->SetFont(m_fontText);
-    m_hierarchyList->SetBackgroundColour(m_palette.background);
-    m_hierarchyList->SetForegroundColour(m_palette.text);
-    m_hierarchyList->InsertColumn(0, "Formation");
-    m_hierarchyList->InsertColumn(1, "Commander");
-    m_hierarchyList->InsertColumn(2, "Units");
-    hs->Add(m_hierarchyList, 1, wxALL | wxEXPAND, 8);
-
-    hierarchyPanel->SetSizer(hs);
+    BuildHierarchyPage(hierarchyPanel);
 
     // --- Page 2: Statistics (integrated into this frame) ---
     m_statsPanel = new wxPanel(m_leftBook);
@@ -1064,6 +1124,8 @@ m_cmdRoster->SetBackgroundColour(m_palette.background);
 m_cmdRoster->SetForegroundColour(m_palette.text);
 m_cmdRoster->InsertColumn(0, "Commander");
 m_cmdRoster->InsertColumn(1, "Rank");
+m_cmdRoster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnCommanderBeginDrag, this);
+m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
 // Keep the commanders list compact (14 rows max)
 // NOVĚ: výška podle fontu + menší počet řádků
 {
@@ -1087,6 +1149,8 @@ midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     // NOVĚ: jen dva sloupce: Unit a HP
     m_roster->InsertColumn(0, "Unit");
     m_roster->InsertColumn(1, "HP");
+    m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
+    m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
@@ -1159,6 +1223,268 @@ midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
     rootSizer->Add(mainSizer, 1, wxEXPAND);
     root->SetSizer(rootSizer);
+}
+
+void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
+{
+    auto* hs = new wxBoxSizer(wxVERTICAL);
+
+    auto* hTitle = CreateStrategicLabel(parent, "Units / Hierarchy", m_fontHeading, m_palette.heading, m_palette.shadow);
+    hs->Add(hTitle, 0, wxALL, 8);
+
+    m_hierarchyBook = new wxSimplebook(parent, wxID_ANY);
+    m_hierarchyBook->SetBackgroundColour(m_palette.background);
+    m_hierarchyBook->AddPage(BuildHierarchyBookPage(m_hierarchyBook, 1), "Page 1", true);
+    m_hierarchyBook->AddPage(BuildHierarchyBookPage(m_hierarchyBook, 2), "Page 2", false);
+    hs->Add(m_hierarchyBook, 1, wxALL | wxEXPAND, 8);
+
+    m_btnHierarchyPageToggle = new wxButton(parent, wxID_ANY, "Go to Page 2");
+    m_btnHierarchyPageToggle->SetFont(m_fontText);
+    m_btnHierarchyPageToggle->SetBackgroundColour(m_palette.buttonBackground);
+    m_btnHierarchyPageToggle->SetForegroundColour(m_palette.buttonText);
+    m_btnHierarchyPageToggle->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnHierarchyTogglePage, this);
+    hs->Add(m_btnHierarchyPageToggle, 0, wxALL | wxALIGN_RIGHT, 8);
+
+    parent->SetSizer(hs);
+}
+
+wxPanel* StrategicLevelFrame::BuildHierarchyFormation(wxWindow* parent,
+                                                      const wxString& label,
+                                                      const wxColour& color,
+                                                      wxSizer* contents)
+{
+    auto* panel = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_SIMPLE);
+    panel->SetBackgroundColour(m_palette.background);
+
+    auto* borderSizer = new wxBoxSizer(wxVERTICAL);
+    auto* title = CreateStrategicLabel(panel, label, m_fontText, color, m_palette.shadow);
+    borderSizer->Add(title, 0, wxALL, 6);
+    borderSizer->Add(contents, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
+    panel->SetSizer(borderSizer);
+    return panel;
+}
+
+wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
+                                                 const wxString& placeholder,
+                                                 const std::string& slotId,
+                                                 const std::string& type)
+{
+    auto* panel = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(160, 32), wxBORDER_SIMPLE);
+    panel->SetBackgroundColour(m_palette.background);
+
+    auto* label = new wxStaticText(panel, wxID_ANY, placeholder);
+    label->SetFont(m_fontText);
+    label->SetForegroundColour(m_palette.text);
+
+    auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+    sizer->AddStretchSpacer();
+    sizer->Add(label, 0, wxALIGN_CENTER_VERTICAL);
+    sizer->AddStretchSpacer();
+    panel->SetSizer(sizer);
+
+    RegisterHierarchySlot(slotId, type, label, placeholder);
+    panel->SetDropTarget(new HierarchySlotDropTarget(this, slotId));
+    label->Bind(wxEVT_LEFT_DOWN, [this, slotId](wxMouseEvent& ev) {
+        BeginHierarchySlotDrag(slotId, static_cast<wxWindow*>(ev.GetEventObject()));
+    });
+
+    return panel;
+}
+
+wxScrolledWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex)
+{
+    auto* page = new wxScrolledWindow(parent, wxID_ANY);
+    page->SetBackgroundColour(m_palette.background);
+    page->SetScrollRate(10, 10);
+
+    const wxColour brigadeColor = wxColour(200, 60, 60);
+    const wxColour regimentColor = wxColour(50, 120, 210);
+    const wxColour battalionColor = wxColour(50, 160, 80);
+
+    auto* pageSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* brigadeSizer = new wxBoxSizer(wxVERTICAL);
+    auto* brigadeRow = new wxBoxSizer(wxHORIZONTAL);
+    brigadeRow->Add(BuildHierarchySlot(page, "brigade commander (MajGen)", "brigade_" + std::to_string(brigadeIndex) + "_commander", "commander"), 0, wxALL, 4);
+    brigadeRow->Add(BuildHierarchySlot(page, "assigned unit (red pool)", "brigade_" + std::to_string(brigadeIndex) + "_unit", "unit"), 0, wxALL, 4);
+    brigadeSizer->Add(brigadeRow, 0, wxEXPAND);
+
+    auto* regimentsSizer = new wxBoxSizer(wxVERTICAL);
+    for(int regiment = 0; regiment < 2; ++regiment)
+    {
+        const int regimentIndex = (brigadeIndex - 1) * 2 + regiment + 1;
+        auto* regimentSizer = new wxBoxSizer(wxVERTICAL);
+        auto* regimentHeader = new wxBoxSizer(wxHORIZONTAL);
+        regimentHeader->Add(BuildHierarchySlot(page, "regiment commander (Maj)", "regiment_" + std::to_string(regimentIndex) + "_commander", "commander"), 0, wxALL, 4);
+        regimentHeader->Add(BuildHierarchySlot(page, "assigned unit (blue pool)", "regiment_" + std::to_string(regimentIndex) + "_unit", "unit"), 0, wxALL, 4);
+        regimentSizer->Add(regimentHeader, 0, wxEXPAND);
+
+        auto* battalionsSizer = new wxBoxSizer(wxVERTICAL);
+        for(int battalion = 0; battalion < 2; ++battalion)
+        {
+            const int battalionIndex = (regimentIndex - 1) * 2 + battalion + 1;
+            auto* battalionSizer = new wxBoxSizer(wxHORIZONTAL);
+
+            auto* battalionUnits = new wxBoxSizer(wxVERTICAL);
+            for(int unitSlot = 0; unitSlot < 4; ++unitSlot)
+            {
+                const std::string slotId =
+                    "battalion_" + std::to_string(battalionIndex) + "_unit_" + std::to_string(unitSlot + 1);
+                battalionUnits->Add(
+                    BuildHierarchySlot(page, "unit", slotId, "unit"),
+                    0,
+                    wxBOTTOM,
+                    4);
+            }
+
+            auto* battalionCommander = new wxBoxSizer(wxVERTICAL);
+            battalionCommander->Add(
+                BuildHierarchySlot(
+                    page,
+                    "battalion commander",
+                    "battalion_" + std::to_string(battalionIndex) + "_commander",
+                    "commander"),
+                0,
+                wxBOTTOM,
+                4);
+            battalionCommander->Add(
+                BuildHierarchySlot(
+                    page,
+                    "assigned unit (green pool)",
+                    "battalion_" + std::to_string(battalionIndex) + "_commander_unit",
+                    "unit"),
+                0,
+                wxBOTTOM,
+                4);
+
+            battalionSizer->Add(battalionUnits, 0, wxRIGHT, 8);
+            battalionSizer->Add(battalionCommander, 0, wxALIGN_TOP);
+
+            auto* battalionPanel = BuildHierarchyFormation(
+                page,
+                wxString::Format("Battalion %d", battalionIndex),
+                battalionColor,
+                battalionSizer);
+            battalionsSizer->Add(battalionPanel, 0, wxBOTTOM | wxEXPAND, 8);
+        }
+
+        regimentSizer->Add(battalionsSizer, 0, wxLEFT, 12);
+        auto* regimentPanel = BuildHierarchyFormation(
+            page,
+            wxString::Format("Regiment %d", regimentIndex),
+            regimentColor,
+            regimentSizer);
+        regimentsSizer->Add(regimentPanel, 0, wxBOTTOM | wxEXPAND, 10);
+    }
+
+    brigadeSizer->Add(regimentsSizer, 0, wxLEFT, 12);
+    auto* brigadePanel = BuildHierarchyFormation(
+        page,
+        wxString::Format("Brigade %d", brigadeIndex),
+        brigadeColor,
+        brigadeSizer);
+    pageSizer->Add(brigadePanel, 0, wxALL, 8);
+
+    page->SetSizer(pageSizer);
+    page->FitInside();
+    return page;
+}
+
+void StrategicLevelFrame::RegisterHierarchySlot(const std::string& slotId,
+                                                const std::string& type,
+                                                wxStaticText* label,
+                                                const wxString& placeholder)
+{
+    HierarchySlot slot;
+    slot.id = slotId;
+    slot.type = type;
+    slot.label = label;
+    slot.placeholder = placeholder;
+    m_hierarchySlotIndex[slotId] = m_hierarchySlots.size();
+    m_hierarchySlots.push_back(std::move(slot));
+}
+
+void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wxString& data)
+{
+    auto it = m_hierarchySlotIndex.find(slotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    HierarchyDragData parsed = ParseHierarchyDragData(data);
+    if(!parsed.valid)
+        return;
+    if(parsed.type != slot.type)
+        return;
+
+    slot.label->SetLabel(parsed.name);
+    slot.label->GetParent()->Layout();
+
+    if(parsed.fromSlot && parsed.slotId != slotId)
+        ClearHierarchySlot(parsed.slotId);
+}
+
+void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
+{
+    auto it = m_hierarchySlotIndex.find(slotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    slot.label->SetLabel(slot.placeholder);
+    slot.label->GetParent()->Layout();
+}
+
+void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWindow* source)
+{
+    auto it = m_hierarchySlotIndex.find(slotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    if(slot.label->GetLabel() == slot.placeholder)
+        return;
+    wxTextDataObject dataObject(wxString::Format("slot:%s:%s:%s",
+        slot.id.c_str(),
+        slot.type.c_str(),
+        slot.label->GetLabel()));
+    wxDropSource dropSource(dataObject, source);
+    dropSource.DoDragDrop(wxDrag_CopyOnly);
+}
+
+void StrategicLevelFrame::OnHierarchyTogglePage(wxCommandEvent&)
+{
+    if(!m_hierarchyBook || !m_btnHierarchyPageToggle)
+        return;
+
+    size_t current = m_hierarchyBook->GetSelection();
+    size_t next = current == 0 ? 1 : 0;
+    m_hierarchyBook->SetSelection(next);
+    m_btnHierarchyPageToggle->SetLabel(next == 0 ? "Go to Page 2" : "Back to Page 1");
+}
+
+void StrategicLevelFrame::OnRosterBeginDrag(wxListEvent& event)
+{
+    const long item = event.GetIndex();
+    if(item < 0)
+        return;
+    wxString name = m_roster->GetItemText(item);
+    if(name.empty())
+        return;
+    wxTextDataObject dataObject("unit:" + name);
+    wxDropSource dropSource(dataObject, m_roster);
+    dropSource.DoDragDrop(wxDrag_CopyOnly);
+}
+
+void StrategicLevelFrame::OnCommanderBeginDrag(wxListEvent& event)
+{
+    const long item = event.GetIndex();
+    if(item < 0)
+        return;
+    wxString name = m_cmdRoster->GetItemText(item);
+    if(name.empty())
+        return;
+    wxTextDataObject dataObject("commander:" + name);
+    wxDropSource dropSource(dataObject, m_cmdRoster);
+    dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
 
 void StrategicLevelFrame::RefreshUI()
