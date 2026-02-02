@@ -132,7 +132,7 @@ private:
 public:
 
     void BuildHierarchyPage(wxPanel* parent);
-    wxScrolledWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
+    wxWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
     wxPanel* BuildHierarchyFormation(wxWindow* parent,
                                      const wxString& label,
                                      const wxColour& color,

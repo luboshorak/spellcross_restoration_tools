@@ -274,9 +274,14 @@ static void UpdateStrategicLabel(wxStaticBitmap* target, const std::vector<Strat
 }
 
 static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const std::vector<StrategicTextSpan>& spans,
-                                            const wxFont& fallbackFont, const wxColour& shadow, const wxColour* background = nullptr)
+    const wxFont& fallbackFont, const wxColour& shadow, const wxColour* background = nullptr)
 {
     auto* b = new wxStaticBitmap(parent, wxID_ANY, wxBitmap(1, 1));
+
+    // Helps with background blending on Windows
+    b->SetBackgroundColour(parent ? parent->GetBackgroundColour() : *wxBLACK);
+    b->SetBackgroundStyle(wxBG_STYLE_PAINT);
+
     UpdateStrategicLabel(b, spans, fallbackFont, shadow, background);
     return b;
 }
@@ -1115,7 +1120,13 @@ void StrategicLevelFrame::BuildUI()
 
 
 // Commanders (owned) - list (max 14 commanders)
-auto* cmdTitle = CreateStrategicLabel(mid, "Commanders", m_fontHeading, m_palette.heading, m_palette.shadow);
+    auto* cmdTitle = CreateStrategicLabel(
+        mid,
+        { { "Commanders", m_palette.heading, &m_fontHeading } },
+        m_fontHeading,
+        m_palette.shadow,
+        &m_palette.background);
+
 midSizer->Add(cmdTitle, 0, wxALL, 8);
 
 m_cmdRoster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
@@ -1137,7 +1148,13 @@ m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
 };
 midSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-auto* midTitle = CreateStrategicLabel(mid, "Player units", m_fontHeading, m_palette.heading, m_palette.shadow);
+auto* midTitle = CreateStrategicLabel(
+    mid,
+    { { "Player units", m_palette.heading, &m_fontHeading } },
+    m_fontHeading,
+    m_palette.shadow,
+    &m_palette.background);
+
 midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
 // v BuildUI(): úprava definice sloupců m_roster
@@ -1154,7 +1171,7 @@ midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
-    mainSizer->Add(mid, 2, wxEXPAND);
+    mainSizer->Add(mid, 1, wxEXPAND);
 
     // ============================================================
     // RIGHT: status + actions (always visible, consistent layout)
@@ -1229,7 +1246,13 @@ void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
 {
     auto* hs = new wxBoxSizer(wxVERTICAL);
 
-    auto* hTitle = CreateStrategicLabel(parent, "Units / Hierarchy", m_fontHeading, m_palette.heading, m_palette.shadow);
+    auto* hTitle = CreateStrategicLabel(
+        parent,
+        { { "Units / Hierarchy", m_palette.heading, &m_fontHeading } },
+        m_fontHeading,
+        m_palette.shadow,
+        &m_palette.background);
+
     hs->Add(hTitle, 0, wxALL, 8);
 
     m_hierarchyBook = new wxSimplebook(parent, wxID_ANY);
@@ -1265,175 +1288,292 @@ wxPanel* StrategicLevelFrame::BuildHierarchyFormation(wxWindow* parent,
 }
 
 wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
-                                                 const wxString& placeholder,
-                                                 const std::string& slotId,
-                                                 const std::string& type)
+    const wxString& placeholder,
+    const std::string& slotId,
+    const std::string& type)
 {
-    auto* panel = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(160, 32), wxBORDER_SIMPLE);
+    // Spellcross-like slot: compact, left aligned, custom green border (not system wxBORDER_SIMPLE).
+    const wxSize slotSize(180, 24);
+
+    auto* panel = new wxPanel(parent, wxID_ANY, wxDefaultPosition, slotSize, wxBORDER_NONE);
     panel->SetBackgroundColour(m_palette.background);
+    panel->SetBackgroundStyle(wxBG_STYLE_PAINT);
 
     auto* label = new wxStaticText(panel, wxID_ANY, placeholder);
     label->SetFont(m_fontText);
     label->SetForegroundColour(m_palette.text);
 
     auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-    sizer->AddStretchSpacer();
-    sizer->Add(label, 0, wxALIGN_CENTER_VERTICAL);
-    sizer->AddStretchSpacer();
+    sizer->Add(label, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 6);
     panel->SetSizer(sizer);
 
+    // Draw custom border
+    panel->Bind(wxEVT_PAINT, [this, panel](wxPaintEvent&) {
+        wxPaintDC dc(panel);
+        dc.SetBackground(wxBrush(panel->GetBackgroundColour()));
+        dc.Clear();
+        const wxSize sz = panel->GetClientSize();
+        dc.SetPen(wxPen(wxColour(70, 110, 70), 1));
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        dc.DrawRectangle(0, 0, sz.x - 1, sz.y - 1);
+        });
+
     RegisterHierarchySlot(slotId, type, label, placeholder);
+
+    // Drop target on the whole panel (more reliable than label-only)
     panel->SetDropTarget(new HierarchySlotDropTarget(this, slotId));
-    label->Bind(wxEVT_LEFT_DOWN, [this, slotId](wxMouseEvent& ev) {
-        BeginHierarchySlotDrag(slotId, static_cast<wxWindow*>(ev.GetEventObject()));
-    });
+
+    // Drag from label OR panel
+    auto bindDrag = [this, slotId](wxWindow* w) {
+        w->Bind(wxEVT_LEFT_DOWN, [this, slotId](wxMouseEvent& ev) {
+            BeginHierarchySlotDrag(slotId, static_cast<wxWindow*>(ev.GetEventObject()));
+            ev.Skip();
+            });
+        };
+    bindDrag(label);
+    bindDrag(panel);
 
     return panel;
 }
 
-wxScrolledWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex)
+
+wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex)
 {
-    auto* page = new wxScrolledWindow(parent, wxID_ANY);
+    // NOTE: We intentionally do NOT use nested sizers here.
+    // The original Spellcross hierarchy screen is a hand-placed tree.
+    // We mimic that by using a fixed canvas with absolute positions + painted connector lines.
+
+    class HierarchyCanvas : public wxPanel
+    {
+    public:
+        HierarchyCanvas(StrategicLevelFrame* owner, wxWindow* parent,
+            wxColour frameCol, wxColour lineCol)
+            : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
+            , m_owner(owner)
+            , m_frameCol(frameCol)
+            , m_lineCol(lineCol)
+        {
+            SetBackgroundColour(owner->m_palette.background);
+            SetBackgroundStyle(wxBG_STYLE_PAINT);
+            Bind(wxEVT_PAINT, &HierarchyCanvas::OnPaint, this);
+        }
+
+        void AddLine(wxPoint a, wxPoint b) { m_lines.push_back({ a, b }); }
+
+    private:
+        void OnPaint(wxPaintEvent&)
+        {
+            wxAutoBufferedPaintDC dc(this);
+            dc.SetBackground(wxBrush(GetBackgroundColour()));
+            dc.Clear();
+
+            //// Subtle frame around whole tree area
+            //const wxSize sz = GetClientSize();
+            //dc.SetPen(wxPen(m_frameCol, 1));
+            //dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            //dc.DrawRectangle(0, 0, sz.x - 1, sz.y - 1);
+
+            // Tree connector lines
+            dc.SetPen(wxPen(m_lineCol, 1));
+            for (const auto& ln : m_lines)
+                dc.DrawLine(ln.first, ln.second);
+        }
+
+        StrategicLevelFrame* m_owner = nullptr;
+        wxColour m_frameCol;
+        wxColour m_lineCol;
+        std::vector<std::pair<wxPoint, wxPoint>> m_lines;
+    };
+
+    // -------------------------------------------------------------------------
+    // TUNING PARAMETERS (edit these only)
+    // -------------------------------------------------------------------------
+    struct Layout
+    {
+        // Scroller / canvas
+        int scrollStepY = 12;
+        int canvasW = 800;
+        int canvasH = 660;
+        int canvasMargin = 8;
+
+        int rightPadding = 20;     // padding from right edge for top commander column
+        int minCanvasW = 760;      // base (your current)
+        int minCanvasH = 720;
+
+        // Columns (left to right)
+        int x_units = 20;     // unit slots (left stack)
+        int x_bcmd = 220;    // battalion commander column
+        int x_rcmd = 440;    // regiment commander column
+        int x_brig = 660;    // brigade commander column
+
+        // Slot geometry
+        int slotW = 160;
+        int slotH = 26;       // you said you need 26
+        int gapY = 6;
+
+        // Regiment blocks vertical placement
+        int regTopY = 40;             // top Y of first regiment block
+        int regBlockHeight = 280;     // distance between regiments (was 320)
+        int regCommanderOffsetY = 40; // commander Y inside regiment block
+
+        // Battalion placement inside regiment block
+        int battalionPairGapY = 140;  // distance between 2 battalion groups within a regiment (tune)
+        int unitsStackOffsetY = 0;    // allows nudging unit stack down/up inside battalion group
+
+        // Optional: brigade node Y
+        int brigadeCommanderY = 120;
+
+        // Connector line colors
+        wxColour frameCol = wxColour(50, 80, 50);
+        wxColour lineCol = wxColour(70, 110, 70);
+
+        // Connector geometry tweaks (helps if you want junction-style later)
+        int lineInset = 0; // e.g. 2..6 if you want lines not touching borders
+    } L;
+
+    // -------------------------------------------------------------------------
+    // UI setup
+    // -------------------------------------------------------------------------
+    auto* page = new wxWindow(parent, wxID_ANY);
     page->SetBackgroundColour(m_palette.background);
-    page->SetScrollRate(10, 10);
+    //page->SetScrollRate(0, L.scrollStepY);
 
-    const wxColour brigadeColor = wxColour(200, 60, 60);
-    const wxColour regimentColor = wxColour(50, 120, 210);
-    const wxColour battalionColor = wxColour(50, 160, 80);
+    auto* canvas = new HierarchyCanvas(this, page, L.frameCol, L.lineCol);
+    canvas->SetMinSize(wxSize(L.canvasW, L.canvasH));
 
-    auto* pageSizer = new wxBoxSizer(wxVERTICAL);
-
-    auto buildBattalionPanel = [&](int battalionIndex) -> wxPanel*
-    {
-        auto* battalionSizer = new wxBoxSizer(wxHORIZONTAL);
-
-        auto* battalionUnits = new wxBoxSizer(wxVERTICAL);
-        for(int unitSlot = 0; unitSlot < 4; ++unitSlot)
+    auto computeCanvasWidth = [&]() -> int
         {
-            const std::string slotId =
-                "battalion_" + std::to_string(battalionIndex) + "_unit_" + std::to_string(unitSlot + 1);
-            battalionUnits->Add(
-                BuildHierarchySlot(page, "unit", slotId, "unit"),
-                0,
-                wxBOTTOM,
-                4);
+            // viewport width inside scroller (how much we can show without horizontal scroll)
+            int viewportW = page->GetClientSize().x - 2 * L.canvasMargin;
+            if (viewportW < 0) viewportW = 0;
+
+            // minimum width needed so right-most column is never clipped
+            const int needW = L.x_brig + L.slotW + L.rightPadding;
+
+            // final width = at least: base, viewport, and needed for right column
+            int w = std::max({ L.minCanvasW, viewportW, needW });
+            return w;
+        };
+
+    auto applyCanvasSize = [&]()
+        {
+            const int w = computeCanvasWidth();
+            canvas->SetMinSize(wxSize(w, L.minCanvasH));
+            canvas->SetSize(wxSize(w, L.minCanvasH));
+        };
+
+    // Keep top-level commander column always fully visible (stick to right edge)
+    L.x_brig = canvas->GetClientSize().x - L.slotW - L.rightPadding;
+    if (L.x_brig < L.x_rcmd + L.slotW + 40) // safety so it doesn't collide
+        L.x_brig = L.x_rcmd + L.slotW + 40;
+
+    // Helper to place slot widgets at exact coordinates.
+    auto place = [&](int x, int y, const wxString& ph, const std::string& id, const std::string& type) {
+        wxPanel* p = BuildHierarchySlot(canvas, ph, id, type);
+        p->SetSize(wxRect(x, y, L.slotW, L.slotH));
+        return p;
+        };
+
+    // Derived helpers
+    auto slotMidY = [&](int yTop) { return yTop + L.slotH / 2; };
+
+    // Battalion blocks (4 per brigade page)
+    const int battalionBase = (brigadeIndex - 1) * 4;
+
+    // Place battalions stacked vertically (2 regiments, each has 2 battalions).
+    auto battalionTopY = [&](int bLocal) {
+        const int regLocal = bLocal / 2;  // 0 or 1
+        const int inReg = bLocal % 2;  // 0 or 1
+        const int regY = L.regTopY + regLocal * L.regBlockHeight;
+        return regY + inReg * L.battalionPairGapY;
+        };
+
+    // -------------------------------------------------------------------------
+    // Battalions: units + battalion commander + assigned unit
+    // -------------------------------------------------------------------------
+    for (int bLocal = 0; bLocal < 4; ++bLocal)
+    {
+        const int bIndex = battalionBase + bLocal + 1;
+        const int y0 = battalionTopY(bLocal);
+
+        // 4 unit slots
+        for (int u = 0; u < 4; ++u)
+        {
+            const std::string id = "battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u + 1);
+            const int y = y0 + L.unitsStackOffsetY + u * (L.slotH + L.gapY);
+            place(L.x_units, y, "unit", id, "unit");
         }
 
-        auto* battalionCommander = new wxBoxSizer(wxVERTICAL);
-        battalionCommander->Add(
-            BuildHierarchySlot(
-                page,
-                "commander",
-                "battalion_" + std::to_string(battalionIndex) + "_commander",
-                "commander"),
-            0,
-            wxBOTTOM,
-            4);
-        battalionCommander->Add(
-            BuildHierarchySlot(
-                page,
-                "assigned unit (green pool)",
-                "battalion_" + std::to_string(battalionIndex) + "_commander_unit",
-                "unit"),
-            0,
-            wxBOTTOM,
-            4);
+        // battalion commander + assigned unit
+        place(L.x_bcmd, y0 + 0 * (L.slotH + L.gapY), "commander",
+            "battalion_" + std::to_string(bIndex) + "_commander", "commander");
+        place(L.x_bcmd, y0 + 1 * (L.slotH + L.gapY), "?",
+            "battalion_" + std::to_string(bIndex) + "_commander_unit", "unit");
 
-        battalionSizer->Add(battalionUnits, 0, wxRIGHT, 8);
-        battalionSizer->Add(battalionCommander, 0, wxALIGN_TOP);
-
-        return BuildHierarchyFormation(
-            page,
-            wxString::Format("Battalion %d", battalionIndex),
-            battalionColor,
-            battalionSizer);
-    };
-
-    auto buildRegimentPanel = [&](int regimentIndex) -> wxPanel*
-    {
-        auto* regimentSizer = new wxBoxSizer(wxHORIZONTAL);
-
-        auto* battalionsSizer = new wxBoxSizer(wxVERTICAL);
-        for(int battalion = 0; battalion < 2; ++battalion)
-        {
-            const int battalionIndex = (regimentIndex - 1) * 2 + battalion + 1;
-            auto* battalionPanel = buildBattalionPanel(battalionIndex);
-            battalionsSizer->Add(battalionPanel, 0, wxBOTTOM, 8);
-        }
-
-        auto* regimentCommander = new wxBoxSizer(wxVERTICAL);
-        regimentCommander->Add(
-            BuildHierarchySlot(
-                page,
-                "commander (Maj)",
-                "regiment_" + std::to_string(regimentIndex) + "_commander",
-                "commander"),
-            0,
-            wxBOTTOM,
-            4);
-        regimentCommander->Add(
-            BuildHierarchySlot(
-                page,
-                "assigned unit (blue pool)",
-                "regiment_" + std::to_string(regimentIndex) + "_unit",
-                "unit"),
-            0,
-            wxBOTTOM,
-            4);
-
-        regimentSizer->Add(battalionsSizer, 0, wxRIGHT, 16);
-        regimentSizer->Add(regimentCommander, 0, wxALIGN_TOP);
-
-        return BuildHierarchyFormation(
-            page,
-            wxString::Format("Regiment %d", regimentIndex),
-            regimentColor,
-            regimentSizer);
-    };
-
-    auto* brigadeSizer = new wxBoxSizer(wxHORIZONTAL);
-
-    auto* regimentsSizer = new wxBoxSizer(wxVERTICAL);
-    for(int regiment = 0; regiment < 2; ++regiment)
-    {
-        const int regimentIndex = (brigadeIndex - 1) * 2 + regiment + 1;
-        regimentsSizer->Add(buildRegimentPanel(regimentIndex), 0, wxBOTTOM, 10);
+        // connector: units stack -> battalion commander
+        const int yMidUnits = y0 + L.unitsStackOffsetY + 1 * (L.slotH + L.gapY) + L.slotH / 2;
+        canvas->AddLine(wxPoint(L.x_units + L.slotW - L.lineInset, yMidUnits),
+            wxPoint(L.x_bcmd + L.lineInset, yMidUnits));
     }
 
-    auto* brigadeCommander = new wxBoxSizer(wxVERTICAL);
-    brigadeCommander->Add(
-        BuildHierarchySlot(
-            page,
-            "commander (MajGen)",
-            "brigade_" + std::to_string(brigadeIndex) + "_commander",
-            "commander"),
-        0,
-        wxBOTTOM,
-        4);
-    brigadeCommander->Add(
-        BuildHierarchySlot(
-            page,
-            "assigned unit (red pool)",
-            "brigade_" + std::to_string(brigadeIndex) + "_unit",
-            "unit"),
-        0,
-        wxBOTTOM,
-        4);
+    // -------------------------------------------------------------------------
+    // Regiments: one commander per 2 battalions
+    // -------------------------------------------------------------------------
+    for (int rLocal = 0; rLocal < 2; ++rLocal)
+    {
+        const int regimentIndex = (brigadeIndex - 1) * 2 + rLocal + 1;
+        const int yReg = L.regTopY + rLocal * L.regBlockHeight + L.regCommanderOffsetY;
 
-    brigadeSizer->Add(regimentsSizer, 0, wxRIGHT, 20);
-    brigadeSizer->Add(brigadeCommander, 0, wxALIGN_TOP);
+        place(L.x_rcmd, yReg, "commander",
+            "regiment_" + std::to_string(regimentIndex) + "_commander", "commander");
+        place(L.x_rcmd, yReg + (L.slotH + L.gapY), "?",
+            "regiment_" + std::to_string(regimentIndex) + "_unit", "unit");
 
-    auto* brigadePanel = BuildHierarchyFormation(
-        page,
-        wxString::Format("Brigade %d", brigadeIndex),
-        brigadeColor,
-        brigadeSizer);
-    pageSizer->Add(brigadePanel, 0, wxALL, 8);
+        // connectors: both battalion commander nodes -> regiment commander
+        const int b0 = rLocal * 2;
+        const int b1 = rLocal * 2 + 1;
+        const int y0 = battalionTopY(b0) + L.slotH / 2;
+        const int y1 = battalionTopY(b1) + L.slotH / 2;
 
-    page->SetSizer(pageSizer);
+        const int xFrom = L.x_bcmd + L.slotW - L.lineInset;
+        const int xTo = L.x_rcmd + L.lineInset;
+        const int yTo = yReg + L.slotH / 2;
+
+        canvas->AddLine(wxPoint(xFrom, y0), wxPoint(xTo, yTo));
+        canvas->AddLine(wxPoint(xFrom, y1), wxPoint(xTo, yTo));
+    }
+
+    // -------------------------------------------------------------------------
+    // Brigade: commander per brigade page
+    // -------------------------------------------------------------------------
+    {
+        const int yBrig = L.brigadeCommanderY;
+
+        place(L.x_brig, yBrig, "commander",
+            "brigade_" + std::to_string(brigadeIndex) + "_commander", "commander");
+        place(L.x_brig, yBrig + (L.slotH + L.gapY), "?",
+            "brigade_" + std::to_string(brigadeIndex) + "_unit", "unit");
+
+        // connectors: both regiment nodes -> brigade node
+        const int xFrom = L.x_rcmd + L.slotW - L.lineInset;
+        const int xTo = L.x_brig + L.lineInset;
+
+        const int yR0 = L.regTopY + 0 * L.regBlockHeight + L.regCommanderOffsetY + L.slotH / 2;
+        const int yR1 = L.regTopY + 1 * L.regBlockHeight + L.regCommanderOffsetY + L.slotH / 2;
+
+        canvas->AddLine(wxPoint(xFrom, yR0), wxPoint(xTo, yBrig + L.slotH / 2));
+        canvas->AddLine(wxPoint(xFrom, yR1), wxPoint(xTo, yBrig + L.slotH / 2));
+    }
+
+    // Put canvas into scroller
+    auto* s = new wxBoxSizer(wxVERTICAL);
+    s->Add(canvas, 1, wxEXPAND | wxALL, L.canvasMargin);
+    page->SetSizer(s);
     page->FitInside();
     return page;
 }
+
+
 
 void StrategicLevelFrame::RegisterHierarchySlot(const std::string& slotId,
                                                 const std::string& type,
@@ -1575,8 +1715,8 @@ if(m_cmdRoster)
 
     int cW=0,cH=0;
     m_cmdRoster->GetClientSize(&cW,&cH);
-    const int rankW = 90;
-    const int nameW = std::max(120, cW - rankW - 4);
+    const int rankW = 70;
+    const int nameW = std::max(90, cW - rankW - 4);
     m_cmdRoster->SetColumnWidth(1, rankW);
     m_cmdRoster->SetColumnWidth(0, nameW);
 }
@@ -1617,7 +1757,7 @@ if(m_cmdRoster)
     int clientW = 0, clientH = 0;
     m_roster->GetClientSize(&clientW, &clientH);
 
-    const int hpWidth = 80;                // upravte dle potřeby (např. 70–100)
+    const int hpWidth = 70;                // upravte dle potřeby (např. 70–100)
     const int unitWidth = std::max(100, clientW - hpWidth - 4); // rezerva na okraj/scrollbar
 
     m_roster->SetColumnWidth(1, hpWidth);
@@ -2532,7 +2672,7 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {
     m_turn += 1;
-    m_money += 250;
+    m_money += 50;
 
     // Commander offers are generated on end-turn (for the *new* turn).
     // Offers do not carry over between turns.
