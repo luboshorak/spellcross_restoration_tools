@@ -3,12 +3,16 @@
 #include <unordered_map>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <cstdint>
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
 #include <wx/statbmp.h>
 #include <wx/bmpbuttn.h>
 #include <wx/simplebook.h>
+#include <wx/dnd.h>
+#include <wx/scrolwin.h>
 
 #include "level.h"
 
@@ -96,6 +100,26 @@ struct PlayerProgress
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
 private:
+    struct HierarchySlot
+    {
+        std::string id;
+        std::string type;
+        int rank = -1; // for commander slots
+        // commander slots: store commander name so label can be rebuilt with rank / assigned unit
+        std::string commander_name;
+
+        // unit slots: unique unit instance id (0 = empty)
+        uint32_t unit_uid = 0;
+        wxString unit_display;
+
+        // commander slots: which unit (uid) is the commander's assigned unit
+        uint32_t assigned_unit_uid = 0;
+        wxString assigned_unit_display;
+
+        wxStaticText* label = nullptr;
+        wxString placeholder;
+    };
+
     struct UiPalette
     {
         wxColour text;
@@ -118,6 +142,37 @@ private:
     const CommanderRankRec* FindRankRec(int rank) const;
     int FindNextRankExp(int current_rank) const;
     wxString GetRankNameCz(int rank) const;
+
+public:
+
+    void BuildHierarchyPage(wxPanel* parent);
+    wxWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
+    wxPanel* BuildHierarchyFormation(wxWindow* parent,
+                                     const wxString& label,
+                                     const wxColour& color,
+                                     wxSizer* contents);
+    wxPanel* BuildHierarchySlot(wxWindow* parent,
+                                const wxString& placeholder,
+                                const std::string& slotId,
+                                const std::string& type);
+    void RegisterHierarchySlot(const std::string& slotId,
+                               const std::string& type,
+                               wxStaticText* label,
+                               const wxString& placeholder);
+    void ApplyHierarchyDrop(const std::string& slotId, const wxString& data);
+    void ChooseUnitForHierarchySlot(const std::string& unitSlotId);
+    void ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId);
+    void TryAssignCommanderToUnitSlot(const std::string& unitSlotId);
+    std::string GetCommanderSlotForUnitSlot(const std::string& unitSlotId) const;
+    struct RosterPickItem { uint32_t uid; wxString display; wxString label; };
+    std::vector<RosterPickItem> GetRosterPickItems() const;
+    void ClearHierarchySlot(const std::string& slotId);
+    void BeginHierarchySlotDrag(const std::string& slotId, wxWindow* source);
+    void OnHierarchyTogglePage(wxCommandEvent& ev);
+    void OnRosterBeginDrag(wxListEvent& event);
+    void OnCommanderBeginDrag(wxListEvent& event);
+
+    void UpdateCommanderHierarchyLabel(const std::string& commanderSlotId);
 
 public:
 
@@ -146,6 +201,10 @@ public:
     std::unordered_map<int, int> m_territoryLaunchCount;
 
     std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
+
+    // Per-roster-row unique IDs (session-stable). Used for hierarchy assignment.
+    mutable std::vector<uint32_t> m_rosterRowUids;
+    mutable uint32_t m_nextRosterUid = 1;
     std::unordered_map<int, int> m_unitCosts;
     bool m_unitCostsLoaded = false;
 
@@ -231,8 +290,11 @@ bool m_commanderNamesLoaded = false;
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_cmdRoster = nullptr;
     wxListCtrl* m_roster = nullptr;
-    wxListCtrl* m_hierarchyList = nullptr;
     wxSimplebook* m_leftBook = nullptr;
+    wxSimplebook* m_hierarchyBook = nullptr;
+    wxButton* m_btnHierarchyPageToggle = nullptr;
+    std::vector<HierarchySlot> m_hierarchySlots;
+    std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnBuy = nullptr;
@@ -267,3 +329,5 @@ bool m_commanderNamesLoaded = false;
     wxDECLARE_EVENT_TABLE();
 };
 // void StrategicLevelFrame::TryLoadBackground()
+
+static std::filesystem::path GetStrategicStatePath(const LevelData& level);

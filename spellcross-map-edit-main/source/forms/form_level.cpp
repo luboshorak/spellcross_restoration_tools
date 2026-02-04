@@ -96,6 +96,12 @@ static wxFont MakeStrategicFont(int pixelSize, bool bold)
     return font;
 }
 
+// Přidejte tuto pomocnou funkci endsWith na začátek souboru (nebo do anonymního namespace, kde ji potřebujete)
+static bool endsWith(const std::string& s, const std::string& suf)
+{
+    return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+}
+
 namespace
 {
 struct HierarchyDragData
@@ -104,6 +110,8 @@ struct HierarchyDragData
     bool fromSlot = false;
     std::string slotId;
     std::string type;
+    uint32_t commander_uid = 0; // for commanders
+    int rank = -1; // for commanders
     wxString name;
 };
 
@@ -115,6 +123,8 @@ HierarchyDragData ParseHierarchyDragData(const wxString& data)
         return parsed;
 
     const wxString kind = tokens[0];
+
+    // unit:<name>
     if(kind == "unit" && tokens.size() >= 2)
     {
         parsed.valid = true;
@@ -122,22 +132,72 @@ HierarchyDragData ParseHierarchyDragData(const wxString& data)
         parsed.name = tokens[1];
         return parsed;
     }
+
+    // commander:<uid>:<rank>:<name>
+    // commander:<rank>:<name>  (backward compatibility)
+    // commander:<name>         (very old compatibility)
     if(kind == "commander" && tokens.size() >= 2)
     {
         parsed.valid = true;
         parsed.type = "commander";
-        parsed.name = tokens[1];
+        if(tokens.size() >= 4)
+        {
+            long uid = 0;
+            long r = -1;
+            if(tokens[1].ToLong(&uid) && uid > 0)
+                parsed.commander_uid = (uint32_t)uid;
+            if(tokens[2].ToLong(&r))
+                parsed.rank = (int)r;
+            parsed.name = tokens[3];
+        }
+        else if(tokens.size() >= 3)
+        {
+            long r = -1;
+            if(tokens[1].ToLong(&r))
+                parsed.rank = (int)r;
+            parsed.name = tokens[2];
+        }
+        else
+        {
+            parsed.name = tokens[1];
+        }
         return parsed;
     }
+
+    // slot:<slotId>:<type>:<name>
+    // slot:<slotId>:commander:<uid>:<rank>:<name>
+    // slot:<slotId>:commander:<rank>:<name>
     if(kind == "slot" && tokens.size() >= 4)
     {
         parsed.valid = true;
         parsed.fromSlot = true;
         parsed.slotId = tokens[1].ToStdString();
         parsed.type = tokens[2].ToStdString();
-        parsed.name = tokens[3];
+
+        if(parsed.type == "commander" && tokens.size() >= 6)
+        {
+            long uid = 0;
+            long r = -1;
+            if(tokens[3].ToLong(&uid) && uid > 0)
+                parsed.commander_uid = (uint32_t)uid;
+            if(tokens[4].ToLong(&r))
+                parsed.rank = (int)r;
+            parsed.name = tokens[5];
+        }
+        else if(parsed.type == "commander" && tokens.size() >= 5)
+        {
+            long r = -1;
+            if(tokens[3].ToLong(&r))
+                parsed.rank = (int)r;
+            parsed.name = tokens[4];
+        }
+        else
+        {
+            parsed.name = tokens[3];
+        }
         return parsed;
     }
+
     return parsed;
 }
 
@@ -681,11 +741,48 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     BuildMenu();
 
-        BuildUI();          // UI must exist before we start selecting territories.
+    BuildUI();
     TryLoadBackground();
 
-        LoadStrategicState();  // May call SelectTerritoryById -> OnTerritory.
+    // Default: start NEW strategic state (do NOT auto-load autosave).
+    // If autosave exists, ask user.
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const auto autosave = GetStrategicStatePath(m_level);
+
+        if (fs::exists(autosave, ec))
+        {
+            const int rc = wxMessageBox(
+                "Autosave for this level exists.\n\n"
+                "YES = Continue (load autosave)\n"
+                "NO  = Start new (keep old autosave as .bak)\n"
+                "CANCEL = Start new (do not touch autosave)",
+                "Strategic",
+                wxYES_NO | wxCANCEL | wxICON_QUESTION,
+                this);
+
+            if (rc == wxYES)
+            {
+                LoadStrategicState();
+            }
+            else if (rc == wxNO)
+            {
+                // Keep old file, start fresh; do NOT overwrite silently.
+                fs::path bak = autosave;
+                bak += ".bak";
+                fs::rename(autosave, bak, ec);
+                // Start new: keep ctor defaults. We won't create a new autosave until something changes.
+            }
+            else
+            {
+                // CANCEL: start new, leave autosave untouched.
+            }
+        }
+    }
+
     RefreshUI();
+
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
 
@@ -750,17 +847,35 @@ void StrategicLevelFrame::BuildMenu()
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnLoadGame, this, ID_MENU_LOAD_GAME);
 }
 
-static std::filesystem::path GetStrategicSaveSlotPath(const LevelData& level, int slot)
+static std::string LevelKeyFromSourcePath(const std::string& src)
+{
+    // English identifiers/comments, Czech UI is fine elsewhere.
+    // We want stable per-level key like "level_03" even if path differs.
+    std::filesystem::path p(src);
+    std::string stem = p.stem().string(); // e.g. "LEVEL_03"
+    stem = to_lower(stem);
+    if (stem.empty())
+        stem = "unknown_level";
+    return stem;
+}
+
+static std::filesystem::path GetStrategicSaveDir(const LevelData& level)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
-    fs::path base = fs::path(level.source_path).parent_path();
-    if(base.empty() || !fs::exists(base, ec))
-        base = fs::current_path(ec);
 
+    // One stable root for ALL strategic saves (autosave + slots)
+    fs::path dir = fs::path(GetStableBaseDir()) / "save" / "strategic" / LevelKeyFromSourcePath(level.source_path);
+    fs::create_directories(dir, ec);
+    return dir;
+}
+
+
+static std::filesystem::path GetStrategicSaveSlotPath(const LevelData& level, int slot)
+{
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "strategic_save_%02d.json", slot);
-    return base / buf;
+    std::snprintf(buf, sizeof(buf), "slot_%02d.json", slot);
+    return GetStrategicSaveDir(level) / buf;
 }
 
 static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& outMoney, int& outRank, int& outExp, std::string& outTs)
@@ -1166,9 +1281,10 @@ midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     // NOVĚ: jen dva sloupce: Unit a HP
     m_roster->InsertColumn(0, "Unit");
     m_roster->InsertColumn(1, "HP");
-    m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
-    m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
-    midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
+    // Units are no longer dragged into hierarchy slots; assignment is done by selecting a unit under a commander.
+    // m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
+    // m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
+midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
     mainSizer->Add(mid, 1, wxEXPAND);
@@ -1320,18 +1436,48 @@ wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
 
     RegisterHierarchySlot(slotId, type, label, placeholder);
 
-    // Drop target on the whole panel (more reliable than label-only)
-    panel->SetDropTarget(new HierarchySlotDropTarget(this, slotId));
+    if(type == "commander")
+    {
+        // Commander slots: drag & drop from the commanders roster.
+        panel->SetDropTarget(new HierarchySlotDropTarget(this, slotId));
 
-    // Drag from label OR panel
-    auto bindDrag = [this, slotId](wxWindow* w) {
-        w->Bind(wxEVT_LEFT_DOWN, [this, slotId](wxMouseEvent& ev) {
-            BeginHierarchySlotDrag(slotId, static_cast<wxWindow*>(ev.GetEventObject()));
-            ev.Skip();
+        // Drag from label OR panel (move commander between slots)
+        auto bindDrag = [this, slotId](wxWindow* w) {
+            w->Bind(wxEVT_LEFT_DOWN, [this, slotId](wxMouseEvent& ev) {
+                BeginHierarchySlotDrag(slotId, static_cast<wxWindow*>(ev.GetEventObject()));
+                ev.Skip();
             });
         };
-    bindDrag(label);
-    bindDrag(panel);
+        bindDrag(label);
+        bindDrag(panel);
+    }
+    else if(type == "unit")
+    {
+        // Unit slots:
+        // - left click on empty slot => choose a unit instance from roster
+        // - left click on filled slot => mark it as the commander's assigned unit
+        // - right click => always open chooser (change/clear)
+        auto bindHandlers = [this, slotId](wxWindow* w) {
+            w->Bind(wxEVT_LEFT_UP, [this, slotId](wxMouseEvent& ev) {
+                auto it = m_hierarchySlotIndex.find(slotId);
+                if(it != m_hierarchySlotIndex.end())
+                {
+                    HierarchySlot& s = m_hierarchySlots[it->second];
+                    if(s.unit_uid == 0)
+                        ChooseUnitForHierarchySlot(slotId);
+                    else
+                        TryAssignCommanderToUnitSlot(slotId);
+                }
+                ev.Skip();
+            });
+            w->Bind(wxEVT_RIGHT_UP, [this, slotId](wxMouseEvent& ev) {
+                ChooseUnitForHierarchySlot(slotId);
+                ev.Skip();
+            });
+        };
+        bindHandlers(label);
+        bindHandlers(panel);
+    }
 
     return panel;
 }
@@ -1585,6 +1731,7 @@ void StrategicLevelFrame::RegisterHierarchySlot(const std::string& slotId,
     slot.type = type;
     slot.label = label;
     slot.placeholder = placeholder;
+    slot.rank = -1;
     m_hierarchySlotIndex[slotId] = m_hierarchySlots.size();
     m_hierarchySlots.push_back(std::move(slot));
 }
@@ -1602,7 +1749,93 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
     if(parsed.type != slot.type)
         return;
 
-    slot.label->SetLabel(parsed.name);
+    // Rank gating for commander slots:
+    // - battalion: any commander
+    // - regiment: rank >= Major (3)
+    // - brigade:  rank >= Major General (6)
+    if(slot.type == "commander")
+    {
+        // Resolve commander UID (required to ensure a commander cannot occupy multiple slots).
+        uint32_t cmdUid = parsed.commander_uid;
+        if(cmdUid == 0)
+        {
+            // Backward compatibility payloads don't carry UID. Best-effort lookup by name + rank.
+            const std::string name = parsed.name.ToStdString();
+            for(const auto& c : m_playerCommanders)
+            {
+                if(c.name == name && (parsed.rank < 0 || c.rank == parsed.rank))
+                {
+                    cmdUid = c.uid;
+                    break;
+                }
+            }
+        }
+
+        int required = 0;
+        if(slotId.find("regiment_") != std::string::npos)
+            required = 3;
+        else if(slotId.find("brigade_") != std::string::npos)
+            required = 6;
+
+        // If we didn't receive rank, attempt a best-effort lookup by name.
+        int rank = parsed.rank;
+        if(rank < 0)
+        {
+            const std::string name = parsed.name.ToStdString();
+            for(const auto& c : m_playerCommanders)
+            {
+                if(c.name == name)
+                {
+                    rank = c.rank;
+                    break;
+                }
+            }
+        }
+
+        if(rank < required)
+        {
+            wxMessageBox(
+                wxString::Format("This commander needs at least %s for this slot.",
+                    required == 6 ? "MajGen." : required == 3 ? "Maj." : "any rank"),
+                "Hierarchy",
+                wxOK | wxICON_INFORMATION,
+                this);
+            return;
+        }
+
+        // Enforce uniqueness: move the commander if they're already placed elsewhere.
+        if(cmdUid != 0)
+        {
+            for(auto& s : m_hierarchySlots)
+            {
+                if(s.type == "commander" && s.commander_uid == cmdUid && s.id != slotId)
+                {
+                    ClearHierarchySlot(s.id);
+                    break;
+                }
+            }
+        }
+
+        slot.rank = rank;
+        slot.commander_uid = cmdUid;
+        wxString baseName = parsed.name;
+        const wxString abbr = GetRankAbbrev(rank);
+        if(baseName.StartsWith(abbr + " "))
+            baseName = baseName.Mid(abbr.length() + 1);
+        slot.commander_name = baseName.ToUTF8().data();
+        // Switching commander resets its assigned unit.
+        slot.assigned_unit_uid = 0;
+        slot.assigned_unit_display.clear();
+        slot.label->SetLabel(wxString::Format("%s %s", abbr, baseName));
+        // Ensure consistent formatting (and clear any stale "assigned" marker).
+        UpdateCommanderHierarchyLabel(slotId);
+    }
+    else
+    {
+        // unit slot: just store the chosen unit name
+        slot.label->SetLabel(parsed.name);
+    }
+
     slot.label->GetParent()->Layout();
 
     if(parsed.fromSlot && parsed.slotId != slotId)
@@ -1615,7 +1848,56 @@ void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
     if(it == m_hierarchySlotIndex.end())
         return;
     HierarchySlot& slot = m_hierarchySlots[it->second];
+
+    if(slot.type == "unit")
+    {
+        // Clearing a unit slot should NOT wipe commander state.
+        const uint32_t oldUid = slot.unit_uid;
+        slot.unit_uid = 0;
+        slot.unit_display.clear();
+        slot.label->SetLabel(slot.placeholder);
+        slot.label->GetParent()->Layout();
+
+        // If this unit was the assigned unit for the commander above, unassign it.
+        if(oldUid != 0)
+        {
+            const std::string commanderId = GetCommanderSlotForUnitSlot(slotId);
+            auto itc = m_hierarchySlotIndex.find(commanderId);
+            if(itc != m_hierarchySlotIndex.end())
+            {
+                HierarchySlot& cs = m_hierarchySlots[itc->second];
+                if(cs.type == "commander" && cs.assigned_unit_uid == oldUid)
+                {
+                    cs.assigned_unit_uid = 0;
+                    cs.assigned_unit_display.clear();
+                    UpdateCommanderHierarchyLabel(commanderId);
+                }
+            }
+        }
+        return;
+    }
+
+    // Commander slot: clear commander + its assignment.
     slot.label->SetLabel(slot.placeholder);
+    slot.rank = -1;
+    slot.commander_uid = 0;
+    slot.commander_name.clear();
+    slot.assigned_unit_uid = 0;
+    slot.assigned_unit_display.clear();
+
+    // Also clear the paired "assignment unit" slot (the "?" slot under commander nodes), if present.
+    {
+        std::string assignmentId;
+        if(slotId.find("battalion_") == 0 && endsWith(slotId, "_commander"))
+            assignmentId = slotId + "_unit"; // battalion_X_commander -> battalion_X_commander_unit
+        else if(slotId.find("regiment_") == 0 && endsWith(slotId, "_commander"))
+            assignmentId = slotId.substr(0, slotId.size() - std::string("_commander").size()) + "_unit";
+        else if(slotId.find("brigade_") == 0 && endsWith(slotId, "_commander"))
+            assignmentId = slotId.substr(0, slotId.size() - std::string("_commander").size()) + "_unit";
+
+        if(!assignmentId.empty())
+            ClearHierarchySlot(assignmentId);
+    }
     slot.label->GetParent()->Layout();
 }
 
@@ -1627,12 +1909,457 @@ void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWi
     HierarchySlot& slot = m_hierarchySlots[it->second];
     if(slot.label->GetLabel() == slot.placeholder)
         return;
-    wxTextDataObject dataObject(wxString::Format("slot:%s:%s:%s",
-        slot.id.c_str(),
-        slot.type.c_str(),
-        slot.label->GetLabel()));
+    wxTextDataObject dataObject(
+        slot.type == "commander"
+            ? wxString::Format("slot:%s:%s:%u:%d:%s", slot.id.c_str(), slot.type.c_str(),
+                (unsigned)slot.commander_uid, slot.rank,
+                slot.commander_name.empty() ? slot.label->GetLabel() : wxString::FromUTF8(slot.commander_name))
+            : wxString::Format("slot:%s:%s:%s", slot.id.c_str(), slot.type.c_str(), slot.label->GetLabel()));
     wxDropSource dropSource(dataObject, source);
     dropSource.DoDragDrop(wxDrag_CopyOnly);
+}
+
+
+std::vector<StrategicLevelFrame::RosterPickItem> StrategicLevelFrame::GetRosterPickItems() const
+{
+    std::vector<RosterPickItem> out;
+    if(!m_roster)
+        return out;
+
+    const long count = m_roster->GetItemCount();
+    out.reserve((size_t)count);
+
+    // Build stable-ish uids per roster row. We store uid in ItemData when inserting.
+    for(long i = 0; i < count; ++i)
+    {
+        const wxString display = m_roster->GetItemText(i);
+        const long data = m_roster->GetItemData(i);
+        const uint32_t uid = (data >= 0) ? (uint32_t)data : 0;
+        if(display.empty() || uid == 0)
+            continue;
+
+        RosterPickItem it;
+        it.uid = uid;
+        it.display = display;
+        // Label shown in picker: include uid to disambiguate duplicates.
+        it.label = wxString::Format("%s  [#%u]", display, (unsigned)uid);
+        out.push_back(it);
+    }
+    return out;
+}
+
+std::string StrategicLevelFrame::GetCommanderSlotForUnitSlot(const std::string& unitSlotId) const
+{
+    // battalion_X_commander_unit -> battalion_X_commander
+    // regiment_X_unit           -> regiment_X_commander
+    // brigade_X_unit            -> brigade_X_commander
+    auto endsWith = [](const std::string& s, const std::string& suf) {
+        return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+
+    // battalion_X_unit_N -> battalion_X_commander (unit slots are numbered, so they don't end with "_unit")
+    {
+        const std::string pre = "battalion_";
+        const std::string mid = "_unit_";
+        if(unitSlotId.rfind(pre, 0) == 0)
+        {
+            const size_t p = unitSlotId.find(mid);
+            if(p != std::string::npos)
+            {
+                const std::string idx = unitSlotId.substr(pre.size(), p - pre.size());
+                // idx should be numeric, but even if not, keep best-effort.
+                return pre + idx + "_commander";
+            }
+        }
+    }
+
+    if(endsWith(unitSlotId, "_commander_unit"))
+        return unitSlotId.substr(0, unitSlotId.size() - std::string("_unit").size());
+
+    if(endsWith(unitSlotId, "_unit"))
+    {
+        std::string base = unitSlotId.substr(0, unitSlotId.size() - std::string("_unit").size());
+        if(base.find("_commander") == std::string::npos)
+            base += "_commander";
+        return base;
+    }
+
+    return std::string();
+}
+
+void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlotId)
+{
+    auto it = m_hierarchySlotIndex.find(unitSlotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    if(slot.type != "unit")
+        return;
+
+    // Special case: assignment slot (the "?" slot under commander nodes). This slot must NOT
+    // allow picking any roster unit. Instead, it selects ONE of the units already present in
+    // the commander's subtree (4/8/16).
+    {
+        auto endsWith = [](const std::string& s, const std::string& suf) {
+            return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+        };
+        const bool isBattalionAssign = endsWith(unitSlotId, "_commander_unit");
+        const bool isRegimentAssign = (unitSlotId.rfind("regiment_", 0) == 0) && endsWith(unitSlotId, "_unit");
+        const bool isBrigadeAssign  = (unitSlotId.rfind("brigade_", 0) == 0)  && endsWith(unitSlotId, "_unit");
+        if(isBattalionAssign || isRegimentAssign || isBrigadeAssign)
+        {
+            ChooseAssignedUnitForCommanderAssignmentSlot(unitSlotId);
+            return;
+        }
+    }
+
+    // If commander above is missing, still allow CLEARING a filled slot, but block ASSIGNING a new unit.
+    const std::string commanderId = GetCommanderSlotForUnitSlot(unitSlotId);
+    bool commanderPresent = true;
+    if(!commanderId.empty())
+    {
+        auto itc = m_hierarchySlotIndex.find(commanderId);
+        if(itc != m_hierarchySlotIndex.end())
+        {
+            const HierarchySlot& cslot = m_hierarchySlots[itc->second];
+            if(cslot.label && cslot.label->GetLabel() == cslot.placeholder)
+                commanderPresent = false;
+        }
+    }
+
+    const auto items = GetRosterPickItems();
+    wxArrayString choices;
+    choices.Add("<none>");
+    for(const auto& it : items)
+        choices.Add(it.label);
+
+    int sel = 0;
+    if(slot.unit_uid != 0)
+    {
+        for(size_t i = 0; i < items.size(); ++i)
+        {
+            if(items[i].uid == slot.unit_uid)
+            {
+                sel = (int)i + 1; // +1 due to <none>
+                break;
+            }
+        }
+    }
+
+    wxSingleChoiceDialog dlg(
+        this,
+        "Choose a unit to assign under this commander:",
+        "Assign Unit",
+        choices);
+    dlg.SetSelection(sel);
+
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    const wxString picked = dlg.GetStringSelection();
+    if(picked == "<none>")
+    {
+        ClearHierarchySlot(unitSlotId);
+        return;
+    }
+
+    if(!commanderPresent)
+    {
+        wxMessageBox(
+            "Assign a commander first, then choose a unit for this commander.\n\n"
+            "(You can still remove an already assigned unit via <none>.)",
+            "Hierarchy",
+            wxOK | wxICON_INFORMATION,
+            this);
+        return;
+    }
+
+    // Resolve picked item -> uid
+    uint32_t uid = 0;
+    wxString display;
+    for(const auto& it : items)
+    {
+        if(it.label == picked)
+        {
+            uid = it.uid;
+            display = it.display;
+            break;
+        }
+    }
+    if(uid == 0 || display.empty())
+        return;
+
+    // Enforce uniqueness by UID across hierarchy (but do NOT remove from roster).
+    for(const auto& other : m_hierarchySlots)
+    {
+        if(other.id == unitSlotId)
+            continue;
+        if(other.type != "unit")
+            continue;
+        if(other.unit_uid != 0 && other.unit_uid == uid)
+        {
+            wxMessageBox(
+                "This exact unit instance is already assigned elsewhere in the hierarchy.\n\n"
+                "Pick a different unit (note the [#id] in the list).",
+                "Hierarchy",
+                wxOK | wxICON_INFORMATION,
+                this);
+            return;
+        }
+    }
+
+    // Set this slot (store uid, show only display name)
+    slot.unit_uid = uid;
+    slot.unit_display = display;
+    slot.label->SetLabel(display);
+    slot.label->GetParent()->Layout();
+
+    // Optional convenience: if a commander exists above, set this as their assigned unit immediately.
+    TryAssignCommanderToUnitSlot(unitSlotId);
+}
+
+void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId)
+{
+    auto it = m_hierarchySlotIndex.find(assignmentSlotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& aslot = m_hierarchySlots[it->second];
+    if(aslot.type != "unit")
+        return;
+
+    auto endsWith = [](const std::string& s, const std::string& suf) {
+        return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+
+    const bool isBattalionAssign = endsWith(assignmentSlotId, "_commander_unit");
+    const bool isRegimentAssign  = (assignmentSlotId.rfind("regiment_", 0) == 0) && endsWith(assignmentSlotId, "_unit");
+    const bool isBrigadeAssign   = (assignmentSlotId.rfind("brigade_", 0) == 0)  && endsWith(assignmentSlotId, "_unit");
+
+    // Identify owning commander slot
+    const std::string commanderId = GetCommanderSlotForUnitSlot(assignmentSlotId);
+    auto itc = m_hierarchySlotIndex.find(commanderId);
+    if(itc == m_hierarchySlotIndex.end())
+        return;
+    HierarchySlot& cslot = m_hierarchySlots[itc->second];
+    if(cslot.type != "commander" || !cslot.label)
+        return;
+
+    if(cslot.label->GetLabel() == cslot.placeholder)
+    {
+        wxMessageBox(
+            "Assign a commander first, then choose which of their units they are part of.",
+            "Hierarchy",
+            wxOK | wxICON_INFORMATION,
+            this);
+        return;
+    }
+
+    // Gather candidate unit slots from the commander's subtree
+    std::vector<std::string> candidateSlotIds;
+    candidateSlotIds.reserve(16);
+
+    auto parseNumberBetween = [](const std::string& s, const std::string& pre, const std::string& suf, int& out) {
+        if(s.rfind(pre, 0) != 0)
+            return false;
+        const size_t p = s.find(suf, pre.size());
+        if(p == std::string::npos)
+            return false;
+        const std::string num = s.substr(pre.size(), p - pre.size());
+        if(num.empty())
+            return false;
+        try { out = std::stoi(num); return true; } catch(...) { return false; }
+    };
+
+    if(isBattalionAssign)
+    {
+        int bIndex = 0;
+        if(parseNumberBetween(assignmentSlotId, "battalion_", "_commander_unit", bIndex))
+        {
+            for(int u = 1; u <= 4; ++u)
+                candidateSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
+        }
+    }
+    else if(isRegimentAssign)
+    {
+        int rIndex = 0;
+        if(parseNumberBetween(assignmentSlotId, "regiment_", "_unit", rIndex))
+        {
+            const int brigadeIndex = (rIndex - 1) / 2 + 1;
+            const int rLocal = (rIndex - 1) % 2; // 0/1 within brigade
+            const int battalionBase = (brigadeIndex - 1) * 4;
+            const int b0 = battalionBase + rLocal * 2 + 1;
+            const int b1 = battalionBase + rLocal * 2 + 2;
+            for(int u = 1; u <= 4; ++u)
+            {
+                candidateSlotIds.push_back("battalion_" + std::to_string(b0) + "_unit_" + std::to_string(u));
+                candidateSlotIds.push_back("battalion_" + std::to_string(b1) + "_unit_" + std::to_string(u));
+            }
+        }
+    }
+    else if(isBrigadeAssign)
+    {
+        int brigIndex = 0;
+        if(parseNumberBetween(assignmentSlotId, "brigade_", "_unit", brigIndex))
+        {
+            const int battalionBase = (brigIndex - 1) * 4;
+            for(int b = 1; b <= 4; ++b)
+            {
+                const int bIndex = battalionBase + b;
+                for(int u = 1; u <= 4; ++u)
+                    candidateSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
+            }
+        }
+    }
+
+    struct Choice { uint32_t uid; wxString display; wxString label; };
+    std::vector<Choice> choices;
+    choices.reserve(candidateSlotIds.size());
+
+    for(const auto& sid : candidateSlotIds)
+    {
+        auto itu = m_hierarchySlotIndex.find(sid);
+        if(itu == m_hierarchySlotIndex.end())
+            continue;
+        const HierarchySlot& us = m_hierarchySlots[itu->second];
+        if(us.type != "unit" || us.unit_uid == 0 || us.unit_display.empty())
+            continue;
+        Choice c;
+        c.uid = us.unit_uid;
+        c.display = us.unit_display;
+        c.label = wxString::Format("%s  [#%u]", us.unit_display, (unsigned)us.unit_uid);
+        choices.push_back(c);
+    }
+
+    wxArrayString pick;
+    pick.Add("<none>");
+    for(const auto& c : choices)
+        pick.Add(c.label);
+
+    int sel = 0;
+    const uint32_t current = (cslot.assigned_unit_uid != 0) ? cslot.assigned_unit_uid : aslot.unit_uid;
+    if(current != 0)
+    {
+        for(size_t i = 0; i < choices.size(); ++i)
+        {
+            if(choices[i].uid == current)
+            {
+                sel = (int)i + 1;
+                break;
+            }
+        }
+    }
+
+    wxSingleChoiceDialog dlg(
+        this,
+        "Choose which unit this commander is part of (must be one of the units directly under them):",
+        "Assign Commander",
+        pick);
+    dlg.SetSelection(sel);
+    if(dlg.ShowModal() != wxID_OK)
+        return;
+
+    const wxString picked = dlg.GetStringSelection();
+    if(picked == "<none>")
+    {
+        // Clear assignment only
+        aslot.unit_uid = 0;
+        aslot.unit_display.clear();
+        aslot.label->SetLabel(aslot.placeholder);
+        cslot.assigned_unit_uid = 0;
+        cslot.assigned_unit_display.clear();
+        UpdateCommanderHierarchyLabel(commanderId);
+        aslot.label->GetParent()->Layout();
+        return;
+    }
+
+    uint32_t uid = 0;
+    wxString display;
+    for(const auto& c : choices)
+    {
+        if(c.label == picked)
+        {
+            uid = c.uid;
+            display = c.display;
+            break;
+        }
+    }
+    if(uid == 0 || display.empty())
+        return;
+
+    // Set assignment slot + commander display
+    aslot.unit_uid = uid;
+    aslot.unit_display = display;
+    aslot.label->SetLabel(display);
+    aslot.label->GetParent()->Layout();
+
+    cslot.assigned_unit_uid = uid;
+    cslot.assigned_unit_display = display;
+    UpdateCommanderHierarchyLabel(commanderId);
+}
+
+
+void StrategicLevelFrame::TryAssignCommanderToUnitSlot(const std::string& unitSlotId)
+{
+    auto it = m_hierarchySlotIndex.find(unitSlotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& us = m_hierarchySlots[it->second];
+    if(us.type != "unit" || us.unit_uid == 0)
+        return;
+
+    const std::string commanderId = GetCommanderSlotForUnitSlot(unitSlotId);
+    if(commanderId.empty())
+        return;
+
+    auto itc = m_hierarchySlotIndex.find(commanderId);
+    if(itc == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& cs = m_hierarchySlots[itc->second];
+    if(cs.type != "commander" || !cs.label)
+        return;
+
+    if(cs.label->GetLabel() == cs.placeholder)
+    {
+        wxMessageBox(
+            "Assign a commander first, then choose which unit under them is the assigned unit.",
+            "Hierarchy",
+            wxOK | wxICON_INFORMATION,
+            this);
+        return;
+    }
+
+    // Commander is assigned to ONE of its units (4/8/16 under them). This does NOT move/remove the unit anywhere.
+    cs.assigned_unit_uid = us.unit_uid;
+    cs.assigned_unit_display = us.unit_display;
+    UpdateCommanderHierarchyLabel(commanderId);
+}
+
+void StrategicLevelFrame::UpdateCommanderHierarchyLabel(const std::string& commanderSlotId)
+{
+    auto it = m_hierarchySlotIndex.find(commanderSlotId);
+    if(it == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& cs = m_hierarchySlots[it->second];
+    if(cs.type != "commander" || !cs.label)
+        return;
+
+    if(cs.commander_name.empty())
+    {
+        // Best effort fallback: try to parse label (may already include rank)
+        cs.commander_name = cs.label->GetLabel().ToStdString();
+    }
+
+    wxString base = wxString::Format("%s %s", GetRankAbbrev(cs.rank), wxString::FromUTF8(cs.commander_name));
+    if(cs.assigned_unit_uid != 0 && !cs.assigned_unit_display.empty())
+        base += wxString::Format(" → %s", cs.assigned_unit_display);
+
+    cs.label->SetLabel(base);
+    cs.label->GetParent()->Layout();
 }
 
 void StrategicLevelFrame::OnHierarchyTogglePage(wxCommandEvent&)
@@ -1664,10 +2391,17 @@ void StrategicLevelFrame::OnCommanderBeginDrag(wxListEvent& event)
     const long item = event.GetIndex();
     if(item < 0)
         return;
+
     wxString name = m_cmdRoster->GetItemText(item);
     if(name.empty())
         return;
-    wxTextDataObject dataObject("commander:" + name);
+
+    const uint32_t uid = (uint32_t)m_cmdRoster->GetItemData(item);
+    int rank = 0;
+    auto it = m_commanderRankByUid.find(uid);
+    if(it != m_commanderRankByUid.end())
+        rank = it->second;
+    wxTextDataObject dataObject(wxString::Format("commander:%u:%d:%s", (unsigned)uid, rank, name));
     wxDropSource dropSource(dataObject, m_cmdRoster);
     dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
@@ -1705,12 +2439,20 @@ if(m_cmdRoster)
 
     m_cmdRoster->DeleteAllItems();
 
+    // Ensure commander UIDs exist and rebuild uid->rank helper map
+    m_commanderRankByUid.clear();
+
     long crow = 0;
-    for(const auto& c : m_playerCommanders)
+    for(auto& c : m_playerCommanders)
     {
         if(crow >= 14) break;
+        if(c.uid == 0)
+            c.uid = m_nextCommanderUid++;
+
         long cidx = m_cmdRoster->InsertItem(crow++, wxString::FromUTF8(c.name));
         m_cmdRoster->SetItem(cidx, 1, GetRankAbbrev(c.rank));
+        m_cmdRoster->SetItemData(cidx, (long)c.uid);
+        m_commanderRankByUid[c.uid] = c.rank;
     }
 
     int cW=0,cH=0;
@@ -1732,15 +2474,31 @@ if(m_cmdRoster)
     // v RefreshUI(): rozbalení jednotek podle count a odstranění sloupce Count
     m_roster->DeleteAllItems();
 
-    // Každou jednotku vložit 'count' krát jako samostatnou položku (count implicitně 1)
-    long row = 0;
-    for (const auto& u : m_playerUnits)
+    // Expand units into roster rows. Each row gets a stable-ish UID so hierarchy
+    // can reference a specific instance even if there are duplicates by name.
+    int totalRows = 0;
+    for(const auto& u : m_playerUnits)
+        totalRows += std::max(0, u.count);
+
+    if((int)m_rosterRowUids.size() != totalRows)
     {
-        for (int i = 0; i < u.count; ++i)
+        m_rosterRowUids.clear();
+        m_rosterRowUids.reserve((size_t)totalRows);
+        for(int i = 0; i < totalRows; ++i)
+            m_rosterRowUids.push_back(m_nextRosterUid++);
+    }
+
+    long row = 0;
+    int uidIndex = 0;
+    for(const auto& u : m_playerUnits)
+    {
+        for(int i = 0; i < u.count; ++i)
         {
+            const uint32_t uid = (uidIndex < (int)m_rosterRowUids.size()) ? m_rosterRowUids[(size_t)uidIndex++] : (uint32_t)m_nextRosterUid++;
             long idx = m_roster->InsertItem(row++, GetUnitDisplayName(u.unit_id));
-            // sloupec 1 = HP
             m_roster->SetItem(idx, 1, wxString::Format("%d", u.health));
+            // Store UID in item data for picking.
+            m_roster->SetItemData(idx, (long)uid);
         }
     }
 
@@ -2686,23 +3444,7 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 
 static std::filesystem::path GetStrategicStatePath(const LevelData& level)
 {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-
-    // Put saves next to stable base dir, not into temp\COMMON
-    fs::path save_dir = fs::path(GetStableBaseDir()) / "save";
-    fs::create_directories(save_dir, ec);
-
-    // Use LEVEL_XX (stem) as unique key
-    fs::path src(level.source_path);
-    std::string stem = src.stem().string(); // e.g. "LEVEL_03" or "level_03"
-    if (stem.empty())
-        stem = "unknown";
-
-    // Normalize filename a bit
-    stem = to_lower(stem);
-
-    return save_dir / ("strategic_state_" + stem + ".json");
+    return GetStrategicSaveDir(level) / "autosave.json";
 }
 
 static bool LoadStrategicStateFile(

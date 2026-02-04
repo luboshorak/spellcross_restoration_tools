@@ -453,6 +453,21 @@ class SpellMap
 		int SaveGameStateToFile(const std::wstring& path);
 		int LoadGameStateFromFile(const std::wstring& path);
 
+		// Peek header of *.scsave without loading the whole map.
+		// Returns 0 on success; nonzero error code otherwise.
+		static int PeekSaveMapPath(const std::wstring& save_path, std::wstring& out_map_path, std::string* out_error = nullptr);
+
+		// Given a loaded map/def path, guess where the strategic_state.json would live.
+		// This is used by UI to re-open Strategic Level after mission load.
+		static std::wstring GuessStrategicStatePathFromMapPath(const std::wstring& map_or_def_path);
+
+
+		// Convenience autosave helpers for in-game quick load.
+		// Autosave file lives next to the currently loaded map and is derived from GetTopPath().
+		std::wstring GetAutoSavePath() const;
+		int SaveGameStateAuto();
+		int LoadGameStateAuto();
+
 		class MissionParams
 		{
 		public:

@@ -3,6 +3,8 @@
 #include <unordered_map>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <cstdint>
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
@@ -102,6 +104,19 @@ private:
     {
         std::string id;
         std::string type;
+        int rank = -1; // for commander slots
+        uint32_t commander_uid = 0; // for commander slots
+        // commander slots: store commander name so label can be rebuilt with rank / assigned unit
+        std::string commander_name;
+
+        // unit slots: unique unit instance id (0 = empty)
+        uint32_t unit_uid = 0;
+        wxString unit_display;
+
+        // commander slots: which unit (uid) is the commander's assigned unit
+        uint32_t assigned_unit_uid = 0;
+        wxString assigned_unit_display;
+
         wxStaticText* label = nullptr;
         wxString placeholder;
     };
@@ -146,11 +161,19 @@ public:
                                wxStaticText* label,
                                const wxString& placeholder);
     void ApplyHierarchyDrop(const std::string& slotId, const wxString& data);
+    void ChooseUnitForHierarchySlot(const std::string& unitSlotId);
+    void ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId);
+    void TryAssignCommanderToUnitSlot(const std::string& unitSlotId);
+    std::string GetCommanderSlotForUnitSlot(const std::string& unitSlotId) const;
+    struct RosterPickItem { uint32_t uid; wxString display; wxString label; };
+    std::vector<RosterPickItem> GetRosterPickItems() const;
     void ClearHierarchySlot(const std::string& slotId);
     void BeginHierarchySlotDrag(const std::string& slotId, wxWindow* source);
     void OnHierarchyTogglePage(wxCommandEvent& ev);
     void OnRosterBeginDrag(wxListEvent& event);
     void OnCommanderBeginDrag(wxListEvent& event);
+
+    void UpdateCommanderHierarchyLabel(const std::string& commanderSlotId);
 
 public:
 
@@ -179,18 +202,31 @@ public:
     std::unordered_map<int, int> m_territoryLaunchCount;
 
     std::vector<LevelData::PlayerUnitAdd> m_playerUnits;
+
+    // Per-roster-row unique IDs (session-stable). Used for hierarchy assignment.
+    mutable std::vector<uint32_t> m_rosterRowUids;
+    mutable uint32_t m_nextRosterUid = 1;
     std::unordered_map<int, int> m_unitCosts;
     bool m_unitCostsLoaded = false;
 
 
 struct CommanderRec
 {
+    // Unique commander instance id (session-stable). Used to prevent the same commander
+    // being assigned into multiple hierarchy slots.
+    uint32_t uid = 0;
     std::string name;
     int rank = 0;
 };
 
 // owned commanders (max 14)
 std::vector<CommanderRec> m_playerCommanders;
+
+// session-stable commander UID generator (used when uid==0)
+mutable uint32_t m_nextCommanderUid = 1;
+
+// runtime helpers (uid -> rank) for drag payload construction
+mutable std::unordered_map<uint32_t, int> m_commanderRankByUid;
 
 // available commanders to buy in current turn (usually 0 or 1)
 std::vector<CommanderRec> m_availableCommanders;
@@ -303,3 +339,5 @@ bool m_commanderNamesLoaded = false;
     wxDECLARE_EVENT_TABLE();
 };
 // void StrategicLevelFrame::TryLoadBackground()
+
+static std::filesystem::path GetStrategicStatePath(const LevelData& level);
