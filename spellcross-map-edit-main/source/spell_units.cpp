@@ -1478,6 +1478,7 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 		return(y_status_bar);
 	const int bar_w = 28;
 	const int bar_h = 15;
+	SpellMap* map_ptr = this->map;
 	// check valid rendering range
 	auto *psb     = &buffer[(buf_x_pos + x_status_bar - bar_w/2) + (buf_y_pos + y_status_bar - bar_h/2)*buf_x_size];
 	auto *psb_end = &buffer[(buf_x_pos + x_status_bar - bar_w/2 + bar_w-1) + (buf_y_pos + y_status_bar - bar_h/2 + bar_h-1)*buf_x_size];
@@ -1598,6 +1599,43 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 
 	}
 	
+
+	// GROUP MODE outline: red rectangle around whole status bar (like original)
+	if(map && map->IsGroupMode() && map->IsUnitInActiveGroup(this))
+	{
+		uint8_t col = hud_filter[253];
+		// psb points to top-left of bar area
+		for(int x = 0; x < bar_w; x++)
+		{
+			psb[x] = col;
+			psb[(bar_h-1)*buf_x_size + x] = col;
+		}
+		for(int y = 0; y < bar_h; y++)
+		{
+			psb[y*buf_x_size] = col;
+			psb[y*buf_x_size + (bar_w-1)] = col;
+		}
+	}
+
+
+	// group mode highlight: red outline around the whole status bar (as in original)
+	if (map_ptr && map_ptr->IsGroupMode() && map_ptr->IsUnitInActiveGroup(this) && !is_enemy)
+	{
+		const uint8_t col = hud_filter[253];
+		// top/bottom
+		for (int x = 0; x < bar_w; x++)
+		{
+			psb[0 * buf_x_size + x] = col;
+			psb[(bar_h - 1) * buf_x_size + x] = col;
+		}
+		// left/right
+		for (int y = 0; y < bar_h; y++)
+		{
+			psb[y * buf_x_size + 0] = col;
+			psb[y * buf_x_size + (bar_w - 1)] = col;
+		}
+	}
+
 	// return top pixel of unit
 	return(y_status_bar);
 }

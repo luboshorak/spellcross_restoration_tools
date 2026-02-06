@@ -38,6 +38,7 @@
 #include "forms/form_about.h"
 #include "forms/form_sound.h"
 #include "forms/form_flags.h"
+#include "forms/form_mmenu.h"
 #include "level.h"
 
 #include <wx/ribbon/buttonbar.h>
@@ -106,6 +107,9 @@ public:
     void StatusStringCallback(std::string info);
     void CreateHUDbuttons();
     bool LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units);
+    // Switch between editor/game mode (also updates UI + resets game state when entering).
+    void SetGameModeUI(bool enable_game_mode);
+
 
     // === Pøidejte tento øádek do public sekce ===
     SpellData* spell_data;
@@ -118,6 +122,9 @@ private:
     void OnSaveDEF(wxCommandEvent& event);
     void OnNewMap(wxCommandEvent& event);
     void OnOpenLevelDef(wxCommandEvent& ev);
+    void OnOpenMainMenu(wxCommandEvent& event);
+    void OnMainMenuAction(FormMainMenuAction action);
+    bool LoadGameStateFromDialog();
 
     void OnExit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
@@ -225,7 +232,8 @@ private:
         form_map_options != NULL ||
         form_midi != NULL ||
         form_minimap != NULL ||
-        form_units_list != NULL); };
+        form_units_list != NULL ||
+        form_mmenu != NULL); };
 
     void ShowMessage(SpellTextRec *message, bool is_yesno, std::function<void(bool)> exit_cb=NULL);
     bool CheckMessageState();
@@ -251,6 +259,7 @@ private:
     FormMiniMap *form_minimap = NULL;
     FormMapUnits *form_units_list = NULL;
     FormSound *form_sounds = NULL;
+    FormMainMenu *form_mmenu = NULL;
     
     // spellcross HUD interface stuff
     void OnPaintHUDbutton(wxPaintEvent& event);
@@ -281,7 +290,8 @@ private:
         ID_MAP_OPT_WIN,
         ID_VIDEO_WIN,
         ID_MIDI_WIN,
-        ID_MAP_UNITS_WIN
+        ID_MAP_UNITS_WIN,
+        ID_MMENU_WIN
     };
     static constexpr int ID_HUD_BASE = 3000;
     static constexpr int ID_TOOL_BASE = 10000;
@@ -337,6 +347,7 @@ enum
     ID_SaveDTA,
     ID_SaveDEF,
     ID_NewMap,
+    ID_MainMenu,
     ID_mmGameMode,
     ID_mmSaveGameState,
 	ID_mmLoadGameState,

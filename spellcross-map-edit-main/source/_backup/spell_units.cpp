@@ -1032,7 +1032,7 @@ MapUnit::MapUnit(SpellMap *map)
 	wounded = 0;
 	// morale (default full)
 	morale = 100.0;
-	// panic (runtime only)
+	// panic
 	panic_turns = 0;
 	// spec unit type
 	spec_type = MapUnitType::Unknown;
@@ -1440,12 +1440,12 @@ int MapUnit::AddExperience(MapUnit* target,int killed)
 // update morale level with limits protection
 int MapUnit::UpdateModale(double points)
 {
-	const double old = morale;
+	double old = morale;
 	morale = max(min(morale + points,100.0),0.0);
 
-	// when morale drops to 0, unit panics for the next phase
+	// Arm panic only on transition from >0 to 0 (so it happens once)
 	if (old > 0.0 && morale <= 0.0)
-		panic_turns = 1;
+		panic_turns = 2;
 
 	// flee level?
 	return(morale < 25.0);
@@ -1710,6 +1710,7 @@ FSU_resource *MapUnit::GetShotAnim(MapUnit *target, int *frame_stop)
 		*frame_stop = frames;
 	return(fsu_anim);
 }
+
 // return target hit animation if exist
 AnimPNM *MapUnit::GetTargetHitPNM(MapUnit *target)
 {
@@ -2041,11 +2042,12 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 		else
 		{
 			// optional AoE around the struck target (fear-like behavior)
+			const MapXY center = (act == SpellUnitRec::SPEC_ACT_PARALYZE) ? this->coor : target->coor;
 			for (auto* u : map->units)
 			{
 				if (!u) continue;
 				if (u->is_enemy == this->is_enemy) continue;
-				if (u->coor.Distance(target->coor) > radius) continue;
+				if (u->coor.Distance(center) > radius) continue;
 				u->UpdateModale(-drop);
 			}
 		}

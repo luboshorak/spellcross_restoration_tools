@@ -379,6 +379,7 @@ public:
 		EnemyUnit,
 		VoluntUnit,
 	};
+
 	MapUnitType() = default;
 	constexpr MapUnitType(Values type) : value(type) { }
 
@@ -556,7 +557,8 @@ public:
 	// list of other units in view range
 	std::vector<int> units_in_view;
 
-
+	// Pøidejte tuto metodu do veøejné sekce tøídy MapUnit:
+	int GetAP() const { return action_points; }
 
 	// --- AI aggro memory (runtime only; not serialized) ---
 	MapXY ai_aggro_pos;          // last known attacker position

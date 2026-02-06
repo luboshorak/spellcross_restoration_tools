@@ -2571,7 +2571,17 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
             else
             {
                 // game mode:
-                int options = spell_map->GetUnitOptions();
+                if (spell_map->IsGroupMode())
+                {
+                    // group mode = no unit options menu: toggle units / move immediately (like original)
+                    if (cur_unit && !cur_unit->is_enemy)
+                        spell_map->SelectUnit(cur_unit);
+                    else
+                        spell_map->MoveUnit(select_pos);
+                }
+                else
+                {
+int options = spell_map->GetUnitOptions();
                 
                 // reduce attack options if only one target is possible
                 if(!!(options & SpellMap::UNIT_OPT_LOWER) != !!(options & SpellMap::UNIT_OPT_UPPER))
@@ -2584,6 +2594,7 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
                     pos.x -= 15;
                     pos.y -= 15;
                     form_unit_opts = new FormUnitOpts(canvas,ID_UNIT_MODE_WIN,pos,spell_data,options,bind(&MainFrame::OnUnitClick_cb,this,placeholders::_1));
+                }
                 }
             }
         }
@@ -2746,10 +2757,34 @@ void MainFrame::OnCanvasMouseWheel(wxMouseEvent& event)
 // on canvas key down
 void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
 {
-    int key = event.GetKeyCode();
-    if(event.ControlDown())
+    if(!spell_map)
     {
+        event.Skip();
+        return;
     }
+
+    int key = event.GetKeyCode();
+
+    // Group move hotkeys (game mode only)
+    if(spell_map->isGameMode())
+    {
+        if(key >= '1' && key <= '8')
+        {
+            spell_map->SetActiveGroup(key - '0');
+            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
+            return;
+        }
+
+        if(key == '0' || key == WXK_ESCAPE)
+        {
+            spell_map->SetActiveGroup(0);
+            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
+            return;
+        }
+    }
+
+    // keep existing controls working
+    event.Skip();
 }
 
 

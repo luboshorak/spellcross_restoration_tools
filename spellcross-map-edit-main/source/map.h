@@ -12,6 +12,7 @@
 
 #include "cstdint"
 #include <vector>
+#include <array>
 #include <queue>
 #include <thread>
 #include <mutex>
@@ -243,7 +244,6 @@ class SpellMap
 		std::vector<MapUnit*> panic_turn_list;
 		size_t panic_turn_idx = 0;
 		MapUnit* panic_turn_restore_selection = nullptr;
-
 		// enemy turn helpers (implemented in map.cpp)
 		void StartEnemyTurn();
 		void EndEnemyTurn();
@@ -309,6 +309,13 @@ class SpellMap
 		MapUnit *unit_selection;
 		int unit_selection_mod;
 		int unit_sel_land_preference;
+
+		// --- Group move (multi-unit selection) ---
+		int active_group = 0; // 0=off, 1..8 active slot
+		std::array<std::vector<int>, 9> group_units; // store MapUnit::id, [1..8] used
+		void RemoveUnitFromAllGroups(int unit_id);
+		void ToggleUnitInActiveGroup(MapUnit* u);
+
 
 		// sound selection
 		MapSound *sound_selection;
@@ -799,6 +806,14 @@ class SpellMap
 		void OnHUDairLandTakeOff();
 		void OnHUDfortresToggle();
 		void OnHUDcreateUnit();
+
+		// --- Group move (multi-unit selection) ---
+		void SetActiveGroup(int g);   // g: 0..8 (0 disables group mode)
+		int  GetActiveGroup() const { return active_group; }
+		bool IsGroupMode() const { return active_group != 0; }
+		bool IsUnitInActiveGroup(const MapUnit* u) const;
+
+        // --- Group move API ---
 		
 
 		MapUnit* GetUnit(int id);		
