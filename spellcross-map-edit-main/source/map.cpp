@@ -26,6 +26,8 @@
 #include <random>
 #include <chrono>
 #include <climits>
+#include <filesystem>
+#include <cwctype>
 
 #include "wx/dcgraph.h"
 #include "wx/dcbuffer.h"
@@ -69,8 +71,34 @@ namespace
                 enemy->is_visible = 1;
         }
     }
-} // namespace
 
+	static void HideEnemiesOutsidePlayerView(SpellMap* map, SpellMap::ViewRange* unit_view)
+	{
+		if (!map || !unit_view)
+			return;
+
+		// vezmeme snapshot player view mapy (abychom nelezli do unit_view->view bez locku)
+		std::vector<int> view_snapshot;
+		unit_view->ResultLock(true);
+		view_snapshot = unit_view->view;
+		unit_view->ResultLock(false);
+
+		for (auto* u : map->units)
+		{
+			if (!u) continue;
+			if (!u->is_enemy) continue;     // řešíme jen nepřítele
+			if (!u->was_seen) continue;     // nikdy neviděný ignoruj
+			int idx = map->ConvXY(u->coor);
+			if (idx < 0 || (size_t)idx >= view_snapshot.size())
+				continue;
+
+			// Pokud tile NENÍ aktuálně viditelný (2), jednotka nesmí zůstat visible=2.
+			if (view_snapshot[idx] != 2 && u->is_visible > 1)
+				u->is_visible = 1;          // "known but not currently visible"
+		}
+	}
+
+} // namespace
 
 namespace scsave
 {
@@ -664,6 +692,20 @@ bool MapLayer4::Compare(MapLayer4* pnm)
 // class Map
 //=============================================================================
 
+bool SpellMap::AreAllObjectivesDone() const
+{
+	bool any_objective = false;
+	for (auto* e : events->GetEvents())
+	{
+		if (!e) continue;
+		if (!e->is_objective) continue;
+		any_objective = true;
+		if (!e->isDone())
+			return false;
+	}
+	return any_objective; // pokud nejsou objectives, neskončíme automaticky
+}
+
 SpellMap::SpellMap()
 {
 	is_valid = false;
@@ -812,6 +854,69 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	}
 
 	return 0;
+}
+
+void SpellMap::CheckAndTriggerMissionEnd()
+{
+	if (!isGameMode())
+		return;
+
+	// už jsme to ukázali
+	if (m_mission_end_shown)
+	{
+		// čekáme až hráč zavře okno; jakmile UI není "busy", tak to bereme jako ACK
+		if (!m_mission_end_ack && m_msg_checker && !m_msg_checker())
+		{
+			m_mission_end_ack = true;
+
+			// od této chvíle může UI vrstva provést přechod (video / strategic)
+			m_mission_end_req.pending = true;
+		}
+		return;
+	}
+
+	// dokud běží jiné message okno, neotravuj
+	if (m_msg_checker && m_msg_checker())
+		return;
+
+	if (!AreAllObjectivesDone())
+		return;
+
+	// SUCCESS (zatím jen success, fail si můžeš dodělat podobně při "player defeated")
+	m_mission_end_req.success = true;
+
+	// Text pro okno: params.end_ok_text je ID/klíč do texts
+	SpellTextRec* txt = nullptr;
+	if (!params.end_ok_text.empty())
+		txt = spelldata->texts->GetText(params.end_ok_text);
+
+	// fallback, kdyby klíč neexistoval
+	if (!txt)
+		txt = spelldata->texts->GetText("MISSION_COMPLETE"); // pokud něco takového máš, jinak nech NULL
+
+	m_mission_end_req.text = txt;
+
+	// Special: po první misi – video + load LEVEL_02.DEF
+	std::wstring stem = std::filesystem::path(map_path).stem().wstring();
+	for (auto& ch : stem) ch = (wchar_t)towupper(ch);
+
+	const bool is_first =
+		(stem == L"M01_01") || (stem == L"LEVEL_01") || (stem == L"LEVEL1_1") || (stem == L"LEVEL_01_01");
+
+	if (is_first)
+	{
+		m_mission_end_req.movie_path = L"temp/movie/LEVEL1_1.DPK";
+		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
+	}
+
+	// Tady se to okno opravdu zobrazí (HUD message)
+	if (m_msg_creator && m_mission_end_req.text)
+	{
+		// druhý parametr: dej TRUE pokud to má čekat na OK od hráče
+		// třetí parametr: nech NULL – ACK si hlídáme přes m_msg_checker()
+		m_msg_creator(m_mission_end_req.text, true, NULL);
+		m_mission_end_shown = true;
+	}
 }
 
 
@@ -1140,6 +1245,51 @@ int SpellMap::SetGameMode(int new_mode)
 
 		ReleaseMap();
 		ResumeUnitRanging(false);
+		// Re-link objective trigger units (TransportUnit/SaveUnit/DestroyUnit etc.)
+		events->ResetEvents();
+
+		// If DEF objective references SpecUnit IDs (48/49), but runtime spec unit IDs differ,
+		// remap objectives to actual SpecUnit(s) present on map.
+		{
+			std::vector<MapUnit*> spec;
+			for (auto* u : units)
+				if (u && !u->is_enemy && u->spec_type == MapUnitType::Values::SpecUnit)
+					spec.push_back(u);
+
+			if (!spec.empty())
+			{
+				bool changed = false;
+
+				for (auto* e : events->GetEvents())
+				{
+					if (!e || !e->is_objective) continue;
+					if (!e->isTransportSave()) continue; // SaveUnit / TransportUnit only
+					if (e->trig_unit) continue;          // already linked OK
+
+					// Typical Spellcross: SpecUnit objectives refer to unit ids 48/49
+					if (e->trig_unit_id == 48)
+					{
+						e->trig_unit_id = spec[0]->id;
+						changed = true;
+					}
+					else if (e->trig_unit_id == 49 && spec.size() > 1)
+					{
+						e->trig_unit_id = spec[1]->id;
+						changed = true;
+					}
+					else if (e->trig_unit_id >= 0)
+					{
+						// fallback: if still not linked, bind to first specunit
+						e->trig_unit_id = spec[0]->id;
+						changed = true;
+					}
+				}
+
+				if (changed)
+					events->ResetEvents();
+			}
+		}
+
 	}
 
 	// leaving game mode: nothing special right now
@@ -2754,6 +2904,17 @@ int SpellMap::UnitsMoved(int clear)
 	ReleaseMap();
 	return(moved);
 }
+
+
+bool SpellMap::ConsumeMissionEndRequest(MissionEndRequest& out)
+{
+	if (!m_mission_end_req.pending)
+		return false;
+	out = m_mission_end_req;
+	m_mission_end_req.pending = false;
+	return true;
+}
+
 
 // invalidate current units view map to force recalculation (actual calculation is done while rendering for now)
 void SpellMap::InvalidateUnitsView()
@@ -9990,8 +10151,11 @@ int SpellMap::Tick()
 								SpellMapEventsList events;
 								int new_contact;
 								if (!unit->is_enemy)
+								{
 									unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
-								else
+									HideEnemiesOutsidePlayerView(this, unit_view);
+								}
+								else 
 								{
 									new_contact = 0;
 									UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, &new_contact);
@@ -10089,7 +10253,10 @@ int SpellMap::Tick()
 							SpellMapEventsList events;
 							int new_contact = 0;
 							if (!unit->is_enemy)
+							{
 								unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+								HideEnemiesOutsidePlayerView(this, unit_view);
+							}
 							else
 							{
 								UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
@@ -10123,7 +10290,25 @@ int SpellMap::Tick()
 							}
 							unit->azimuth_turret = unit->azimuth;
 
-							if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+							bool stop_for_events = false;
+							for (auto* e : events)
+							{
+								if (!e) continue;
+
+								// SEE_* jsou jen info (fog-of-war reveal) -> NERUŠIT pohyb
+								if (e->evt_type == SpellMapEventRec::EvtTypes::EVT_SEE_PLACE) continue;
+								if (e->evt_type == SpellMapEventRec::EvtTypes::EVT_SEE_UNIT)  continue;
+
+								stop_for_events = true;
+								break;
+							}
+
+							//if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+
+							//if (new_contact || stop_for_events || unit->move_step >= unit->move_nodes.size())
+
+							if (unit->move_step >= unit->move_nodes.size())
+
 							{
 								// movement done:
 								unit->move_state = MapUnit::MOVE_STATE::IDLE;
@@ -10245,7 +10430,10 @@ int SpellMap::Tick()
 					SpellMapEventsList events;
 					int new_contact;
 					if (!unit->is_enemy)
+					{
 						unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+						HideEnemiesOutsidePlayerView(this, unit_view);
+					}
 					else
 					{
 						new_contact = 0;
@@ -10344,7 +10532,10 @@ int SpellMap::Tick()
 				SpellMapEventsList events;
 				int new_contact = 0;
 				if (!unit->is_enemy)
+				{
 					unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+					HideEnemiesOutsidePlayerView(this, unit_view);
+				}
 				else
 				{
 					UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
@@ -10378,7 +10569,10 @@ int SpellMap::Tick()
 				}
 				unit->azimuth_turret = unit->azimuth;
 
-				if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+				//if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+
+				if (unit->move_step >= unit->move_nodes.size())
+
 				{
 					// movement done:
 					unit->move_state = MapUnit::MOVE_STATE::IDLE;
@@ -11101,7 +11295,10 @@ int SpellMap::Tick()
 			SpellMapEventsList events;
 			int new_contact = 0;
 			if (!unit->is_enemy)
+			{
 				unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+				HideEnemiesOutsidePlayerView(this, unit_view);
+			}
 			else
 			{
 				UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
@@ -11151,6 +11348,7 @@ int SpellMap::Tick()
 
 	// try process pending events
 	ProcEventsList(event_list);
+	CheckAndTriggerMissionEnd();
 
 	// repaint
 	return(update);
@@ -11162,7 +11360,6 @@ void SpellMap::SetMessageInterface(SpellMessageCraeteFunPtr create_msg, SpellMes
 	m_msg_creator = create_msg;
 	m_msg_checker = msg_checker;
 }
-
 
 // get unit by its id
 MapUnit* SpellMap::GetUnit(int id)

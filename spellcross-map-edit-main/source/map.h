@@ -232,6 +232,19 @@ typedef struct{
 // main spellcross map class
 class SpellMap
 {
+	struct MissionEndRequest
+	{
+		bool pending = false;
+		bool success = false;
+		SpellTextRec* text = nullptr;     // text pro HUD okno
+		std::wstring movie_path;          // LEVEL1_1.DPK
+		std::wstring next_level_def;      // LEVEL_02.DEF
+	};
+
+	bool m_mission_end_shown = false;
+	bool m_mission_end_ack = false;
+	MissionEndRequest m_mission_end_req;
+
 	private:
 		// enemy turn state
 		bool enemy_turn_running = false;
@@ -392,6 +405,10 @@ class SpellMap
 		};
 
 	public:
+
+		bool ConsumeMissionEndRequest(MissionEndRequest& out);
+		bool AreAllObjectivesDone() const;
+		void CheckAndTriggerMissionEnd();
 
 		static constexpr int SELECT_ADD = 1;
 		static constexpr int SELECT_CLEAR = 2;

@@ -105,6 +105,7 @@ private:
         std::string id;
         std::string type;
         int rank = -1; // for commander slots
+        uint32_t commander_uid = 0; // for commander slots
         // commander slots: store commander name so label can be rebuilt with rank / assigned unit
         std::string commander_name;
 
@@ -211,12 +212,21 @@ public:
 
 struct CommanderRec
 {
+    // Unique commander instance id (session-stable). Used to prevent the same commander
+    // being assigned into multiple hierarchy slots.
+    uint32_t uid = 0;
     std::string name;
     int rank = 0;
 };
 
 // owned commanders (max 14)
 std::vector<CommanderRec> m_playerCommanders;
+
+// session-stable commander UID generator (used when uid==0)
+mutable uint32_t m_nextCommanderUid = 1;
+
+// runtime helpers (uid -> rank) for drag payload construction
+mutable std::unordered_map<uint32_t, int> m_commanderRankByUid;
 
 // available commanders to buy in current turn (usually 0 or 1)
 std::vector<CommanderRec> m_availableCommanders;

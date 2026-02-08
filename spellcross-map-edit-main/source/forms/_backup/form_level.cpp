@@ -96,6 +96,12 @@ static wxFont MakeStrategicFont(int pixelSize, bool bold)
     return font;
 }
 
+// Přidejte tuto pomocnou funkci endsWith na začátek souboru (nebo do anonymního namespace, kde ji potřebujete)
+static bool endsWith(const std::string& s, const std::string& suf)
+{
+    return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+}
+
 namespace
 {
 struct HierarchyDragData
@@ -104,6 +110,7 @@ struct HierarchyDragData
     bool fromSlot = false;
     std::string slotId;
     std::string type;
+    uint32_t commander_uid = 0; // for commanders
     int rank = -1; // for commanders
     wxString name;
 };
@@ -126,12 +133,24 @@ HierarchyDragData ParseHierarchyDragData(const wxString& data)
         return parsed;
     }
 
-    // commander:<rank>:<name>  (rank optional for backward compatibility)
+    // commander:<uid>:<rank>:<name>
+    // commander:<rank>:<name>  (backward compatibility)
+    // commander:<name>         (very old compatibility)
     if(kind == "commander" && tokens.size() >= 2)
     {
         parsed.valid = true;
         parsed.type = "commander";
-        if(tokens.size() >= 3)
+        if(tokens.size() >= 4)
+        {
+            long uid = 0;
+            long r = -1;
+            if(tokens[1].ToLong(&uid) && uid > 0)
+                parsed.commander_uid = (uint32_t)uid;
+            if(tokens[2].ToLong(&r))
+                parsed.rank = (int)r;
+            parsed.name = tokens[3];
+        }
+        else if(tokens.size() >= 3)
         {
             long r = -1;
             if(tokens[1].ToLong(&r))
@@ -145,7 +164,9 @@ HierarchyDragData ParseHierarchyDragData(const wxString& data)
         return parsed;
     }
 
-    // slot:<slotId>:<type>:<name>  OR slot:<slotId>:commander:<rank>:<name>
+    // slot:<slotId>:<type>:<name>
+    // slot:<slotId>:commander:<uid>:<rank>:<name>
+    // slot:<slotId>:commander:<rank>:<name>
     if(kind == "slot" && tokens.size() >= 4)
     {
         parsed.valid = true;
@@ -153,7 +174,17 @@ HierarchyDragData ParseHierarchyDragData(const wxString& data)
         parsed.slotId = tokens[1].ToStdString();
         parsed.type = tokens[2].ToStdString();
 
-        if(parsed.type == "commander" && tokens.size() >= 5)
+        if(parsed.type == "commander" && tokens.size() >= 6)
+        {
+            long uid = 0;
+            long r = -1;
+            if(tokens[3].ToLong(&uid) && uid > 0)
+                parsed.commander_uid = (uint32_t)uid;
+            if(tokens[4].ToLong(&r))
+                parsed.rank = (int)r;
+            parsed.name = tokens[5];
+        }
+        else if(parsed.type == "commander" && tokens.size() >= 5)
         {
             long r = -1;
             if(tokens[3].ToLong(&r))
@@ -1724,6 +1755,22 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
     // - brigade:  rank >= Major General (6)
     if(slot.type == "commander")
     {
+        // Resolve commander UID (required to ensure a commander cannot occupy multiple slots).
+        uint32_t cmdUid = parsed.commander_uid;
+        if(cmdUid == 0)
+        {
+            // Backward compatibility payloads don't carry UID. Best-effort lookup by name + rank.
+            const std::string name = parsed.name.ToStdString();
+            for(const auto& c : m_playerCommanders)
+            {
+                if(c.name == name && (parsed.rank < 0 || c.rank == parsed.rank))
+                {
+                    cmdUid = c.uid;
+                    break;
+                }
+            }
+        }
+
         int required = 0;
         if(slotId.find("regiment_") != std::string::npos)
             required = 3;
@@ -1756,7 +1803,21 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
             return;
         }
 
+        // Enforce uniqueness: move the commander if they're already placed elsewhere.
+        if(cmdUid != 0)
+        {
+            for(auto& s : m_hierarchySlots)
+            {
+                if(s.type == "commander" && s.commander_uid == cmdUid && s.id != slotId)
+                {
+                    ClearHierarchySlot(s.id);
+                    break;
+                }
+            }
+        }
+
         slot.rank = rank;
+        slot.commander_uid = cmdUid;
         wxString baseName = parsed.name;
         const wxString abbr = GetRankAbbrev(rank);
         if(baseName.StartsWith(abbr + " "))
@@ -1819,9 +1880,24 @@ void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
     // Commander slot: clear commander + its assignment.
     slot.label->SetLabel(slot.placeholder);
     slot.rank = -1;
+    slot.commander_uid = 0;
     slot.commander_name.clear();
     slot.assigned_unit_uid = 0;
     slot.assigned_unit_display.clear();
+
+    // Also clear the paired "assignment unit" slot (the "?" slot under commander nodes), if present.
+    {
+        std::string assignmentId;
+        if(slotId.find("battalion_") == 0 && endsWith(slotId, "_commander"))
+            assignmentId = slotId + "_unit"; // battalion_X_commander -> battalion_X_commander_unit
+        else if(slotId.find("regiment_") == 0 && endsWith(slotId, "_commander"))
+            assignmentId = slotId.substr(0, slotId.size() - std::string("_commander").size()) + "_unit";
+        else if(slotId.find("brigade_") == 0 && endsWith(slotId, "_commander"))
+            assignmentId = slotId.substr(0, slotId.size() - std::string("_commander").size()) + "_unit";
+
+        if(!assignmentId.empty())
+            ClearHierarchySlot(assignmentId);
+    }
     slot.label->GetParent()->Layout();
 }
 
@@ -1835,7 +1911,8 @@ void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWi
         return;
     wxTextDataObject dataObject(
         slot.type == "commander"
-            ? wxString::Format("slot:%s:%s:%d:%s", slot.id.c_str(), slot.type.c_str(), slot.rank,
+            ? wxString::Format("slot:%s:%s:%u:%d:%s", slot.id.c_str(), slot.type.c_str(),
+                (unsigned)slot.commander_uid, slot.rank,
                 slot.commander_name.empty() ? slot.label->GetLabel() : wxString::FromUTF8(slot.commander_name))
             : wxString::Format("slot:%s:%s:%s", slot.id.c_str(), slot.type.c_str(), slot.label->GetLabel()));
     wxDropSource dropSource(dataObject, source);
@@ -2319,8 +2396,12 @@ void StrategicLevelFrame::OnCommanderBeginDrag(wxListEvent& event)
     if(name.empty())
         return;
 
-    const int rank = (int)m_cmdRoster->GetItemData(item);
-    wxTextDataObject dataObject(wxString::Format("commander:%d:%s", rank, name));
+    const uint32_t uid = (uint32_t)m_cmdRoster->GetItemData(item);
+    int rank = 0;
+    auto it = m_commanderRankByUid.find(uid);
+    if(it != m_commanderRankByUid.end())
+        rank = it->second;
+    wxTextDataObject dataObject(wxString::Format("commander:%u:%d:%s", (unsigned)uid, rank, name));
     wxDropSource dropSource(dataObject, m_cmdRoster);
     dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
@@ -2358,13 +2439,20 @@ if(m_cmdRoster)
 
     m_cmdRoster->DeleteAllItems();
 
+    // Ensure commander UIDs exist and rebuild uid->rank helper map
+    m_commanderRankByUid.clear();
+
     long crow = 0;
-    for(const auto& c : m_playerCommanders)
+    for(auto& c : m_playerCommanders)
     {
         if(crow >= 14) break;
+        if(c.uid == 0)
+            c.uid = m_nextCommanderUid++;
+
         long cidx = m_cmdRoster->InsertItem(crow++, wxString::FromUTF8(c.name));
         m_cmdRoster->SetItem(cidx, 1, GetRankAbbrev(c.rank));
-        m_cmdRoster->SetItemData(cidx, (long)c.rank);
+        m_cmdRoster->SetItemData(cidx, (long)c.uid);
+        m_commanderRankByUid[c.uid] = c.rank;
     }
 
     int cW=0,cH=0;
