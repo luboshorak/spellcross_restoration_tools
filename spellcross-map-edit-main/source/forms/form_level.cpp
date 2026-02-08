@@ -1441,7 +1441,7 @@ midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
     rootSizer->Add(mainSizer, 1, wxEXPAND);
     root->SetSizer(rootSizer);
     //použije rekurzivně transparentní pozadí na všechny elementy wx - opatrně!
-    MakeChildrenTransparentRecursive(root);
+    //MakeChildrenTransparentRecursive(root);
 }
 
 void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
