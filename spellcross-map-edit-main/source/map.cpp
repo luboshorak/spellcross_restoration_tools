@@ -7995,6 +7995,18 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 			memset(&buf[hud_left + px_ref + 118 + (hud_top + y + 54) * buf_x_size], 235, health_pix);
 		}
 
+		// render the 3 HUD numbers: total / active / wounded (or HP-style for single-man)
+		font->Render(buf, buf_end, buf_x_size,
+			hud_left + px_ref + 133, hud_top + 61,
+			string_format("%02d", men_max), 216, 254, SpellFont::RIGHT_DOWN);
+
+		font->Render(buf, buf_end, buf_x_size,
+			hud_left + px_ref + 168, hud_top + 61,
+			string_format("%02d", men_active), 235, 254, SpellFont::RIGHT_DOWN);
+
+		font->Render(buf, buf_end, buf_x_size,
+			hud_left + px_ref + 204, hud_top + 61,
+			string_format("%02d", men_wound), 216, 254, SpellFont::RIGHT_DOWN);
 
 		// pos a: 109,83
 		int attack_light = unit->GetAttack(MapUnit::TARGET_TYPE::LIGHT);
@@ -9291,6 +9303,8 @@ void SpellMap::ViewRange::Worker()
 			ref_view = target->unit->fire_range;
 		else
 			ref_view = target->unit->sdir;
+		if (is_fire && ref_view < 1)
+			ref_view = 1; // melee/adjacent attacks: minimum range 1 tile
 
 		// reference position
 		MapXY ref_pos = target->coor;
@@ -9383,7 +9397,17 @@ void SpellMap::ViewRange::Worker()
 
 			// next tile elevation
 			int next_alt = map->tiles[next_mxy].elev;
-			int view = ref_view + max(ref_alt - next_alt, 0); // expand if terget lower than ref
+			int view;
+			if (is_fire)
+			{
+				// fire/attack range must NOT expand with elevation difference
+				view = ref_view;
+			}
+			else
+			{
+				// sight range can expand when looking downhill
+				view = ref_view + max(ref_alt - next_alt, 0);
+			}
 
 			// visible?
 			if ((next_pos.Distance(ref_pos) - 0.5) > view)

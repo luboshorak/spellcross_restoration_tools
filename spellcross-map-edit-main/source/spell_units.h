@@ -163,7 +163,7 @@ class SpellUnitRec
 		char die_anim_name[6];
 		int die_anim_frames;
 
-		int GetHP() {return((cnt==1)?(100):(cnt));};
+		int GetHP() { return cnt; }
 
 		// FSU data links
 		FSU_resource* gr_base; /* unit base graphics */

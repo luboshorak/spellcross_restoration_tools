@@ -2029,8 +2029,10 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 	// target defence
 	double defence = target->GetDefence();
 
-	// defence bonus by dig level
-	defence *= (1.0 + (double)target->dig_level*0.7);
+	// defence bonus by dig level (cover helps a LOT vs kills)
+	double cover = (double)target->dig_level;
+	double def_wound = defence * (1.0 + cover * 0.7);
+	double def_kill = defence * (1.0 + cover * 1.6);   // <- silnější než wound
 
 	// morale penalty
 	defence *= (0.7 + 0.01*target->morale*0.3);
@@ -2093,8 +2095,8 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 
 
 	// damage model
-	double wound = (int)(rng_attack - 0.7*defence);
-	double kill = (int)(rng_attack - defence);
+	double wound = (int)(rng_attack - 0.7 * def_wound);
+	double kill = (int)(rng_attack - 1.0 * def_kill);
 	if(wound < 0.0 && kill < 0.0)
 	{
 		if (has_morale_spec)
@@ -2110,6 +2112,20 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 
 	wound = max(wound,0.0);
 	kill = max(kill,0.0);
+
+	// --- anti one-shot for entrenched units ---
+	if (target->dig_level > 0 && !target->unit->isSingleMan())
+	{
+		const int hp = target->unit->GetHP();
+
+		int max_kill = (int)ceil(hp * 0.25);
+		if (max_kill < 1) max_kill = 1;
+		if (kill > (double)max_kill) kill = (double)max_kill;
+
+		int max_wound = (int)ceil(hp * 0.35);
+		if (max_wound < 1) max_wound = 1;
+		if (wound > (double)max_wound) wound = (double)max_wound;
+	}
 
 	// reduce HP
 	int level_up = false;
