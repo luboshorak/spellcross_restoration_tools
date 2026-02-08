@@ -26,6 +26,8 @@
 #include <random>
 #include <chrono>
 #include <climits>
+#include <filesystem>
+#include <cwctype>
 
 #include "wx/dcgraph.h"
 #include "wx/dcbuffer.h"
@@ -69,8 +71,34 @@ namespace
                 enemy->is_visible = 1;
         }
     }
-} // namespace
 
+	static void HideEnemiesOutsidePlayerView(SpellMap* map, SpellMap::ViewRange* unit_view)
+	{
+		if (!map || !unit_view)
+			return;
+
+		// vezmeme snapshot player view mapy (abychom nelezli do unit_view->view bez locku)
+		std::vector<int> view_snapshot;
+		unit_view->ResultLock(true);
+		view_snapshot = unit_view->view;
+		unit_view->ResultLock(false);
+
+		for (auto* u : map->units)
+		{
+			if (!u) continue;
+			if (!u->is_enemy) continue;     // řešíme jen nepřítele
+			if (!u->was_seen) continue;     // nikdy neviděný ignoruj
+			int idx = map->ConvXY(u->coor);
+			if (idx < 0 || (size_t)idx >= view_snapshot.size())
+				continue;
+
+			// Pokud tile NENÍ aktuálně viditelný (2), jednotka nesmí zůstat visible=2.
+			if (view_snapshot[idx] != 2 && u->is_visible > 1)
+				u->is_visible = 1;          // "known but not currently visible"
+		}
+	}
+
+} // namespace
 
 namespace scsave
 {
@@ -664,6 +692,20 @@ bool MapLayer4::Compare(MapLayer4* pnm)
 // class Map
 //=============================================================================
 
+bool SpellMap::AreAllObjectivesDone() const
+{
+	bool any_objective = false;
+	for (auto* e : events->GetEvents())
+	{
+		if (!e) continue;
+		if (!e->is_objective) continue;
+		any_objective = true;
+		if (!e->isDone())
+			return false;
+	}
+	return any_objective; // pokud nejsou objectives, neskončíme automaticky
+}
+
 SpellMap::SpellMap()
 {
 	is_valid = false;
@@ -812,6 +854,127 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	}
 
 	return 0;
+}
+
+void SpellMap::CheckAndTriggerMissionEnd()
+{
+	if (!isGameMode())
+		return;
+
+	// už jsme to ukázali
+	if (m_mission_end_shown)
+	{
+		// čekáme až hráč zavře okno; jakmile UI není "busy", tak to bereme jako ACK.
+		// POZOR: v některých bězích (podle toho, jak je UI hooknuté) může být m_msg_checker == nullptr.
+		// V takovém případě se flow nesmí zaseknout navždy – bereme to jako okamžitý ACK.
+		if (!m_mission_end_ack)
+		{
+			if (!m_msg_checker)
+			{
+				m_mission_end_ack = true;
+				m_mission_end_req.pending = true;
+			}
+			else if (!m_msg_checker())
+			{
+				m_mission_end_ack = true;
+
+				// od této chvíle může UI vrstva provést přechod (video / strategic)
+				m_mission_end_req.pending = true;
+			}
+		}
+		return;
+	}
+
+	// dokud běží jiné message okno, neotravuj
+	if (m_msg_checker && m_msg_checker())
+		return;
+
+	// Special: po první misi – video + load LEVEL_02.DEF
+	std::wstring stem = std::filesystem::path(map_path).stem().wstring();
+	for (auto& ch : stem) ch = (wchar_t)towupper(ch);
+
+	const bool is_first =
+		(stem == L"M01_01") || (stem == L"LEVEL_01") || (stem == L"LEVEL1_1") || (stem == L"LEVEL_01_01");
+
+	bool success = AreAllObjectivesDone();
+
+	// První mise: dovol success i bez objective – když velitel dojede na EscapeSquare (transport)
+	if (!success && is_first)
+	{
+		MapUnit* commander = nullptr;
+
+		for (auto* u : units)
+		{
+			if (!u) continue;
+			if (u->is_enemy) continue;
+			if (u->is_commander) { commander = u; break; }
+		}
+		// fallback: první hráčská jednotka (pokud zatím is_commander není spolehlivě nastavené)
+		if (!commander)
+		{
+			for (auto* u : units)
+			{
+				if (!u) continue;
+				if (u->is_enemy) continue;
+				commander = u;
+				break;
+			}
+		}
+
+		if (commander)
+		{
+			const MapXY pos = commander->coor;
+			for (auto& e : escape)
+			{
+				if (e == pos)
+				{
+					success = true;
+					break;
+				}
+			}
+		}
+	}
+
+	if (!success)
+		return;
+
+	// SUCCESS (zatím jen success, fail si můžeš dodělat podobně při "player defeated")
+	m_mission_end_req.success = true;
+
+	// Text pro okno: params.end_ok_text je ID/klíč do texts
+	SpellTextRec* txt = nullptr;
+	if (!params.end_ok_text.empty())
+		txt = spelldata->texts->GetText(params.end_ok_text);
+
+	// fallback, kdyby klíč neexistoval
+	if (!txt)
+		txt = spelldata->texts->GetText("MISSION_COMPLETE"); // pokud něco takového máš, jinak nech NULL
+
+	m_mission_end_req.text = txt;
+
+	if (is_first)
+	{
+		// DŮLEŽITÉ: do FormVideoBox posíláme název entry v MOVIE.FS (ne filesystem cestu)
+		m_mission_end_req.movie_path = L"LEVEL1_1.DPK";
+		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
+	}
+
+	// Tady se to okno opravdu zobrazí (HUD message)
+	if (m_msg_creator && m_mission_end_req.text)
+	{
+		// druhý parametr: dej TRUE pokud to má čekat na OK od hráče
+		// třetí parametr: nech NULL – ACK si hlídáme přes m_msg_checker()
+		m_msg_creator(m_mission_end_req.text, true, NULL);
+		m_mission_end_shown = true;
+		// pending se nastaví až po ACK v horní větvi (nebo okamžitě, pokud m_msg_checker není napojen)
+	}
+	else
+	{
+		// Nemáme text nebo UI message hook → nenech to “potichu” spadnout.
+		// Pusť přechod rovnou.
+		m_mission_end_ack = true;
+		m_mission_end_req.pending = true;
+	}
 }
 
 
@@ -1140,6 +1303,51 @@ int SpellMap::SetGameMode(int new_mode)
 
 		ReleaseMap();
 		ResumeUnitRanging(false);
+		// Re-link objective trigger units (TransportUnit/SaveUnit/DestroyUnit etc.)
+		events->ResetEvents();
+
+		// If DEF objective references SpecUnit IDs (48/49), but runtime spec unit IDs differ,
+		// remap objectives to actual SpecUnit(s) present on map.
+		{
+			std::vector<MapUnit*> spec;
+			for (auto* u : units)
+				if (u && !u->is_enemy && u->spec_type == MapUnitType::Values::SpecUnit)
+					spec.push_back(u);
+
+			if (!spec.empty())
+			{
+				bool changed = false;
+
+				for (auto* e : events->GetEvents())
+				{
+					if (!e || !e->is_objective) continue;
+					if (!e->isTransportSave()) continue; // SaveUnit / TransportUnit only
+					if (e->trig_unit) continue;          // already linked OK
+
+					// Typical Spellcross: SpecUnit objectives refer to unit ids 48/49
+					if (e->trig_unit_id == 48)
+					{
+						e->trig_unit_id = spec[0]->id;
+						changed = true;
+					}
+					else if (e->trig_unit_id == 49 && spec.size() > 1)
+					{
+						e->trig_unit_id = spec[1]->id;
+						changed = true;
+					}
+					else if (e->trig_unit_id >= 0)
+					{
+						// fallback: if still not linked, bind to first specunit
+						e->trig_unit_id = spec[0]->id;
+						changed = true;
+					}
+				}
+
+				if (changed)
+					events->ResetEvents();
+			}
+		}
+
 	}
 
 	// leaving game mode: nothing special right now
@@ -2754,6 +2962,17 @@ int SpellMap::UnitsMoved(int clear)
 	ReleaseMap();
 	return(moved);
 }
+
+
+bool SpellMap::ConsumeMissionEndRequest(MissionEndRequest& out)
+{
+	if (!m_mission_end_req.pending)
+		return false;
+	out = m_mission_end_req;
+	m_mission_end_req.pending = false;
+	return true;
+}
+
 
 // invalidate current units view map to force recalculation (actual calculation is done while rendering for now)
 void SpellMap::InvalidateUnitsView()
@@ -6068,6 +6287,129 @@ int SpellMap::CanUnitMove(MapXY target)
 // move unit (in game mode)
 int SpellMap::MoveUnit(MapXY target)
 {
+    // GROUP MODE: move whole group (no attack, no single-unit range UI)
+    if (IsGroupMode())
+    {
+        // check target
+        if (!target.IsSelected())
+            return(1);
+
+        // Build occupancy maps (prevent stacking on the same tile).
+        // Rule: two LAND units cannot share a tile; two AIR units cannot share a tile.
+        // AIR + LAND on the same tile is allowed (matches existing air/land pairing logic).
+        std::vector<int> occ_land, occ_air;
+        occ_land.reserve(units.size());
+        occ_air.reserve(units.size());
+        for (auto* u : units)
+        {
+            if (!u) continue;
+            int mxy = ConvXY(&u->coor);
+            if (mxy < 0) continue;
+            if (u->unit && u->unit->isAir())
+                occ_air.push_back(mxy);
+            else
+                occ_land.push_back(mxy);
+        }
+
+        std::vector<int> res_land, res_air;
+        res_land.reserve(64);
+        res_air.reserve(64);
+
+        auto vec_has = [](const std::vector<int>& v, int x) -> bool
+        {
+            return std::find(v.begin(), v.end(), x) != v.end();
+        };
+
+        auto is_free_for = [&](MapUnit* u, MapXY pos) -> bool
+        {
+            int mxy = ConvXY(&pos);
+            if (mxy < 0) return false;
+
+            bool air = (u->unit && u->unit->isAir());
+            if (air)
+            {
+                if (vec_has(occ_air, mxy)) return false;
+                if (vec_has(res_air, mxy)) return false;
+            }
+            else
+            {
+                if (vec_has(occ_land, mxy)) return false;
+                if (vec_has(res_land, mxy)) return false;
+            }
+            return true;
+        };
+
+        auto reserve_for = [&](MapUnit* u, MapXY pos)
+        {
+            int mxy = ConvXY(&pos);
+            if (mxy < 0) return;
+            bool air = (u->unit && u->unit->isAir());
+            if (air) res_air.push_back(mxy);
+            else     res_land.push_back(mxy);
+        };
+
+        // Find nearest free tile around target (simple square-ring scan).
+        auto find_dest = [&](MapUnit* u) -> MapXY
+        {
+            // radius 0 = exact target
+            if (is_free_for(u, target))
+                return target;
+
+            const int RMAX = 10;
+            for (int r = 1; r <= RMAX; r++)
+            {
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    for (int dx = -r; dx <= r; dx++)
+                    {
+                        if (abs(dx) != r && abs(dy) != r) continue; // ring only
+
+                        MapXY cand;
+                        cand.x = target.x + dx;
+                        cand.y = target.y + dy;
+
+                        if (!is_free_for(u, cand))
+                            continue;
+
+                        return cand;
+                    }
+                }
+            }
+
+            // fallback: keep original target (will likely fail)
+            return target;
+        };
+
+        bool any = false;
+
+        // Move each grouped unit to a unique destination (no stacking).
+        for (auto* u : units)
+        {
+            if (!u) continue;
+            if (u->is_enemy) continue;
+            if (!IsUnitInActiveGroup(u)) continue;
+            if (u->radar_up) continue;
+            if (u->action_points <= 0) continue;
+
+            // pick destination for this unit and reserve it
+            MapXY dest = find_dest(u);
+            reserve_for(u, dest);
+
+            // clear last move
+            LockMap();
+            u->move_state = MapUnit::MOVE_STATE::IDLE;
+            u->move_nodes.clear();
+            ReleaseMap();
+
+            // start move using existing helper (handles AP drain over time)
+            if (StartMove_NoRangeCheck(u, dest))
+                any = true;
+        }
+
+        return(any ? 0 : 1);
+    }
+
+
 	// selected unit
 	auto* unit = GetSelectedUnit();
 	if (!unit)
@@ -6115,7 +6457,6 @@ int SpellMap::MoveUnit(MapXY target)
 	return(0);
 }
 
-
 // get unit action options for cursor position (game mode)
 int SpellMap::GetUnitOptions(TScroll* scroll)
 {
@@ -6133,32 +6474,33 @@ int SpellMap::GetUnitOptions(TScroll* scroll)
 		g_attack_map_dirty_for = nullptr;
 	}
 
-	if (unit_selection && CanUnitAttackLand(select_pos))
+	// group mode: no firing, movement command always available on selected tile
+	if (!IsGroupMode() && unit_selection && CanUnitAttackLand(select_pos))
 	{
-		// can attack land unit
 		options |= UNIT_OPT_LOWER;
 	}
-	if (unit_selection && CanUnitAttackAir(select_pos))
+	if (!IsGroupMode() && unit_selection && CanUnitAttackAir(select_pos))
 	{
-		// can attakc air unit
 		options |= UNIT_OPT_UPPER;
 	}
-	if (unit_selection && CanUnitAttackObject(select_pos))
+	if (!IsGroupMode() && unit_selection && CanUnitAttackObject(select_pos))
 	{
-		// can attack object
 		options |= UNIT_OPT_LOWER;
 	}
+
 	if (select_pos.IsSelected() && CanSelectUnit(select_pos))
 	{
-		// try select unit (if on cursor)
 		options |= UNIT_OPT_SELECT;
 	}
-	if (select_pos.IsSelected() && CanUnitMove(select_pos))
+
+	if (IsGroupMode() && select_pos.IsSelected())
 	{
-		// game mode: move unit
 		options |= UNIT_OPT_MOVE;
 	}
-
+	else if (select_pos.IsSelected() && CanUnitMove(select_pos))
+	{
+		options |= UNIT_OPT_MOVE;
+	}
 	return(options);
 }
 
@@ -6166,6 +6508,60 @@ int SpellMap::GetUnitOptions(TScroll* scroll)
 
 
 // reset AP of all units
+
+// --- Group move (multi-unit selection) ---
+void SpellMap::SetActiveGroup(int g)
+{
+	if (g < 0 || g > 8) g = 0;
+
+	// If switching from off->on, optionally auto-add currently selected player unit
+	int prev = active_group;
+	active_group = g;
+
+	if (active_group != 0 && prev == 0 && unit_selection && !unit_selection->is_enemy)
+	{
+		// Add selection into this group for convenience (matches user expectation)
+		ToggleUnitInActiveGroup(unit_selection);
+	}
+}
+
+bool SpellMap::IsUnitInActiveGroup(const MapUnit* u) const
+{
+	if (!u || active_group == 0) return false;
+	const auto& v = group_units[active_group];
+	return std::find(v.begin(), v.end(), u->id) != v.end();
+}
+
+void SpellMap::RemoveUnitFromAllGroups(int unit_id)
+{
+	for (int g = 1; g <= 8; g++)
+	{
+		auto& v = group_units[g];
+		v.erase(std::remove(v.begin(), v.end(), unit_id), v.end());
+	}
+}
+
+void SpellMap::ToggleUnitInActiveGroup(MapUnit* u)
+{
+	if (!u || active_group == 0) return;
+	if (u->is_enemy) return;
+
+	// Toggle off if already in active group
+	auto& v = group_units[active_group];
+	auto it = std::find(v.begin(), v.end(), u->id);
+	if (it != v.end())
+	{
+		v.erase(it);
+		return;
+	}
+
+	// Units cannot be in more than one group
+	RemoveUnitFromAllGroups(u->id);
+
+	// Add
+	v.push_back(u->id);
+}
+
 int SpellMap::ResetUnitsAP()
 {
 	for (auto& unit : units)
@@ -7117,6 +7513,9 @@ void SpellMap::AggroEnemiesAround(MapXY center, MapXY attacker_pos, int attacker
 // attack target (unit or object)
 int SpellMap::Attack(MapXY pos, int prefer_air)
 {
+    if (IsGroupMode())
+        return(0);
+
 	if (!pos.IsSelected())
 		return(1);
 	auto pxy = ConvXY(pos);
@@ -7254,6 +7653,21 @@ MapUnit* SpellMap::CanSelectUnit(MapXY pos)
 // select unit, if currently selected at the same position, switch between air-land
 MapUnit* SpellMap::SelectUnit(MapUnit* new_unit, bool scroll_to)
 {
+	// group mode: clicking player unit toggles membership; keep single selection unchanged
+	if (IsGroupMode() && isGameMode() && new_unit && !new_unit->is_enemy)
+	{
+		ToggleUnitInActiveGroup(new_unit);
+		return unit_selection;
+	}
+
+    // GROUP MODE: click on own unit toggles membership, selection stays unchanged
+    if (IsGroupMode() && new_unit && !new_unit->is_enemy)
+    {
+        ToggleUnitInActiveGroup(new_unit);
+        return(unit_selection);
+    }
+
+
 	if (unit_selection && unit_selection == new_unit)
 	{
 		// selection of already selected unit: detect if there is air-land pair and swap selection
@@ -9690,7 +10104,297 @@ int SpellMap::Tick()
 	if (!unit)
 		return(update);
 
-	// === Unit state machine ===
+	
+	// === Group multi-move support ===
+	// The original Tick state machine processes only the selected unit.
+	// For Spellcross group move we must advance movement for ALL units that have a pending move path.
+	if (isGameMode())
+	{
+		LockMap();
+		for (auto* mu : units)
+		{
+			if (!mu) continue;
+			if (mu == unit) continue; // keep selected unit handled by the original state machine below
+			if (mu->move_state == MapUnit::MOVE_STATE::IDLE) continue;
+
+			MapUnit* unit = mu;
+
+					// === UNIT MOVEMENT ===
+
+					//unit_action_lock.lock();
+
+					if (unit->unit->usingTeleportMove())
+					{
+						// --- teleport move mode:
+
+						if (unit->move_state == MapUnit::MOVE_STATE::TURRET)
+						{
+							// turn unit to match teleport animation
+							int azim_count = unit->unit->gr_base->stat.azimuths;
+							int delta_azim = mod(0x0A - unit->azimuth + azim_count / 2, azim_count) - azim_count / 2;
+							if (delta_azim == 0)
+							{
+								// aligned: done										
+								unit->frame = -1;
+								unit->move_state = MapUnit::MOVE_STATE::TELEPORT_IN;
+							}
+							else if (delta_azim > 0)
+								unit->azimuth++;
+							else
+								unit->azimuth--;
+							if (unit->azimuth < 0)
+								unit->azimuth += azim_count;
+							else if (unit->azimuth >= azim_count)
+								unit->azimuth -= azim_count;
+
+							update = true;
+						}
+						else if (unit->move_state == MapUnit::MOVE_STATE::TELEPORT_IN && tick_30ms)
+						{
+							// play teleport animation
+
+							if (unit->frame < 0)
+							{
+								// start animation				
+								unit->in_animation = unit->unit->gr_action;
+								unit->azimuth = 0; // animation has no azimuth!
+
+								// play move sound (async)
+								unit->PlayMove();
+
+								// update view of all but this unit:
+								unit_view->ClearUnitsView();
+								unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true, unit);
+								unit_view->StoreUnitsView(unit->is_enemy);
+								if (!unit->is_enemy)
+									unit_view->AddUnitView(unit);
+
+								// go directly to last step
+								unit->move_step = unit->move_nodes.size() - 1;
+							}
+
+							unit->frame++;
+							if (unit->frame >= unit->in_animation->anim.frames)
+							{
+								// unit disappeared:
+
+								// move unit
+								auto next_pos = unit->move_nodes[unit->move_step];
+								unit->action_points -= (next_pos.g_cost - 0);
+								unit->coor = next_pos.pos;
+
+								// stop move sound (async - this is just flag to shut down in next sound frame)
+								unit->PlayStop();
+
+								// resort units in map
+								SortUnits();
+
+								// play the animation backwards
+								unit->move_state = MapUnit::MOVE_STATE::TELEPORT_OUT;
+							}
+
+							update = true;
+						}
+						if (unit->move_state == MapUnit::MOVE_STATE::TELEPORT_OUT && tick_30ms)
+						{
+							// teleport out
+
+							unit->frame--;
+							if (unit->frame < 0)
+							{
+								// unit again visible:					
+
+								// update this unit view
+								unit_view->RestoreUnitsView(unit->is_enemy);
+								SpellMapEventsList events;
+								int new_contact;
+								if (!unit->is_enemy)
+								{
+									unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+									HideEnemiesOutsidePlayerView(this, unit_view);
+								}
+								else 
+								{
+									new_contact = 0;
+									UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, &new_contact);
+								}
+								if (new_contact)
+								{
+									unit->PlayContact();
+								}
+								// append events
+								event_list.insert(event_list.end(), events.begin(), events.end());
+
+								// check and append TransportUnit/SaveUnit events
+								for (auto& trig_event : unit->trig_events)
+									if (trig_event->CheckUnitInPos(true))
+										event_list.push_back(trig_event);
+
+								// done					
+								unit->in_animation = NULL;
+								unit->azimuth = 0x0A; // azimuth matching teleport animation which has only one azimumth
+								unit->move_nodes.clear();
+								unit->was_moved = true; // this will force range recalculation
+								unit->move_state = MapUnit::MOVE_STATE::IDLE;
+							}
+
+							update = true;
+						}
+
+					}
+					else
+					{
+						if (unit->move_state == MapUnit::MOVE_STATE::TURRET)
+						{
+							// turret allign:
+							if (unit->unit->hasTurret())
+							{
+								// has turret: align it first with rest of vehicle
+
+								unit->move_state = MapUnit::MOVE_STATE::MOVE;
+								unit->move_step = 0;
+							}
+							else
+							{
+								// no turret: skip step
+								unit->move_state = MapUnit::MOVE_STATE::MOVE;
+								unit->move_step = 0;
+							}
+
+						}
+						else if (unit->move_state == MapUnit::MOVE_STATE::MOVE)
+						{
+							// movement:
+
+							if (unit->move_step == 0)
+							{
+								// first step:
+
+								// play move sound (async)
+								unit->PlayMove();
+
+								// start animation
+								unit->frame = -1;
+								if (unit->unit->gr_base->anim.frames)
+									unit->in_animation = unit->unit->gr_base;
+
+								// update view of all but this unit:
+								unit_view->ClearUnitsView();
+								unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true, unit);
+								unit_view->StoreUnitsView(unit->is_enemy);
+								if (!unit->is_enemy)
+									unit_view->AddUnitView(unit);
+
+							}
+
+							auto this_pos = unit->coor;
+
+							int ap_prev = 0;
+							if (unit->move_step)
+								ap_prev = unit->move_nodes[unit->move_step - 1].g_cost;
+
+							auto next_pos = unit->move_nodes[unit->move_step++];
+
+							HaltUnitRanging(true);
+							unit->action_points -= (next_pos.g_cost - ap_prev);
+							unit->coor = next_pos.pos;
+							ResumeUnitRanging(false);
+
+							double azimuth = this_pos.Angle(next_pos.pos);
+
+							// resort units in map
+							unit_view->WaitIdle();
+							SortUnits();
+
+							// update this unit view
+							unit_view->RestoreUnitsView(unit->is_enemy);
+							SpellMapEventsList events;
+							int new_contact = 0;
+							if (!unit->is_enemy)
+							{
+								unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+								HideEnemiesOutsidePlayerView(this, unit_view);
+							}
+							else
+							{
+								UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
+							}
+							if (new_contact)
+							{
+								// enemy contact event:
+								unit->PlayContact();
+							}
+							// append eventual events
+							event_list.insert(event_list.end(), events.begin(), events.end());
+
+							// check and append TransportUnit/SaveUnit events
+							for (auto& trig_event : unit->trig_events)
+								if (trig_event->CheckUnitInPos(true))
+									event_list.push_back(trig_event);
+
+
+							if (unit->in_animation)
+							{
+								// animated move
+								unit->azimuth = unit->unit->gr_base->GetAnimAzim(azimuth);
+								unit->frame++;
+								if (unit->frame >= unit->in_animation->anim.frames)
+									unit->frame = 0;
+							}
+							else
+							{
+								// static
+								unit->azimuth = unit->unit->gr_base->GetStaticAzim(azimuth);
+							}
+							unit->azimuth_turret = unit->azimuth;
+
+							bool stop_for_events = false;
+							for (auto* e : events)
+							{
+								if (!e) continue;
+
+								// SEE_* jsou jen info (fog-of-war reveal) -> NERUŠIT pohyb
+								if (e->evt_type == SpellMapEventRec::EvtTypes::EVT_SEE_PLACE) continue;
+								if (e->evt_type == SpellMapEventRec::EvtTypes::EVT_SEE_UNIT)  continue;
+
+								stop_for_events = true;
+								break;
+							}
+
+							//if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+
+							//if (new_contact || stop_for_events || unit->move_step >= unit->move_nodes.size())
+
+							if (unit->move_step >= unit->move_nodes.size())
+
+							{
+								// movement done:
+								unit->move_state = MapUnit::MOVE_STATE::IDLE;
+								unit->move_nodes.clear();
+								unit->was_moved = true; // this will force range recalculation
+
+								// stop move sound (async - this is just flag to shut donw in next sound frame)
+								unit->PlayStop();
+
+								// stop animation (switch to static)
+								unit->in_animation = NULL;
+								unit->azimuth = unit->unit->gr_base->GetStaticAzim(azimuth);
+								unit->frame = 0;
+							}
+
+						}
+
+						update = true;
+					}
+
+					//unit_action_lock.unlock();
+
+
+
+		}
+		ReleaseMap();
+	}
+// === Unit state machine ===
 	LockMap();
 	if (unit->move_state != MapUnit::MOVE_STATE::IDLE)
 	{
@@ -9784,7 +10488,10 @@ int SpellMap::Tick()
 					SpellMapEventsList events;
 					int new_contact;
 					if (!unit->is_enemy)
+					{
 						unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+						HideEnemiesOutsidePlayerView(this, unit_view);
+					}
 					else
 					{
 						new_contact = 0;
@@ -9883,7 +10590,10 @@ int SpellMap::Tick()
 				SpellMapEventsList events;
 				int new_contact = 0;
 				if (!unit->is_enemy)
+				{
 					unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+					HideEnemiesOutsidePlayerView(this, unit_view);
+				}
 				else
 				{
 					UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
@@ -9917,7 +10627,10 @@ int SpellMap::Tick()
 				}
 				unit->azimuth_turret = unit->azimuth;
 
-				if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+				//if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
+
+				if (unit->move_step >= unit->move_nodes.size())
+
 				{
 					// movement done:
 					unit->move_state = MapUnit::MOVE_STATE::IDLE;
@@ -10640,7 +11353,10 @@ int SpellMap::Tick()
 			SpellMapEventsList events;
 			int new_contact = 0;
 			if (!unit->is_enemy)
+			{
 				unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
+				HideEnemiesOutsidePlayerView(this, unit_view);
+			}
 			else
 			{
 				UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
@@ -10690,6 +11406,7 @@ int SpellMap::Tick()
 
 	// try process pending events
 	ProcEventsList(event_list);
+	CheckAndTriggerMissionEnd();
 
 	// repaint
 	return(update);
@@ -10701,7 +11418,6 @@ void SpellMap::SetMessageInterface(SpellMessageCraeteFunPtr create_msg, SpellMes
 	m_msg_creator = create_msg;
 	m_msg_checker = msg_checker;
 }
-
 
 // get unit by its id
 MapUnit* SpellMap::GetUnit(int id)

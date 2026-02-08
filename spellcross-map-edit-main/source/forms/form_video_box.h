@@ -39,5 +39,9 @@ private:
 
     void cbNewAudioFrame(void);
     void OnNewAudioFrame(wxThreadEvent& event);
+
+    bool m_closing = false;       // aby se Close() nevolalo opakovanì
+    bool m_done_sent = false;     // aby se parentovi neposílal done event víckrát
+
 };
 

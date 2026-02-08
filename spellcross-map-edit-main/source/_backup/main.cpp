@@ -1161,17 +1161,121 @@ void MainFrame::OnSelectUnitView(wxCommandEvent& event)
     }
 }
 
+void MainFrame::StartMissionEndFlow()
+{
+    // 1) Pokud je video, přehraj ho a až pak pokračuj
+    if (!m_mission_end_req.movie_path.empty())
+    {
+        // zavři případný seznam videí
+        if (form_videos)
+        {
+            form_videos->Close();
+            form_videos = NULL;
+        }
+
+        // přehraj cutscénu
+        if (!FindWindowById(ID_VIDEO_BOX_WIN))
+        {
+            // FormVideoBox rodič používáš canvas (stejně jako message boxy)
+            form_video_box = new FormVideoBox(
+                canvas,
+                ID_VIDEO_BOX_WIN,
+                spell_data,
+                std::string(m_mission_end_req.movie_path.begin(), m_mission_end_req.movie_path.end()),
+                2
+            );
+        }
+
+        // až se video okno zavře, dojde CLOSE event na parent (viz FormVideoBox::OnClose)
+        // takže pokračování dáme do handleru:
+        canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+        return;
+    }
+
+    // 2) Bez videa – rovnou přejdi na strategickou
+    OpenStrategicAndLoadNext();
+}
 
 
 
 // map animation periodic refresh tick
 void MainFrame::OnTimer(wxTimerEvent& event)
 {
-    if(!spell_map->IsLoaded())
+    if (!spell_map->IsLoaded())
         return;
-    if(spell_map->Tick())
+
+    if (spell_map->Tick())
         canvas->Refresh();
+
+    // Mission-end flow (po ticku)
+    if (spell_map->isGameMode() && !m_mission_end_flow)
+    {
+        SpellMap::MissionEndRequest req;
+        if (spell_map->ConsumeMissionEndRequest(req))
+        {
+            m_mission_end_flow = true;
+            m_mission_end_req = req;
+
+            StartMissionEndFlow(); // nová metoda v MainFrame
+        }
+    }
 }
+
+void MainFrame::OnCutsceneClosed(wxCloseEvent& ev)
+{
+    ev.Skip(); // neblokuj zavření
+
+    // pokračuj na strategickou
+    OpenStrategicAndLoadNext();
+}
+
+static std::string find_def_candidate(const std::string& name)
+{
+    namespace fs = std::filesystem;
+
+    // zkus pár běžných míst (podle toho, jak dumpuješ FS)
+    const fs::path candidates[] = {
+        fs::current_path() / "temp" / name,
+        fs::current_path() / "temp" / "COMMON" / name,
+        fs::current_path() / name
+    };
+
+    for (const auto& p : candidates)
+        if (fs::exists(p))
+            return p.string();
+
+    return name; // fallback
+}
+
+void MainFrame::OpenStrategicAndLoadNext()
+{
+    const std::wstring nextW = m_mission_end_req.next_level_def;
+    std::string nextDef = nextW.empty()
+        ? std::string()
+        : find_def_candidate(std::string(nextW.begin(), nextW.end()));
+
+    if (!nextDef.empty())
+    {
+        LevelData lvl;
+        std::string err;
+        LevelLoader loader;
+        if (!loader.LoadLevelDef(nextDef, lvl, &err))
+        {
+            wxMessageBox("Failed to load next level DEF:\n" + err, "Error", wxOK | wxICON_ERROR, this);
+        }
+        else
+        {
+            auto* win = new StrategicLevelFrame(this, lvl);
+            win->Show();
+            win->Raise();
+        }
+    }
+
+    // reset flow flag
+    m_mission_end_flow = false;
+}
+
+
 // on main panel resizing
 void MainFrame::OnResize(wxSizeEvent& event)
 {
@@ -2571,7 +2675,17 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
             else
             {
                 // game mode:
-                int options = spell_map->GetUnitOptions();
+                if (spell_map->IsGroupMode())
+                {
+                    // group mode = no unit options menu: toggle units / move immediately (like original)
+                    if (cur_unit && !cur_unit->is_enemy)
+                        spell_map->SelectUnit(cur_unit);
+                    else
+                        spell_map->MoveUnit(select_pos);
+                }
+                else
+                {
+int options = spell_map->GetUnitOptions();
                 
                 // reduce attack options if only one target is possible
                 if(!!(options & SpellMap::UNIT_OPT_LOWER) != !!(options & SpellMap::UNIT_OPT_UPPER))
@@ -2584,6 +2698,7 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
                     pos.x -= 15;
                     pos.y -= 15;
                     form_unit_opts = new FormUnitOpts(canvas,ID_UNIT_MODE_WIN,pos,spell_data,options,bind(&MainFrame::OnUnitClick_cb,this,placeholders::_1));
+                }
                 }
             }
         }
@@ -2746,10 +2861,34 @@ void MainFrame::OnCanvasMouseWheel(wxMouseEvent& event)
 // on canvas key down
 void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
 {
-    int key = event.GetKeyCode();
-    if(event.ControlDown())
+    if(!spell_map)
     {
+        event.Skip();
+        return;
     }
+
+    int key = event.GetKeyCode();
+
+    // Group move hotkeys (game mode only)
+    if(spell_map->isGameMode())
+    {
+        if(key >= '1' && key <= '8')
+        {
+            spell_map->SetActiveGroup(key - '0');
+            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
+            return;
+        }
+
+        if(key == '0' || key == WXK_ESCAPE)
+        {
+            spell_map->SetActiveGroup(0);
+            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
+            return;
+        }
+    }
+
+    // keep existing controls working
+    event.Skip();
 }
 
 

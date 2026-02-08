@@ -1161,17 +1161,152 @@ void MainFrame::OnSelectUnitView(wxCommandEvent& event)
     }
 }
 
+static bool g_cutscene_handled = false;
+
+
+void MainFrame::StartMissionEndFlow()
+{
+    // 1) Pokud je video, přehraj ho a až pak pokračuj
+    if (!m_mission_end_req.movie_path.empty())
+    {
+        // zavři případný seznam videí
+        if (form_videos)
+        {
+            form_videos->Close();
+            form_videos = NULL;
+        }
+
+        // přehraj cutscénu
+        if (!FindWindowById(ID_VIDEO_BOX_WIN))
+        {
+            // FormVideoBox rodič používáš canvas (stejně jako message boxy)
+            form_video_box = new FormVideoBox(
+                canvas,
+                ID_VIDEO_BOX_WIN,
+                spell_data,
+                std::string(m_mission_end_req.movie_path.begin(), m_mission_end_req.movie_path.end()),
+                2
+            );
+        }
+
+        g_cutscene_handled = false;
+        canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+
+        // až se video okno zavře, dojde CLOSE event na parent (viz FormVideoBox::OnClose)
+        // takže pokračování dáme do handleru:
+        canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+        return;
+    }
+
+    // 2) Bez videa – rovnou přejdi na strategickou
+    OpenStrategicAndLoadNext();
+}
 
 
 
 // map animation periodic refresh tick
 void MainFrame::OnTimer(wxTimerEvent& event)
 {
-    if(!spell_map->IsLoaded())
+    if (!spell_map->IsLoaded())
         return;
-    if(spell_map->Tick())
+
+    if (spell_map->Tick())
         canvas->Refresh();
+
+    // Mission-end flow (po ticku)
+    if (spell_map->isGameMode() && !m_mission_end_flow)
+    {
+        SpellMap::MissionEndRequest req;
+        if (spell_map->ConsumeMissionEndRequest(req))
+        {
+            m_mission_end_flow = true;
+            m_mission_end_req = req;
+
+            StartMissionEndFlow(); // nová metoda v MainFrame
+        }
+    }
 }
+
+//// on cutscene closed (after mission end)
+//void MainFrame::OnCutsceneClosed(wxCloseEvent& ev)
+//{
+//    ev.Skip(); // neblokuj zavření
+//
+//    // pokračuj na strategickou
+//    OpenStrategicAndLoadNext();
+//}
+
+void MainFrame::OnCutsceneClosed(wxCloseEvent& ev)
+{
+    if (g_cutscene_handled)
+    {
+        ev.Skip(false);
+        return;
+    }
+    g_cutscene_handled = true;
+
+    ev.Skip(false);
+
+    // Odpoj handler – ať se po otevření LEVEL_02 nechytá další close eventy
+    canvas->Unbind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+
+    // Teprve teď smaž video box (destruktor udělá form->Destroy())
+    if (form_video_box)
+    {
+        delete form_video_box;
+        form_video_box = NULL;
+    }
+
+    OpenStrategicAndLoadNext();
+}
+
+static std::string find_def_candidate(const std::string& name)
+{
+    namespace fs = std::filesystem;
+
+    // zkus pár běžných míst (podle toho, jak dumpuješ FS)
+    const fs::path candidates[] = {
+        fs::current_path() / "temp" / name,
+        fs::current_path() / "temp" / "COMMON" / name,
+        fs::current_path() / name
+    };
+
+    for (const auto& p : candidates)
+        if (fs::exists(p))
+            return p.string();
+
+    return name; // fallback
+}
+
+void MainFrame::OpenStrategicAndLoadNext()
+{
+    const std::wstring nextW = m_mission_end_req.next_level_def;
+    std::string nextDef = nextW.empty()
+        ? std::string()
+        : find_def_candidate(std::string(nextW.begin(), nextW.end()));
+
+    if (!nextDef.empty())
+    {
+        LevelData lvl;
+        std::string err;
+        LevelLoader loader;
+        if (!loader.LoadLevelDef(nextDef, lvl, &err))
+        {
+            wxMessageBox("Failed to load next level DEF:\n" + err, "Error", wxOK | wxICON_ERROR, this);
+        }
+        else
+        {
+            auto* win = new StrategicLevelFrame(this, lvl);
+            win->Show();
+            win->Raise();
+        }
+    }
+
+    // reset flow flag
+    m_mission_end_flow = false;
+}
+
+
 // on main panel resizing
 void MainFrame::OnResize(wxSizeEvent& event)
 {

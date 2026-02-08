@@ -110,8 +110,13 @@ public:
     // Switch between editor/game mode (also updates UI + resets game state when entering).
     void SetGameModeUI(bool enable_game_mode);
 
+    bool m_mission_end_flow = false;
+    SpellMap::MissionEndRequest m_mission_end_req;
 
-    // === Pøidejte tento øádek do public sekce ===
+    void StartMissionEndFlow();
+    void OnCutsceneClosed(wxCloseEvent& ev);
+    void OpenStrategicAndLoadNext();
+   
     SpellData* spell_data;
 
 private:

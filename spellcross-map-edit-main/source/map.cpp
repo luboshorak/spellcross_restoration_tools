@@ -861,16 +861,27 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (!isGameMode())
 		return;
 
+	// HARD LATCH: mission end smí proběhnout jen jednou pro aktuálně nahranou misi
+	if (m_mission_end_fired)
+		return;
+
 	// už jsme to ukázali
 	if (m_mission_end_shown)
 	{
-		// čekáme až hráč zavře okno; jakmile UI není "busy", tak to bereme jako ACK
-		if (!m_mission_end_ack && m_msg_checker && !m_msg_checker())
+		// čekáme až hráč zavře okno; jakmile UI není "busy", tak to bereme jako ACK.
+		// Pozor: m_msg_checker může být null -> v takovém případě nesmí flow viset.
+		if (!m_mission_end_ack)
 		{
-			m_mission_end_ack = true;
-
-			// od této chvíle může UI vrstva provést přechod (video / strategic)
-			m_mission_end_req.pending = true;
+			if (!m_msg_checker)
+			{
+				m_mission_end_ack = true;
+				m_mission_end_req.pending = true;
+			}
+			else if (!m_msg_checker())
+			{
+				m_mission_end_ack = true;
+				m_mission_end_req.pending = true;
+			}
 		}
 		return;
 	}
@@ -879,45 +890,90 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (m_msg_checker && m_msg_checker())
 		return;
 
-	if (!AreAllObjectivesDone())
-		return;
+	// --- success condition ---
+	bool success = AreAllObjectivesDone();
 
-	// SUCCESS (zatím jen success, fail si můžeš dodělat podobně při "player defeated")
-	m_mission_end_req.success = true;
-
-	// Text pro okno: params.end_ok_text je ID/klíč do texts
-	SpellTextRec* txt = nullptr;
-	if (!params.end_ok_text.empty())
-		txt = spelldata->texts->GetText(params.end_ok_text);
-
-	// fallback, kdyby klíč neexistoval
-	if (!txt)
-		txt = spelldata->texts->GetText("MISSION_COMPLETE"); // pokud něco takového máš, jinak nech NULL
-
-	m_mission_end_req.text = txt;
-
-	// Special: po první misi – video + load LEVEL_02.DEF
+	// Special: po první misi dovol success i bez objective, když velitel dojede na EscapeSquare (transport)
 	std::wstring stem = std::filesystem::path(map_path).stem().wstring();
 	for (auto& ch : stem) ch = (wchar_t)towupper(ch);
 
 	const bool is_first =
 		(stem == L"M01_01") || (stem == L"LEVEL_01") || (stem == L"LEVEL1_1") || (stem == L"LEVEL_01_01");
 
+	if (!success && is_first)
+	{
+		MapUnit* commander = nullptr;
+
+		for (auto* u : units)
+		{
+			if (!u) continue;
+			if (u->is_enemy) continue;
+			if (u->is_commander) { commander = u; break; }
+		}
+		if (!commander)
+		{
+			for (auto* u : units)
+			{
+				if (!u) continue;
+				if (u->is_enemy) continue;
+				commander = u;
+				break;
+			}
+		}
+
+		if (commander)
+		{
+			const MapXY pos = commander->coor;
+			for (auto& e : escape)
+			{
+				if (e == pos)
+				{
+					success = true;
+					break;
+				}
+			}
+		}
+	}
+
+	if (!success)
+		return;
+
+	// !!! KLÍČ: latch nastav hned, než cokoliv zobrazíš (jinak se to znovu triggne v dalším ticku)
+	m_mission_end_fired = true;
+
+	// SUCCESS
+	m_mission_end_req.success = true;
+
+	SpellTextRec* txt = nullptr;
+	if (!params.end_ok_text.empty())
+		txt = spelldata->texts->GetText(params.end_ok_text);
+
+	if (!txt)
+		txt = spelldata->texts->GetText("MISSION_COMPLETE");
+
+	m_mission_end_req.text = txt;
+
 	if (is_first)
 	{
-		m_mission_end_req.movie_path = L"temp/movie/LEVEL1_1.DPK";
+		// DŮLEŽITÉ: posílej název entry v MOVIE.FS, ne filesystem cestu
+		m_mission_end_req.movie_path = L"LEVEL1_1.DPK";
 		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
 	}
 
-	// Tady se to okno opravdu zobrazí (HUD message)
 	if (m_msg_creator && m_mission_end_req.text)
 	{
-		// druhý parametr: dej TRUE pokud to má čekat na OK od hráče
-		// třetí parametr: nech NULL – ACK si hlídáme přes m_msg_checker()
 		m_msg_creator(m_mission_end_req.text, true, NULL);
 		m_mission_end_shown = true;
+		// pending se nastaví až po ACK v horní větvi
+	}
+	else
+	{
+		// bez UI hooku -> pusť přechod rovnou
+		m_mission_end_ack = true;
+		m_mission_end_req.pending = true;
 	}
 }
+
 
 
 static bool ExtractQuotedField(const std::string& text, const char* key, std::string& out)
@@ -1390,6 +1446,12 @@ void SpellMap::Close()
 
 	// default mission parameters
 	params.Clear();
+
+	// reset mission-end flow state
+	m_mission_end_shown = false;
+	m_mission_end_ack = false;
+	m_mission_end_req = MissionEndRequest();
+	m_mission_end_fired = false;
 
 	SetDefaultRenderFilter(NULL);
 	SetRenderFilter(NULL);

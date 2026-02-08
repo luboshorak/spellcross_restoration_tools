@@ -232,6 +232,7 @@ typedef struct{
 // main spellcross map class
 class SpellMap
 {
+public:
 	struct MissionEndRequest
 	{
 		bool pending = false;
@@ -244,6 +245,7 @@ class SpellMap
 	bool m_mission_end_shown = false;
 	bool m_mission_end_ack = false;
 	MissionEndRequest m_mission_end_req;
+	bool m_mission_end_fired = false;   // jednorázová pojistka: mission end už byl vyvolán
 
 	private:
 		// enemy turn state

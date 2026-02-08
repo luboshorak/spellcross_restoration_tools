@@ -12,6 +12,7 @@
 
 #include "cstdint"
 #include <vector>
+#include <array>
 #include <queue>
 #include <thread>
 #include <mutex>
@@ -231,6 +232,20 @@ typedef struct{
 // main spellcross map class
 class SpellMap
 {
+public:
+	struct MissionEndRequest
+	{
+		bool pending = false;
+		bool success = false;
+		SpellTextRec* text = nullptr;     // text pro HUD okno
+		std::wstring movie_path;          // LEVEL1_1.DPK
+		std::wstring next_level_def;      // LEVEL_02.DEF
+	};
+
+	bool m_mission_end_shown = false;
+	bool m_mission_end_ack = false;
+	MissionEndRequest m_mission_end_req;
+
 	private:
 		// enemy turn state
 		bool enemy_turn_running = false;
@@ -243,7 +258,6 @@ class SpellMap
 		std::vector<MapUnit*> panic_turn_list;
 		size_t panic_turn_idx = 0;
 		MapUnit* panic_turn_restore_selection = nullptr;
-
 		// enemy turn helpers (implemented in map.cpp)
 		void StartEnemyTurn();
 		void EndEnemyTurn();
@@ -309,6 +323,13 @@ class SpellMap
 		MapUnit *unit_selection;
 		int unit_selection_mod;
 		int unit_sel_land_preference;
+
+		// --- Group move (multi-unit selection) ---
+		int active_group = 0; // 0=off, 1..8 active slot
+		std::array<std::vector<int>, 9> group_units; // store MapUnit::id, [1..8] used
+		void RemoveUnitFromAllGroups(int unit_id);
+		void ToggleUnitInActiveGroup(MapUnit* u);
+
 
 		// sound selection
 		MapSound *sound_selection;
@@ -385,6 +406,10 @@ class SpellMap
 		};
 
 	public:
+
+		bool ConsumeMissionEndRequest(MissionEndRequest& out);
+		bool AreAllObjectivesDone() const;
+		void CheckAndTriggerMissionEnd();
 
 		static constexpr int SELECT_ADD = 1;
 		static constexpr int SELECT_CLEAR = 2;
@@ -799,6 +824,14 @@ class SpellMap
 		void OnHUDairLandTakeOff();
 		void OnHUDfortresToggle();
 		void OnHUDcreateUnit();
+
+		// --- Group move (multi-unit selection) ---
+		void SetActiveGroup(int g);   // g: 0..8 (0 disables group mode)
+		int  GetActiveGroup() const { return active_group; }
+		bool IsGroupMode() const { return active_group != 0; }
+		bool IsUnitInActiveGroup(const MapUnit* u) const;
+
+        // --- Group move API ---
 		
 
 		MapUnit* GetUnit(int id);		

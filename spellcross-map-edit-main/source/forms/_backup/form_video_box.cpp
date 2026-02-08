@@ -13,8 +13,6 @@ FormVideoBox::FormVideoBox(wxPanel* parent,wxWindowID win_id,SpellData* spell_da
 {
     m_spelldata = spell_data;
 
-    m_closing = false;
-    m_done_sent = false;
 
     // NOTE: `name` can be either just an FS entry (e.g. "LEVEL1_1.DPK") or a filesystem path
     // (e.g. "temp/MOVIE/LEVEL1_1.DPK"). SpellVideo expects the archive entry name.
@@ -160,28 +158,14 @@ FormVideoBox::~FormVideoBox()
     delete m_frame;
     m_frame = NULL;
 
-    if (form)
-    {
-        form->Unbind(wxEVT_CLOSE_WINDOW, &FormVideoBox::OnClose, this);
-        form->Unbind(wxEVT_THREAD, &FormVideoBox::OnNewAudioFrame, this);
-    }
-
-    if (form)
-    {
-        form->Destroy();
-        form = NULL;
-    }
-
+    form->Destroy();
 }
 
 // callback when new audio frame is submitted (time critical!), called from another thread, so no touchy to GUI here!
 void FormVideoBox::cbNewAudioFrame(void)
 {
-    if (!form || m_closing)   // <- dùležité, a to po Close už nesype eventy
-        return;
-
     wxThreadEvent* evt = new wxThreadEvent();
-    wxQueueEvent(form, evt);
+    wxQueueEvent(form,evt);
 }
 
 // on new audio frame (GUI thread event)
@@ -201,12 +185,8 @@ void FormVideoBox::OnNewAudioFrame(wxThreadEvent& event)
         form->Refresh();
     }
 
-    if (m_sound && m_sound->isDone() && !m_closing)
-    {
-        m_closing = true;
-        form->Close(); // vyvolá OnClose právì jednou
-    }
-
+    if(m_sound->isDone())
+        form->Close();
 }
 
 // stop audio playback
@@ -220,43 +200,13 @@ void FormVideoBox::StopPlayback()
     m_sound = NULL;
 }
 
-//// funkcni blok pro ukonceni formu (a posilani zpravy rodici)
-//void FormVideoBox::OnClose(wxCloseEvent& ev)
-//{       
-//    // terminate (and send message to parent)
-//    form->DeletePendingEvents();
-//    wxQueueEvent(form->GetParent(),new wxCloseEvent(ev));    
-//}
 
 void FormVideoBox::OnClose(wxCloseEvent& ev)
-{
-    m_closing = true;
-
-    // nechceme to poslat 2x (Destroy / další close / cokoliv)
-    if (m_done_sent)
-    {
-        ev.Skip(false);
-        return;
-    }
-    m_done_sent = true;
-
-    // okamžitì usekni audio + pøísun thread eventù
-    StopPlayback();
-    form->Unbind(wxEVT_THREAD, &FormVideoBox::OnNewAudioFrame, this);
-
-    // signal parentovi "cutscene done"
-    wxCloseEvent* done = new wxCloseEvent(wxEVT_CLOSE_WINDOW);
-    done->SetId(form->GetId());     // ID_VIDEO_BOX_WIN
-    done->SetEventObject(form);
-    wxQueueEvent(form->GetParent(), done);
-
-    // schovej okno; reálné Destroy udìlá destruktor wrapperu
-    form->Hide();
-
-    // nedovol defaultní close, jinak se ti to mùže rozbít poøadím destroyù
-    ev.Skip(false);
+{       
+    // terminate (and send message to parent)
+    form->DeletePendingEvents();
+    wxQueueEvent(form->GetParent(),new wxCloseEvent(ev));    
 }
-
 
 void FormVideoBox::OnPaintTab(wxPaintEvent& event)
 {           
