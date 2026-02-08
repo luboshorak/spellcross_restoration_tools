@@ -2020,11 +2020,11 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 	// attack strength
 	double attack = GetAttack(target);
 	
-	// reduce attack by man state of unit
-	if(target->unit->isSingleMan())
-		attack *= (double)(unit->GetHP() - wounded)/unit->GetHP();
+	// reduce attack by man state of ATTACKER unit (not target)
+	if (unit->isSingleMan())
+		attack *= (double)(unit->GetHP() - wounded) / unit->GetHP();
 	else
-		attack *= (double)man/unit->GetHP();
+		attack *= (double)man / unit->GetHP();
 
 	// target defence
 	double defence = target->GetDefence();

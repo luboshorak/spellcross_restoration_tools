@@ -45,32 +45,68 @@ namespace
 {
     // For enemy movement: update ONLY the enemy unit's visibility based on the player's current view mask,
     // without overwriting unit_view->view (which would reveal the map).
-    static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
-    {
-        if (!map || !unit_view || !enemy)
-            return;
+    //static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
+    //{
+    //    if (!map || !unit_view || !enemy)
+    //        return;
 
-        int mxy = map->ConvXY(enemy->coor);
-        if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
-            return;
+    //    int mxy = map->ConvXY(enemy->coor);
+    //    if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
+    //        return;
 
-        const bool currently_visible = (unit_view->view[mxy] == 2);
+    //    const bool currently_visible = (unit_view->view[mxy] == 2);
 
-        if (currently_visible)
-        {
-            if (enemy->is_visible < 2 && new_contact)
-                *new_contact = 1;
+    //    if (currently_visible)
+    //    {
+    //        if (enemy->is_visible < 2 && new_contact)
+    //            *new_contact = 1;
 
-            enemy->is_visible = 2;
-            enemy->was_seen = true;
-        }
-        else
-        {
-            // was visible -> degrade to "known but not currently visible"
-            if (enemy->is_visible > 1)
-                enemy->is_visible = 1;
-        }
-    }
+    //        enemy->is_visible = 2;
+    //        enemy->was_seen = true;
+    //    }
+    //    else
+    //    {
+    //        // was visible -> degrade to "known but not currently visible"
+    //        if (enemy->is_visible > 1)
+    //            enemy->is_visible = 1;
+    //    }
+    //}
+
+	static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
+	{
+		if (!map || !unit_view || !enemy)
+			return;
+
+		int mxy = map->ConvXY(enemy->coor);
+		if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
+			return;
+
+		const bool currently_visible = (unit_view->view[mxy] == 2);
+
+		if (currently_visible)
+		{
+			// právě se stala viditelnou => vynutit refresh vykreslení
+			if (enemy->is_visible < 2)
+			{
+				enemy->was_moved = true;       // <-- DŮLEŽITÉ
+				if (new_contact)
+					*new_contact = 1;
+			}
+
+			enemy->is_visible = 2;
+			enemy->was_seen = true;
+		}
+		else
+		{
+			// was visible -> degrade to "known but not currently visible"
+			if (enemy->is_visible > 1)
+			{
+				enemy->is_visible = 1;
+				enemy->was_moved = true;       // <-- taky dobré, aby hned zmizela
+			}
+		}
+	}
+
 
 	static void HideEnemiesOutsidePlayerView(SpellMap* map, SpellMap::ViewRange* unit_view)
 	{
@@ -9526,8 +9562,12 @@ void SpellMap::ViewRange::Worker()
 											events_list.push_back(trig_event);
 									}
 									// set unit seen flag
+									if (unit->is_visible < 2)  // právě se stala viditelnou
+										unit->was_moved = true; // vynutí překreslení sprite
+
 									unit->is_visible = 2;
 									unit->was_seen = true;
+
 									unit = unit->next;
 								}
 							}
@@ -9610,8 +9650,12 @@ void SpellMap::ViewRange::Worker()
 										events_list.push_back(trig_event);
 								}
 								// mark unit as seen
+								if (unit->is_visible < 2)  // právě se stala viditelnou
+									unit->was_moved = true; // vynutí překreslení sprite
+
 								unit->is_visible = 2;
 								unit->was_seen = true;
+
 								unit = unit->next;
 							}
 						}
