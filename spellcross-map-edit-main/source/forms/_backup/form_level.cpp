@@ -41,6 +41,31 @@ wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
     EVT_BUTTON(StrategicLevelFrame::ID_BTN_STATS, StrategicLevelFrame::OnShowStats)
 wxEND_EVENT_TABLE()
 
+static void MakeChildTransparent(wxWindow* w)
+{
+    if (!w) return;
+    wxWindow* parent = w->GetParent();
+    if (parent)
+        w->SetBackgroundColour(parent->GetBackgroundColour());
+
+    w->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+}
+
+static void MakeChildrenTransparentRecursive(wxWindow* root)
+{
+    if (!root) return;
+
+    // Použij i na root – např. panely vevnitř
+    MakeChildTransparent(root);
+
+    const wxWindowList& children = root->GetChildren();
+    for (wxWindowList::const_iterator it = children.begin(); it != children.end(); ++it)
+    {
+        wxWindow* child = *it;
+        MakeChildrenTransparentRecursive(child);
+    }
+}
+
 // UI-only: readonly text panel under the territory grid (instead of popups)
 static const int ID_TERRITORY_TEXTBOX = wxID_HIGHEST + 2201;
 
@@ -371,6 +396,39 @@ static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const wxString& te
 //    return b;
 //}
 
+static wxString WrapButtonLabel(const wxString& src, int maxLen)
+{
+    wxString out;
+    out.reserve(src.length() + 8);
+
+    int col = 0;
+    int lastSpacePos = -1;
+    int lastOutPos = 0;
+
+    for (size_t i = 0; i < src.length(); ++i)
+    {
+        const wxChar ch = src[i];
+        out.Append(ch);
+        col++;
+
+        if (ch == ' ')
+        {
+            lastSpacePos = (int)i;
+            lastOutPos = (int)out.length();
+        }
+
+        if (col >= maxLen && lastSpacePos >= 0)
+        {
+            // nahradíme poslední mezeru za \n
+            out[lastOutPos - 1] = '\n';
+            col = (int)(out.length() - lastOutPos);
+            lastSpacePos = -1;
+        }
+    }
+
+    return out;
+}
+
 // Oprava: změňte návratový typ na wxButton* (nebo použijte správný typ v místě volání)
 static wxButton* CreateStrategicButton(
     wxWindow* parent,
@@ -381,7 +439,10 @@ static wxButton* CreateStrategicButton(
     const wxColour& background,
     const wxSize& minSize = wxDefaultSize)
 {
-    wxButton* btn = new wxButton(parent, id, text);
+    // např. wrap na ~12 znaků v řádku – můžeš doladit
+    wxString wrapped = WrapButtonLabel(text, 12);
+
+    wxButton* btn = new wxButton(parent, id, wrapped);
 
     btn->SetFont(font);
     btn->SetForegroundColour(textColor);
@@ -521,8 +582,6 @@ static std::string NowIsoLocal()
         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     return std::string(buf);
 }
-
-
 
 static wxString RankNameCz(int rank)
 {
@@ -720,7 +779,7 @@ static void try_append_text_set(wxString& info, const std::filesystem::path& bas
 }
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
-    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1320, 820),
+    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
               wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
       m_main(parent),
       m_spellData(parent ? parent->spell_data : nullptr),
@@ -743,6 +802,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     BuildUI();
     TryLoadBackground();
+    CenterOnParent();
 
     // Default: start NEW strategic state (do NOT auto-load autosave).
     // If autosave exists, ask user.
@@ -1301,14 +1361,38 @@ midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
     status->SetBackgroundColour(m_palette.background);
     auto* statusSizer = new wxBoxSizer(wxVERTICAL);
 
-    wxBitmap placeholder(1, 1);
-    m_lblMoney = new wxStaticBitmap(status, wxID_ANY, placeholder);
-    m_lblResearch = new wxStaticBitmap(status, wxID_ANY, placeholder);
-    m_lblTurn = new wxStaticBitmap(status, wxID_ANY, placeholder);
+    auto makeStatusRow = [&](const wxString& caption,
+        wxStaticText*& outCaption,
+        wxStaticText*& outValue)
+        {
+            auto* row = new wxBoxSizer(wxHORIZONTAL);
 
-    statusSizer->Add(m_lblMoney, 0, wxALL | wxALIGN_CENTER_HORIZONTAL, 6);
-    statusSizer->Add(m_lblResearch, 0, wxALL | wxALIGN_CENTER_HORIZONTAL, 6);
-    statusSizer->Add(m_lblTurn, 0, wxALL | wxALIGN_CENTER_HORIZONTAL, 6);
+            outCaption = new wxStaticText(status, wxID_ANY, caption);
+            outValue = new wxStaticText(status, wxID_ANY, "0");
+
+            outCaption->SetFont(m_fontHeading);
+            outValue->SetFont(m_fontHeading);
+
+            // caption – zeleně
+            outCaption->SetForegroundColour(m_palette.statusHeading);
+            // hodnota – šedě
+            outValue->SetForegroundColour(m_palette.statusNumber);
+
+            outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+            outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+
+            row->Add(outCaption, 0, wxRIGHT, 6);
+            row->Add(outValue, 0);
+
+            return row;
+        };
+
+    statusSizer->Add(makeStatusRow("Money:", m_lblMoneyCaption, m_lblMoneyValue),
+        0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+    statusSizer->Add(makeStatusRow("Research:", m_lblResearchCaption, m_lblResearchValue),
+        0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+    statusSizer->Add(makeStatusRow("Turn:", m_lblTurnCaption, m_lblTurnValue),
+        0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
 
     status->SetSizer(statusSizer);
     rightSizer->Add(status, 0, wxALL | wxEXPAND, 8);
@@ -1356,6 +1440,8 @@ midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
     rootSizer->Add(mainSizer, 1, wxEXPAND);
     root->SetSizer(rootSizer);
+    //použije rekurzivně transparentní pozadí na všechny elementy wx - opatrně!
+    //MakeChildrenTransparentRecursive(root);
 }
 
 void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
@@ -2408,26 +2494,12 @@ void StrategicLevelFrame::OnCommanderBeginDrag(wxListEvent& event)
 
 void StrategicLevelFrame::RefreshUI()
 {
-    UpdateStrategicLabel(
-        m_lblMoney,
-        { { "Money ", m_palette.statusHeading, &m_fontHeading },
-          { wxString::Format("%d", m_money), m_palette.statusNumber, &m_fontText } },
-        m_fontText,
-        m_palette.shadow);
-    UpdateStrategicLabel(
-        m_lblResearch,
-        { { "Research ", m_palette.statusHeading, &m_fontHeading },
-          { wxString::Format("%d", m_research), m_palette.statusNumber, &m_fontText } },
-        m_fontText,
-        m_palette.shadow);
-    UpdateStrategicLabel(
-        m_lblTurn,
-        { { "Turn ", m_palette.statusHeading, &m_fontHeading },
-          { wxString::Format("%d", m_turn), m_palette.statusNumber, &m_fontText } },
-        m_fontText,
-        m_palette.shadow);
-
-    
+    if (m_lblMoneyValue)
+        m_lblMoneyValue->SetLabel(wxString::Format("%d", m_money));
+    if (m_lblResearchValue)
+        m_lblResearchValue->SetLabel(wxString::Format("%d", m_research));
+    if (m_lblTurnValue)
+        m_lblTurnValue->SetLabel(wxString::Format("%d", m_turn));
 
 // Commanders list
 if(m_cmdRoster)

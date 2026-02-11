@@ -289,9 +289,12 @@ bool m_commanderNamesLoaded = false;
     wxStaticBitmap* m_lblPlayerMaxCmds = nullptr;
 
     // widgets
-    wxStaticBitmap* m_lblMoney = nullptr;
-    wxStaticBitmap* m_lblResearch = nullptr;
-    wxStaticBitmap* m_lblTurn = nullptr;
+    wxStaticText* m_lblMoneyCaption = nullptr;
+    wxStaticText* m_lblMoneyValue = nullptr;
+    wxStaticText* m_lblResearchCaption = nullptr;
+    wxStaticText* m_lblResearchValue = nullptr;
+    wxStaticText* m_lblTurnCaption = nullptr;
+    wxStaticText* m_lblTurnValue = nullptr;
 
     wxPanel* m_mapPanel = nullptr;
     wxPanel* m_territoryButtonsPanel = nullptr;

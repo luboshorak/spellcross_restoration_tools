@@ -1003,10 +1003,15 @@ void MainFrame::OnClose(wxCloseEvent& ev)
         delete form_units_list;
         form_units_list = NULL;
     }
-    else if(ev.GetId() == ID_MMENU_WIN && form_mmenu)
+    else if(ev.GetId() == ID_MMENU_WIN)
     {
-        delete form_mmenu;
-        form_mmenu = NULL;
+        // Menu may already be deleted by OnMainMenuAction CallAfter;
+        // guard against double-free.
+        if(form_mmenu)
+        {
+            delete form_mmenu;
+            form_mmenu = NULL;
+        }
     }
     else
         ev.Skip();
@@ -1070,70 +1075,72 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
 
 void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 {
-    auto close_menu = [this]() {
+    // Defer the actual work so that the mouse-click event handler in
+    // FormMainMenu finishes before we destroy the menu (avoids use-after-free).
+    CallAfter([this, action]() {
+
+        // Close the menu first (triggers ID_MMENU_WIN close handler which does delete).
         if(form_mmenu)
         {
             delete form_mmenu;
             form_mmenu = NULL;
         }
-    };
 
-    switch(action)
-    {
-        case FormMainMenuAction::NewGame:
+        switch(action)
         {
-            if(!spell_data)
-                break;
-            std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
-            auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
-            if(def_path.empty())
+            case FormMainMenuAction::NewGame:
             {
-                wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                if(!spell_data)
+                    break;
+                std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
+                auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
+                if(def_path.empty())
+                {
+                    wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                    break;
+                }
+                if(LoadMapFromDefPath(def_path.wstring(), {}))
+                    SetGameModeUI(true);
                 break;
             }
-            if(LoadMapFromDefPath(def_path.wstring(), {}))
-                SetGameModeUI(true);
-            break;
-        }
-        case FormMainMenuAction::Continue:
-        {
-            if(!spell_map || !spell_map->IsLoaded())
+            case FormMainMenuAction::Continue:
             {
-                wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                if(!spell_map || !spell_map->IsLoaded())
+                {
+                    wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                    break;
+                }
+                wstring path = spell_map->GetTopPath();
+                if(path.empty())
+                {
+                    wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
+                    break;
+                }
+                if(LoadMapFromDefPath(path, {}))
+                    SetGameModeUI(true);
                 break;
             }
-            wstring path = spell_map->GetTopPath();
-            if(path.empty())
+            case FormMainMenuAction::LoadGame:
             {
-                wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
+                if(LoadGameStateFromDialog())
+                    SetGameModeUI(true);
                 break;
             }
-            if(LoadMapFromDefPath(path, {}))
-                SetGameModeUI(true);
-            break;
+            case FormMainMenuAction::Credits:
+                wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+                break;
+            case FormMainMenuAction::Intro:
+                wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+                break;
+            case FormMainMenuAction::Exit:
+                if(spell_map)
+                    spell_map->Close();
+                Close(true);
+                break;
+            default:
+                break;
         }
-        case FormMainMenuAction::LoadGame:
-        {
-            if(LoadGameStateFromDialog())
-                SetGameModeUI(true);
-            break;
-        }
-        case FormMainMenuAction::Credits:
-            wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
-            break;
-        case FormMainMenuAction::Intro:
-            wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
-            break;
-        case FormMainMenuAction::Exit:
-            if(spell_map)
-                spell_map->Close();
-            Close(true);
-            break;
-        default:
-            break;
-    }
-
-    close_menu();
+    });
 }
 
 // on reset view range in game mode
