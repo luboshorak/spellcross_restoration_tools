@@ -1,8 +1,11 @@
 # Spellcross – restoration tools + úpravy map editoru (OpenSpellcross experiment)
 
-Tohle repo vzniklo jako fanouškovský pokus **oživit a zpřístupnit starý Spellcross** modernějším způsobem: nejdřív tím, že se v map editoru podařilo reálně rozběhat *game mode* (hraní na editované mapě), a následně tím, že kolem toho vznikla sada utilit na **extrakci, dekompresi a rekonstrukci herních dat a UI obrazovek**.
+Tohle repo je fanouškovský pokus **oživit a zpřístupnit starý Spellcross** modernějším způsobem.
 
-> Stav: **WIP / experiment**. Některé části jsou stabilní, jiné jsou “research tooling” a mohou být rozbité nebo nedodělané.
+- **Map editor (wxWidgets/C++)** postupně rozšířený o *game mode*.
+- **Python utility** pro extrakci, dekompresi a rekonstrukci herních dat / UI obrazovek.
+
+> Stav: **WIP / experiment**. Některé části jsou použitelné, jiné jsou “research tooling” a mohou být rozbité nebo nedodělané.
 
 ---
 
@@ -21,30 +24,69 @@ Originální map editor:
 
 ## Co je tohle za projekt?
 
-Původní myšlenka byla **oživit game mod v editoru** (viz credits výše) – to se podařilo.  
-Na to se nabalila další věc: udělat něco jako **OpenSpellcross** – tj. postupně zrekonstruovat to nejtěžší:
-- **načítání map**
-- **základní herní mechaniky**
-- a navrch postupně **rekonstrukci obrazovek mimo mapu (UI)**
+Původní myšlenka byla **oživit game mod v editoru** – to se podařilo a dál se to rozšiřuje o prvky, které v původním editoru nejsou.
+
+Druhý směr je něco jako **OpenSpellcross** – postupná rekonstrukce toho nejtěžšího:
+- načítání map a datových formátů
+- základní herní mechaniky
+- rekonstrukce obrazovek mimo mapu (Strategic level, Hierarchy, …)
+- postupně i “campaign / progression” logika
 
 Právě pro rekonstrukci UI a “asset pipeline” vznikla většina přiložených Python utilit.
 
 ---
 
-## Co je hotové
+## Co je hotové / v jakém stavu to je
 
-### Úpravy v map editoru
-- **Upravený game mode**
-  - možnost přidat jednotky na načtenou mapu
-  - po zapnutí game modu jde mapu “hrát”
+### Map editor + game mode (wxWidgets/C++)
+- **Game mode na mapě**
+  - možnost přidat jednotky na načtenou mapu a mapu „hrát“
+  - možnost hrát původní mise
   - **save/load stavu** rozehrané hry
-  - jednoduchá **AI pro nepřátelské jednotky** (můžete bojovat a nepřítel reaguje)
-  - pozn.: je to **buggy** a občas to umí **spadnout**
+  - jednoduchá **AI pro nepřátelské jednotky** (boj + reakce nepřítele) - AI je nedodělaná a obtížnost triviální!
+- **Skupinový pohyb hráčských jednotek (Group move)**
+  - přepínání aktivní skupiny a výběr jednotek do skupin
+  - hromadný přesun více jednotek jedním klikem
+  - pozn.: pořád se ladí okrajové stavy (např. kolize/stackování na jednom políčku)
+- **Strategic UI (rozpracováno)**
+  - `StrategicLevelFrame` + layout / background experimenty (transparentní wx prvky a PNG pozadí)
+  - `HierarchyCanvas` (ručně poskládané „stromové“ UI s absolutním rozmístěním)
+- **Ukládání / cesty**
+  - řeší se sjednocení cest pro save/load (některé verze používají `temp/COMMON` vs `save/` – může způsobovat „přetahování“ stavu)
+- **Původní / main menu**
 
-- Drobné úpravy načítání dat
-  - odstraněno pár bugů v načítání grafiky a `data/def` souborů
+> Pozn.: Game mode je použitelný, ale **není stabilní** – občasné pády a nedodělky jsou očekávané.
+
+---
+
+## Struktura repa (orientačně)
+
+- `spellcross-map-edit-main/` – C++/wxWidgets editor + game mode (hlavní appka)
+- `spell_extract_fs_gui/` – GUI pro rozbalení `.FS` archivů
+- `spell_decomp/` – nástroje pro dekompresi (LZ/LZ0/DELZ)
+- `bin_inspector/` – rychlá inspekce a extrakce obsahu z binů
+- `spellcross_level_tool_v5/` – skládání a rekonstrukce map/levelů
+- `bin_out/spell_ui_builder/` – skládání UI obrazovek z vytažených podkladů
+- různé `*_gui.py` a helpery – experimenty a dílčí pipeline kroky
+
+Názvy a umístění se mohou měnit – repo je živé a některé části jsou “workbench”.
+
+---
+
+## Build (Windows / Visual Studio)
+
+### Požadavky
+- **Visual Studio 2022/2026** (MSVC, C++ toolchain)
+- **wxWidgets** (doporučeně buildnuté pro MSVC stejně jako projekt)
+
+### Poznámky k build problémům
+- Pokud narazíš na linker chyby typu **LNK2005/LNK1169** (duplicitní symboly),
+  zkontroluj, že implementace UI tříd (např. `StrategicLevelFrame`) je jen v **jednom** `.cpp` souboru
+  a že nedržíš omylem dvě kopie stejné implementace ve více translation units
+  (typicky dvě verze `form_*.cpp` zároveň v projektu).
   
-- Projekt se dá v pohodě zkompilovat ve Visual Studiu 2026, potřebuje knihovnu https://wxwidgets.org/
+pokud to chcete zkoušet zprovoznit vše podstatné je v - `spellcross-map-edit-main/` – C++/wxWidgets editor + game mode (hlavní appka)
+zbytek je python garbage
 
 ---
 
@@ -59,16 +101,16 @@ Typický postup (doporučené kroky):
    `data_sorter.py` – třídí data do složek podle typu / přípon
 
 3. **Extrahovat LS a LS0 soubory → vzniknou biny**  
-   `..\spell_decomp\spell_bulk_delz_gui.py`
+   `spell_decomp/spell_bulk_delz_gui.py`
 
 4. **Zjistit, co je uvnitř binů a případně extrahovat**  
    `bin_inspector`
 
-5. **Zpětně komponovat mapy z levelů 02–10**  
+5. **Zpětně komponovat mapy z levelů**  
    `spellcross_level_tool_v5`
 
 6. **Rekonstrukce herních menu/UI z vyextrahovaných podkladů**  
-   `bin_out\spell_ui_builder`
+   `bin_out/spell_ui_builder`
 
 ---
 
@@ -103,6 +145,9 @@ Ber to jako pracovní poznámky a výzkumné skripty.
 
 ## Známé limity / poznámky
 - Game mode v editoru je použitelný, ale **není stabilní** (občasné pády).
+- Skupinový pohyb a některé výjimky v logice pohybu (kolize/stackování) jsou pořád ve vývoji.
+- Ukládání stavu (save/load) se stále sjednocuje – pokud se ti hra „pere“ sama se sebou,
+  zkontroluj, odkud se načítá a kam zapisuje.
 - Část Python utilit je **experimentální** a může vyžadovat ruční zásahy / ladění.
 - Palety a raw grafika často vyžadují trpělivost – některé formáty jsou složené a bez “kontextu” se špatně hádají.
 
@@ -115,10 +160,10 @@ Ber to jako pracovní poznámky a výzkumné skripty.
 ---
 
 ## Co s tím bude dál?
-- Těžko říct, asi se k tomu budu náhodně vracet podle nálady, třeba to někdy dodělám, ale spíš ne.
+- Postupně: stabilizace game modu, sjednocení save/load, a dokončení strategických obrazovek.
+- A pak se uvidí. :)
 
 ---
 
 ## Licence
-
 Tento projekt je licencován pod **MIT licencí** – viz soubor [`LICENSE`](LICENSE).
