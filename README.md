@@ -59,6 +59,29 @@ Právě pro rekonstrukci UI a “asset pipeline” vznikla většina přiložen�
 
 ---
 
+## TODO (nejbližší velké věci)
+
+- **Research / výzkum**
+  - UI a logika výzkumu (strom / seznam techů, náklady, čas, podmínky odemknutí)
+  - ukládání stavu výzkumu do save/progression
+
+- **Upgrady jednotek**
+  - definice upgradů (co mění: HP, damage, range, movement, armor, special rules…)
+  - aplikace upgradu na jednotky (nově koupené i existující)
+  - UI (výběr / potvrzení / náklady) + validace
+
+- **Resources (money/research) + rozdělování na územích**
+  - podpora “resources” v levelech / kampani (příjem z obsazených území)
+  - poměr **money vs research** per území (podle původní hry)
+  - turn update: přičítání, limity, případně upkeep
+
+- **Původní game flow bez debug módu**
+  - kampaň od mise 1 do konce: odemykání misí, přechody, briefing/debriefing
+  - ukládání progresu (obsazená území, dokončené mise, ztráty, research, upgrady)
+  - odstranění “developer/god” prvků z release módu (výběr libovolné mise, free edit, …)
+
+---
+
 ## Struktura repa (orientačně)
 
 - `spellcross-map-edit-main/` – C++/wxWidgets editor + game mode (hlavní appka)
