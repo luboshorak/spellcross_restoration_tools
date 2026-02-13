@@ -438,6 +438,9 @@
     <Image Include="wx\msw\colours.bmp">
       <Filter>Resource Files</Filter>
     </Image>
+    <Image Include="ico\orc_icon.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
   </ItemGroup>
   <ItemGroup>
     <None Include="wx\msw\hand.cur">
@@ -470,5 +473,6 @@
     <None Include="wx\msw\cross.cur">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include=".github\copilot-instructions.md" />
   </ItemGroup>
 </Project>

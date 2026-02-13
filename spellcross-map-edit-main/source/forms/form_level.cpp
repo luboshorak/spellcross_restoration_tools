@@ -868,6 +868,8 @@ static bool LoadStrategicStateFile(
     std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
     int& cmdGenWindowStartTurn,
     int& cmdGenCountInWindow,
+    bool& gameModeEnabled,
+    std::vector<int>& ownedTerritories,
     std::string* out_level_def,
     std::string* out_timestamp);
 
@@ -886,6 +888,8 @@ static void SaveStrategicStateFile(
     const std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
     int cmdGenWindowStartTurn,
     int cmdGenCountInWindow,
+    bool gameModeEnabled,
+    const std::vector<int>& ownedTerritories,
     const std::string& timestamp);
 
 void StrategicLevelFrame::BuildMenu()
@@ -905,11 +909,16 @@ void StrategicLevelFrame::BuildMenu()
     options->Append(ID_MENU_OPTIONS_AUDIO, (L"&Audio...\tCtrl+O"));
     bar->Append(options, "&Options");
 
+    auto* game = new wxMenu();
+    game->AppendCheckItem(ID_MENU_GAME_MODE_TOGGLE, L"&Enabled");
+    bar->Append(game, "&Game mode");
+
     SetMenuBar(bar);
 
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnSaveGame, this, ID_MENU_SAVE_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnLoadGame, this, ID_MENU_LOAD_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsAudio, this, ID_MENU_OPTIONS_AUDIO);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnToggleGameMode, this, ID_MENU_GAME_MODE_TOGGLE);
 
 }
 
@@ -1017,6 +1026,7 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        m_gameModeEnabled, m_ownedTerritories,
         /*timestamp*/NowIsoLocal());
 
     wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
@@ -1071,12 +1081,18 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        m_gameModeEnabled, m_ownedTerritories,
         &loaded_level_def, &ts))
     {
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
         return;
     }
 
+    if (GetMenuBar())
+    {
+        auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
+        if (item) item->Check(m_gameModeEnabled);
+    }
 
     // Save slot may belong to a different strategic LEVEL_XX.DEF.
     // In that case, automatically switch to the correct level and load there.
@@ -1117,9 +1133,14 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         int windowStart2 = 1;
         int genCount2 = 0;
 
+
+        bool gm2 = false;
+        std::vector<int> owned2;
+
         if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
             terrMission, terrLaunch, units,
             playerCmds2, availCmds2, windowStart2, genCount2,
+            gm2, owned2,
             &def2, &ts2))
         {
             wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
@@ -1142,6 +1163,8 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         win->m_cmdGenWindowStartTurn = windowStart2;
         win->m_cmdGenCountInWindow = genCount2;
 
+        win->m_gameModeEnabled = gm2;
+        win->m_ownedTerritories = std::move(owned2);
         win->TryLoadBackground();
         win->RefreshUI();
         if (win->m_selectedTerritory >= 0)
@@ -1161,6 +1184,68 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     RefreshUI();
     wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
 }
+
+
+void StrategicLevelFrame::MarkOverlayDirty()
+{
+    m_overlayDirty = true;
+    if (m_mapCanvas) m_mapCanvas->Refresh();
+    else if (m_mapPanel) m_mapPanel->Refresh();
+}
+
+void StrategicLevelFrame::ApplyTerritoryVisibility()
+{
+    // Determine max territory id
+    int maxId = 0;
+    for (const auto& t : m_level.territories)
+        maxId = std::max(maxId, t.id);
+
+    m_visibleTerritory.assign(std::max(maxId + 1, 1), 1);
+
+    if (!m_gameModeEnabled)
+        return; // debug mode: all visible
+
+    // In game mode: visible = owned + neighbors(owned)
+    std::fill(m_visibleTerritory.begin(), m_visibleTerritory.end(), 0);
+
+    auto mark = [&](int tid)
+    {
+        if (tid > 0 && tid < (int)m_visibleTerritory.size())
+            m_visibleTerritory[tid] = 1;
+    };
+
+    for (int tid : m_ownedTerritories)
+        mark(tid);
+
+    for (int tid : m_ownedTerritories)
+    {
+        if (tid <= 0 || tid >= (int)m_territoryAdjMask.size())
+            continue;
+
+        uint32_t mask = m_territoryAdjMask[tid];
+        for (int nb = 1; nb < (int)m_visibleTerritory.size() && nb < 32; ++nb)
+        {
+            if (mask & (1u << nb))
+                mark(nb);
+        }
+    }
+}
+void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
+{
+    m_gameModeEnabled = ev.IsChecked();
+
+    if (m_gameModeEnabled)
+    {
+        // Ensure at least one owned territory (start territory).
+        if (m_ownedTerritories.empty() && !m_level.territories.empty())
+            m_ownedTerritories.push_back(m_level.territories.front().id);
+    }
+
+    ApplyTerritoryVisibility();
+    MarkOverlayDirty();
+    SaveStrategicState(); // persist into autosave
+}
+
 
 void StrategicLevelFrame::OnOptionsAudio(wxCommandEvent& ev)
 {
@@ -1305,6 +1390,7 @@ void StrategicLevelFrame::BuildUI()
     m_mapCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_mapCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
     m_mapCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
+    m_mapCanvas->Bind(wxEVT_MOTION, &StrategicLevelFrame::OnMapMouseMove, this);
     m_mapSizer->Add(m_mapCanvas, 3, wxALL | wxEXPAND, 8);
 
     // Under-map panel: (optional) territory grid fallback + briefing/info text.
@@ -2735,6 +2821,66 @@ void StrategicLevelFrame::SelectTerritoryById(int territory_id)
     OnTerritory(ev);
 }
 
+
+void StrategicLevelFrame::OnMapMouseMove(wxMouseEvent& ev)
+{
+    if (!m_hasClk || !m_hasBg || !m_bgBitmap.IsOk())
+    {
+        ev.Skip();
+        return;
+    }
+
+    const wxPoint p = ev.GetPosition();
+
+    // Use last paint transform
+    const double s = (m_lastMapScale <= 0.0) ? 1.0 : m_lastMapScale;
+    const int bw = m_lastBgW;
+    const int bh = m_lastBgH;
+
+    if (bw <= 0 || bh <= 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    // Screen -> background pixel
+    const int px = (int)std::floor(((double)(p.x - m_lastMapOffX)) / s);
+    const int py = (int)std::floor(((double)(p.y - m_lastMapOffY)) / s);
+
+    int newHover = 0;
+    if (px >= 0 && py >= 0 && px < bw && py < bh)
+    {
+        // Background pixel -> CLK pixel (scale if sizes differ)
+        const int cx = (int)std::floor((double)px * (double)m_clkW / (double)bw);
+        const int cy = (int)std::floor((double)py * (double)m_clkH / (double)bh);
+
+        if (cx >= 0 && cy >= 0 && cx < m_clkW && cy < m_clkH)
+        {
+            const size_t idx = (size_t)cy * (size_t)m_clkW + (size_t)cx;
+            const uint8_t v = m_clkValues[idx];
+
+            const int maxId = (int)m_visibleTerritory.size() - 1;
+            int tid = 0;
+            if (v >= 1 && v <= (uint8_t)maxId) tid = (int)v;
+            else if (v >= 129 && v <= (uint8_t)(128 + maxId)) tid = (int)v - 128;
+
+            if (tid > 0)
+            {
+                // In game mode, only hover visible territories
+                if (!m_gameModeEnabled || (tid < (int)m_visibleTerritory.size() && m_visibleTerritory[tid]))
+                    newHover = tid;
+            }
+        }
+    }
+
+    if (newHover != m_hoverTerritory)
+    {
+        m_hoverTerritory = newHover;
+        MarkOverlayDirty();
+    }
+
+    ev.Skip();
+}
 void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
 {
     if (!m_hasBg || !m_bgBitmap.IsOk() || !m_hasClk || m_clkValues.empty())
@@ -2797,6 +2943,15 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     // - 1-based region index (1..N) into m_level.territories
     int chosenTerritoryId = (int)tid;
 
+    auto isVisible = [&](int tid2) -> bool
+    {
+        if (!m_gameModeEnabled)
+            return true;
+        if (tid2 <= 0 || tid2 >= (int)m_visibleTerritory.size())
+            return false;
+        return m_visibleTerritory[tid2] != 0;
+    };
+
     // 1) Try direct match by id
     bool idFound = false;
     for (const auto& t : m_level.territories)
@@ -2810,6 +2965,8 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
 
     if (idFound)
     {
+        if (!isVisible(chosenTerritoryId))
+            return;
         SelectTerritoryById(chosenTerritoryId);
         return;
     }
@@ -3619,12 +3776,17 @@ static bool LoadStrategicStateFile(
     std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
     int& cmdGenWindowStartTurn,
     int& cmdGenCountInWindow,
+    bool& gameModeEnabled,
+    std::vector<int>& ownedTerritories,
     std::string* out_level_def = nullptr,
     std::string* out_timestamp = nullptr)
+
 {
     units.clear();
     playerCommanders.clear();
     availableCommanders.clear();
+    gameModeEnabled = false;
+    ownedTerritories.clear();
     cmdGenWindowStartTurn = 1;
     cmdGenCountInWindow = 0;
 
@@ -3634,6 +3796,8 @@ static bool LoadStrategicStateFile(
     research = 0;
     selected_territory = -1;
     player = StrategicLevelFrame::PlayerProgress{};
+    gameModeEnabled = false;
+    ownedTerritories.clear();
 
     territoryMission.clear();
     territoryLaunchCount.clear();
@@ -3676,6 +3840,25 @@ static bool LoadStrategicStateFile(
 
     if (std::regex_search(data, m, std::regex("\"selected_territory\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         selected_territory = std::stoi(m[1].str());
+
+    // game mode (optional)
+    std::regex gm_re("\"game_mode\"\\s*:\\s*(true|false)");
+    if (std::regex_search(data, m, gm_re) && m.size() > 1)
+        gameModeEnabled = (m[1].str() == "true");
+
+    // owned territories (optional)
+    std::smatch mm2;
+    std::regex owned_arr_re("\"owned_territories\"\\s*:\\s*\\[(.*?)\\]");
+    if (std::regex_search(data, mm2, owned_arr_re) && mm2.size() > 1)
+    {
+        const std::string arr = mm2[1].str();
+        std::regex int_re("(\\d+)");
+        for (auto it = std::sregex_iterator(arr.begin(), arr.end(), int_re); it != std::sregex_iterator(); ++it)
+        {
+            int id = std::stoi((*it)[1].str());
+            ownedTerritories.push_back(id);
+        }
+    }
 
     // player object optional (backward compatible)
     std::regex player_obj_re("\"player\"\\s*:\\s*\\{([^}]*)\\}");
@@ -3772,6 +3955,8 @@ static void SaveStrategicStateFile(
     const std::vector<StrategicLevelFrame::CommanderRec>& availableCommanders,
     int cmdGenWindowStartTurn,
     int cmdGenCountInWindow,
+    bool gameModeEnabled,
+    const std::vector<int>& ownedTerritories,
     const std::string& timestamp)
 {
     std::ofstream f(path);
@@ -3786,6 +3971,16 @@ static void SaveStrategicStateFile(
     f << "  \"money\": " << money << ",\n";
     f << "  \"research\": " << research << ",\n";
     f << "  \"selected_territory\": " << selected_territory << ",\n";
+    f << "  \"game_mode\": " << (gameModeEnabled ? "true" : "false") << ",\n";
+
+    f << "  \"owned_territories\": [";
+    for (size_t i = 0; i < ownedTerritories.size(); ++i)
+    {
+        f << ownedTerritories[i];
+        if (i + 1 < ownedTerritories.size())
+            f << ", ";
+    }
+    f << "],\n";
     f << "  \"player\": {"
         << "\"name\": \"" << EscapeJson(player.name) << "\", "
         << "\"rank\": " << player.rank << ", "
@@ -3869,9 +4064,13 @@ void StrategicLevelFrame::LoadStrategicState()
     int windowStart = 1;
     int genCount = 0;
     std::string level_def, ts;
+    bool gm = false;
+    std::vector<int> owned;
 
     if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
-        playerCmds, availCmds, windowStart, genCount, &level_def, &ts))
+        playerCmds, availCmds, windowStart, genCount,
+        gm, owned,
+        &level_def, &ts))
     {
         // Validate that this save matches current level (compare stem)
         const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
@@ -3897,6 +4096,14 @@ void StrategicLevelFrame::LoadStrategicState()
         m_cmdGenWindowStartTurn = windowStart;
         m_cmdGenCountInWindow = genCount;
 
+        m_gameModeEnabled = gm;
+        m_ownedTerritories = std::move(owned);
+
+        if (GetMenuBar())
+        {
+            auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
+            if (item) item->Check(m_gameModeEnabled);
+        }
         if (m_selectedTerritory >= 0)
             SelectTerritoryById(m_selectedTerritory);
     }
@@ -3906,9 +4113,10 @@ void StrategicLevelFrame::LoadStrategicState()
 void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
-    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
+        m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        m_gameModeEnabled, m_ownedTerritories,
         NowIsoLocal());
 }
 
@@ -3957,6 +4165,41 @@ static std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path
     }
     return {};
 }
+
+static bool LoadSSDAdjacency(const std::filesystem::path& folder, int levelNum, int territoryMaxId, std::vector<uint32_t>& outAdj)
+{
+    outAdj.assign(std::max(territoryMaxId + 1, 1), 0u);
+
+    namespace fs = std::filesystem;
+    const std::string ssdName = wxString::Format("LEVEL_%02d.SSD", levelNum).ToStdString();
+
+    fs::path pSsd = FindFileCaseInsensitive(folder, ssdName);
+    if (pSsd.empty())
+        return false;
+
+    std::vector<unsigned char> bytes;
+    if (!LoadFileBytes(pSsd, bytes))
+        return false;
+
+    // SSD is typically 32 DWORDs (128 bytes). Be tolerant if bigger: read first 128.
+    if (bytes.size() < 128)
+        return false;
+
+    const int count = 32;
+    for (int t = 1; t <= territoryMaxId && t < count; ++t)
+    {
+        const size_t o = (size_t)t * 4;
+        uint32_t v =
+            (uint32_t)bytes[o + 0] |
+            ((uint32_t)bytes[o + 1] << 8) |
+            ((uint32_t)bytes[o + 2] << 16) |
+            ((uint32_t)bytes[o + 3] << 24);
+
+        outAdj[t] = v;
+    }
+    return true;
+}
+
 
 static bool ExpandPaletteTo256(const std::vector<unsigned char>& palBytes, std::array<unsigned char, 256 * 3>& pal256)
 {
@@ -4427,6 +4670,7 @@ void StrategicLevelFrame::TryLoadBackground()
             if (BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk))
             {
                 composite_ok = true;
+                m_compositeFolder = folder.string();
                 break;
             }
         }
@@ -4458,6 +4702,17 @@ void StrategicLevelFrame::TryLoadBackground()
 
             // Precompute centroid positions for labels / selection marker.
             RebuildTerritoryCentroids();
+
+            // Load SSD adjacency (for game mode visible-neighbors logic)
+            int maxId = 0;
+            for (const auto& t : m_level.territories) maxId = std::max(maxId, t.id);
+            if (!m_compositeFolder.empty())
+                LoadSSDAdjacency(std::filesystem::path(m_compositeFolder), levelNum, maxId, m_territoryAdjMask);
+            else
+                m_territoryAdjMask.assign(std::max(maxId + 1, 1), 0u);
+
+            ApplyTerritoryVisibility();
+            MarkOverlayDirty();
         }
     }
 
@@ -4545,6 +4800,109 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
         const int x = (pw - dw) / 2;
         const int y = (ph - dh) / 2;
         dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
+
+        // Store transform for hit-testing / hover.
+        m_lastMapScale = s;
+        m_lastMapOffX = x;
+        m_lastMapOffY = y;
+        m_lastBgW = bw;
+        m_lastBgH = bh;
+
+        // Game mode overlay (fog + visible neighbors + hover highlight)
+        if (m_gameModeEnabled && m_hasClk && m_clkW > 0 && m_clkH > 0 && !m_clkValues.empty())
+        {
+            // Rebuild visibility if needed (e.g., after loading background)
+            if (m_visibleTerritory.empty())
+                ApplyTerritoryVisibility();
+
+            // Build base overlay bitmap at background resolution (bw x bh)
+            if (m_overlayDirty || !m_overlayBitmap.IsOk() || m_overlayBitmap.GetWidth() != bw || m_overlayBitmap.GetHeight() != bh)
+            {
+                wxImage ovImg(bw, bh, true);
+                ovImg.InitAlpha();
+
+                const int maxId = (int)m_visibleTerritory.size() - 1;
+
+                for (int py = 0; py < bh; ++py)
+                {
+                    // Map bg y -> clk y
+                    const int cy = (int)std::floor((double)py * (double)m_clkH / (double)bh);
+                    if (cy < 0 || cy >= m_clkH) continue;
+
+                    for (int px = 0; px < bw; ++px)
+                    {
+                        const int cx = (int)std::floor((double)px * (double)m_clkW / (double)bw);
+                        if (cx < 0 || cx >= m_clkW) continue;
+
+                        const size_t cidx = (size_t)cy * (size_t)m_clkW + (size_t)cx;
+                        if (cidx >= m_clkValues.size()) continue;
+                        const uint8_t v = m_clkValues[cidx];
+
+                        int tid = 0;
+                        if (v >= 1 && v <= (uint8_t)maxId) tid = (int)v;
+                        else if (v >= 129 && v <= (uint8_t)(128 + maxId)) tid = (int)v - 128;
+                        if (tid <= 0) continue;
+
+                        const bool isVis = (tid < (int)m_visibleTerritory.size() && m_visibleTerritory[tid] != 0);
+                        const bool isOwned = (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end());
+                        const bool isHover = (m_hoverTerritory == tid);
+
+                        unsigned char r = 0, g = 0, b = 0, a = 0;
+
+                        if (!isVis)
+                        {
+                            // fog
+                            r = g = b = 0;
+                            a = 140;
+                        }
+                        else if (!isOwned)
+                        {
+                            // visible but not owned: red tint + simple hatch
+                            r = 200; g = 40; b = 40;
+                            a = 70;
+                            if (((px + py) / 6) % 2 == 0)
+                            {
+                                r = 255; g = 80; b = 80;
+                                a = 110;
+                            }
+                        }
+
+                        if (isHover)
+                        {
+                            // hover highlight (yellow)
+                            r = 240; g = 220; b = 60;
+                            a = std::max<unsigned char>(a, 120);
+                        }
+
+                        if (a > 0)
+                        {
+                            ovImg.SetRGB(px, py, r, g, b);
+                            ovImg.SetAlpha(px, py, a);
+                        }
+                    }
+                }
+
+                m_overlayBitmap = wxBitmap(ovImg);
+                m_overlayBitmapScaled = wxBitmap();
+                m_overlayScaledW = -1;
+                m_overlayScaledH = -1;
+                m_overlayDirty = false;
+            }
+
+            // Scale overlay to current draw size and draw it on top
+            if (m_overlayBitmap.IsOk())
+            {
+                if (!m_overlayBitmapScaled.IsOk() || m_overlayScaledW != dw || m_overlayScaledH != dh)
+                {
+                    wxImage oi = m_overlayBitmap.ConvertToImage();
+                    m_overlayBitmapScaled = wxBitmap(oi.Scale(dw, dh, wxIMAGE_QUALITY_NEAREST));
+                    m_overlayScaledW = dw;
+                    m_overlayScaledH = dh;
+                }
+
+                dc.DrawBitmap(m_overlayBitmapScaled.IsOk() ? m_overlayBitmapScaled : m_overlayBitmap, x, y, true);
+            }
+        }
 
         // Territory labels directly on the map (replacement for the temporary button grid).
         // Prefer centroids computed from CLK (exact), fallback to LEVEL_XX.DEF "strategic_x/y".

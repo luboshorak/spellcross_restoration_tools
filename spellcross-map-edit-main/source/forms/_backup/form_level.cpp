@@ -895,16 +895,22 @@ void StrategicLevelFrame::BuildMenu()
         return;
 
     auto* bar = new wxMenuBar();
-    auto* file = new wxMenu();
 
+    auto* file = new wxMenu();
     file->Append(ID_MENU_SAVE_GAME, (L"&Save game...\tCtrl+S"));
     file->Append(ID_MENU_LOAD_GAME, (L"&Load game...\tCtrl+L"));
-
     bar->Append(file, "&File");
+
+    auto* options = new wxMenu();
+    options->Append(ID_MENU_OPTIONS_AUDIO, (L"&Audio...\tCtrl+O"));
+    bar->Append(options, "&Options");
+
     SetMenuBar(bar);
 
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnSaveGame, this, ID_MENU_SAVE_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnLoadGame, this, ID_MENU_LOAD_GAME);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsAudio, this, ID_MENU_OPTIONS_AUDIO);
+
 }
 
 static std::string LevelKeyFromSourcePath(const std::string& src)
@@ -1156,6 +1162,83 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
 }
 
+void StrategicLevelFrame::OnOptionsAudio(wxCommandEvent& ev)
+{
+    if (!m_spellData || !m_spellData->sounds || !m_spellData->sounds->channels || !m_spellData->midi)
+    {
+        wxMessageBox("Audio system is not initialized.", "Audio", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    // uložíme původní hodnoty kvůli Cancel
+    const double oldSfx = m_spellData->sounds->channels->GetVolume(); // 0..1
+    const double oldMusic = m_spellData->midi->GetVolume();            // 0..1
+
+    wxDialog dlg(this, wxID_ANY, "Audio options", wxDefaultPosition, wxDefaultSize,
+        wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+
+    auto* sizerTop = new wxBoxSizer(wxVERTICAL);
+
+    auto* lblMusic = new wxStaticText(&dlg, wxID_ANY, "Music volume");
+    auto* sldMusic = new wxSlider(&dlg, wxID_ANY,
+        (int)std::lround(oldMusic * 100.0),
+        0, 100,
+        wxDefaultPosition, wxSize(300, -1),
+        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+
+    auto* lblSfx = new wxStaticText(&dlg, wxID_ANY, "Sound volume");
+    auto* sldSfx = new wxSlider(&dlg, wxID_ANY,
+        (int)std::lround(oldSfx * 100.0),
+        0, 100,
+        wxDefaultPosition, wxSize(300, -1),
+        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+
+    sizerTop->Add(lblMusic, 0, wxALL, 8);
+    sizerTop->Add(sldMusic, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    sizerTop->Add(lblSfx, 0, wxALL, 8);
+    sizerTop->Add(sldSfx, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
+    sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
+
+    dlg.SetSizerAndFit(sizerTop);
+
+    auto applyVolumes = [&]()
+        {
+            const double mv = sldMusic->GetValue() / 100.0;
+            const double sv = sldSfx->GetValue() / 100.0;
+
+            m_spellData->midi->SetVolume(mv);
+            m_spellData->sounds->channels->SetVolume(sv);
+        };
+
+    // okamžitě aplikuj při posunu
+    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
+        {
+            applyVolumes();
+        });
+
+    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
+        {
+            applyVolumes();
+        });
+
+    // otevření dialogu
+    const int rc = dlg.ShowModal();
+
+    if (rc == wxID_OK)
+    {
+        // necháme nastavené (persistenci řeší MyApp::OnExit -> ini)
+        applyVolumes();
+    }
+    else
+    {
+        // Cancel -> vrať původní hodnoty
+        m_spellData->midi->SetVolume(oldMusic);
+        m_spellData->sounds->channels->SetVolume(oldSfx);
+    }
+}
 
 bool StrategicLevelFrame::EnsureUnitCostsLoaded()
 {
