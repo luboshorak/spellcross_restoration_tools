@@ -1193,6 +1193,20 @@ void StrategicLevelFrame::MarkOverlayDirty()
     else if (m_mapPanel) m_mapPanel->Refresh();
 }
 
+static int PickStartTerritoryIdForGameMode(const LevelData& level)
+{
+    // Prefer a territory without a mission token (no briefing in original UI).
+    for (const auto& t : level.territories)
+    {
+        if (trim(t.mission).empty())
+            return t.id;
+    }
+    // Fallback: first territory in list
+    if (!level.territories.empty())
+        return level.territories.front().id;
+    return 1;
+}
+
 void StrategicLevelFrame::ApplyTerritoryVisibility()
 {
     // Determine max territory id
@@ -1207,6 +1221,11 @@ void StrategicLevelFrame::ApplyTerritoryVisibility()
 
     // In game mode: visible = owned + neighbors(owned)
     std::fill(m_visibleTerritory.begin(), m_visibleTerritory.end(), 0);
+
+    // Ensure we always have a start territory; otherwise everything becomes "fog".
+    if (m_ownedTerritories.empty())
+        m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+
 
     auto mark = [&](int tid)
     {
@@ -1237,8 +1256,11 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
     if (m_gameModeEnabled)
     {
         // Ensure at least one owned territory (start territory).
-        if (m_ownedTerritories.empty() && !m_level.territories.empty())
-            m_ownedTerritories.push_back(m_level.territories.front().id);
+        if (m_ownedTerritories.empty())
+            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+
+        m_hoverTerritory = 0;
+
     }
 
     ApplyTerritoryVisibility();
@@ -4099,6 +4121,10 @@ void StrategicLevelFrame::LoadStrategicState()
         m_gameModeEnabled = gm;
         m_ownedTerritories = std::move(owned);
 
+        // Ensure start territory when loading older saves / empty campaign state.
+        if (m_gameModeEnabled && m_ownedTerritories.empty())
+            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+
         if (GetMenuBar())
         {
             auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
@@ -4821,6 +4847,9 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
                 wxImage ovImg(bw, bh, true);
                 ovImg.InitAlpha();
 
+                // InitAlpha() nastaví defaultně alpha=255 (neprůhledné). My chceme defaultně plně průhledné.
+                std::memset(ovImg.GetAlpha(), 0, (size_t)bw * (size_t)bh);
+
                 const int maxId = (int)m_visibleTerritory.size() - 1;
 
                 for (int py = 0; py < bh; ++py)
@@ -4838,6 +4867,8 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
                         if (cidx >= m_clkValues.size()) continue;
                         const uint8_t v = m_clkValues[cidx];
 
+                        const bool isBorder = (v >= 129);
+
                         int tid = 0;
                         if (v >= 1 && v <= (uint8_t)maxId) tid = (int)v;
                         else if (v >= 129 && v <= (uint8_t)(128 + maxId)) tid = (int)v - 128;
@@ -4851,10 +4882,21 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
                         if (!isVis)
                         {
-                            // fog
-                            r = g = b = 0;
-                            a = 140;
+                            // Unknown (not discovered)
+
+                            // Interior: buď jen lehce ztmavit (aby byl vidět terén),
+                            // nebo úplně skrýt. Pro "originál feel" nechám terén lehce vidět:
+                            r = 10; g = 20; b = 10;
+                            a = 0;
+
+                            // Border pixels: úplně schovat obrys (to je klíč k tomu, aby hráč "neviděl" tvar území)
+                            if (isBorder)
+                            {
+                                r = 0; g = 0; b = 0;
+                                a = 230; // 220–255 podle chuti
+                            }
                         }
+                        
                         else if (!isOwned)
                         {
                             // visible but not owned: red tint + simple hatch
@@ -4869,8 +4911,8 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
                         if (isHover)
                         {
-                            // hover highlight (yellow)
-                            r = 240; g = 220; b = 60;
+                            // hover highlight (red)
+                            r = 178; g = 45; b = 35;
                             a = std::max<unsigned char>(a, 120);
                         }
 

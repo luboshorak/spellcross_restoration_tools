@@ -211,6 +211,35 @@ public:
     std::unordered_map<int, int> m_unitCosts;
     bool m_unitCostsLoaded = false;
 
+    // Game mode (campaign progression)
+    bool m_gameModeEnabled = false;
+    std::vector<int> m_ownedTerritories;
+
+    // Territory visibility / overlay for Game mode
+    std::vector<uint32_t> m_territoryAdjMask; // indexed by territory id (1..N)
+    std::vector<uint8_t>  m_visibleTerritory; // 0/1 per territory id
+    int m_hoverTerritory = 0;
+
+    // Overlay cache
+    bool m_overlayDirty = true;
+    wxBitmap m_overlayBitmap;
+    wxBitmap m_overlayBitmapScaled;
+    int m_overlayScaledW = -1;
+    int m_overlayScaledH = -1;
+
+    // Last draw transform (map panel -> background bitmap)
+    double m_lastMapScale = 1.0;
+    int m_lastMapOffX = 0;
+    int m_lastMapOffY = 0;
+    int m_lastBgW = 0;
+    int m_lastBgH = 0;
+
+    std::string m_compositeFolder; // where LEVEL_XX.* were found (for SSD)
+
+    void OnToggleGameMode(wxCommandEvent& ev);
+    void OnMapMouseMove(wxMouseEvent& ev);
+    void ApplyTerritoryVisibility();
+    void MarkOverlayDirty();
 
 struct CommanderRec
 {
@@ -339,7 +368,9 @@ bool m_commanderNamesLoaded = false;
         ID_BTN_STATS,
         ID_MENU_SAVE_GAME,
         ID_MENU_LOAD_GAME,
-        ID_MENU_OPTIONS_AUDIO
+        ID_MENU_OPTIONS_AUDIO,
+        ID_MENU_GAME_MODE_TOGGLE
+
     };
 
     wxDECLARE_EVENT_TABLE();
