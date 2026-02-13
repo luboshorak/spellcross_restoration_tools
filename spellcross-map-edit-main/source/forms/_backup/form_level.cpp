@@ -30,15 +30,15 @@
 
 
 wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY,      StrategicLevelFrame::OnBuyUnits)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY_CMD,  StrategicLevelFrame::OnBuyCommander)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_SELL,     StrategicLevelFrame::OnSellUnits)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN,  StrategicLevelFrame::OnEndTurn)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH,   StrategicLevelFrame::OnLaunch)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
-    EVT_BUTTON(StrategicLevelFrame::ID_BTN_STATS, StrategicLevelFrame::OnShowStats)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY, StrategicLevelFrame::OnBuyUnits)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY_CMD, StrategicLevelFrame::OnBuyCommander)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_SELL, StrategicLevelFrame::OnSellUnits)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN, StrategicLevelFrame::OnEndTurn)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH, StrategicLevelFrame::OnLaunch)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_STATS, StrategicLevelFrame::OnShowStats)
 wxEND_EVENT_TABLE()
 
 static void MakeChildTransparent(wxWindow* w)
@@ -89,13 +89,13 @@ static std::filesystem::path StrategicFontPath()
 static void EnsureStrategicFontLoaded()
 {
     static bool loaded = false;
-    if(loaded)
+    if (loaded)
         return;
 
     const auto fontPath = StrategicFontPath();
-    if(std::filesystem::exists(fontPath))
-       // wxFont::AddPrivateFont(wxString::FromUTF8(fontPath.string()));
-    loaded = true;
+    if (std::filesystem::exists(fontPath))
+        // wxFont::AddPrivateFont(wxString::FromUTF8(fontPath.string()));
+        loaded = true;
 }
 
 static wxFont MakeStrategicFont(int pixelSize, bool bold)
@@ -109,7 +109,7 @@ static wxFont MakeStrategicFont(int pixelSize, bool bold)
     font.SetFaceName(StrategicFontFaceName());
     font.SetPixelSize(wxSize(0, pixelSize));
 
-    if(!font.IsOk())
+    if (!font.IsOk())
     {
         font = wxFont(wxFontInfo(wxSize(0, pixelSize))
             .Family(wxFONTFAMILY_MODERN)
@@ -129,155 +129,155 @@ static bool endsWith(const std::string& s, const std::string& suf)
 
 namespace
 {
-struct HierarchyDragData
-{
-    bool valid = false;
-    bool fromSlot = false;
-    std::string slotId;
-    std::string type;
-    uint32_t commander_uid = 0; // for commanders
-    int rank = -1; // for commanders
-    wxString name;
-};
-
-HierarchyDragData ParseHierarchyDragData(const wxString& data)
-{
-    HierarchyDragData parsed;
-    wxArrayString tokens = wxSplit(data, ':', '\0');
-    if(tokens.empty())
-        return parsed;
-
-    const wxString kind = tokens[0];
-
-    // unit:<name>
-    if(kind == "unit" && tokens.size() >= 2)
+    struct HierarchyDragData
     {
-        parsed.valid = true;
-        parsed.type = "unit";
-        parsed.name = tokens[1];
-        return parsed;
-    }
+        bool valid = false;
+        bool fromSlot = false;
+        std::string slotId;
+        std::string type;
+        uint32_t commander_uid = 0; // for commanders
+        int rank = -1; // for commanders
+        wxString name;
+    };
 
-    // commander:<uid>:<rank>:<name>
-    // commander:<rank>:<name>  (backward compatibility)
-    // commander:<name>         (very old compatibility)
-    if(kind == "commander" && tokens.size() >= 2)
+    HierarchyDragData ParseHierarchyDragData(const wxString& data)
     {
-        parsed.valid = true;
-        parsed.type = "commander";
-        if(tokens.size() >= 4)
+        HierarchyDragData parsed;
+        wxArrayString tokens = wxSplit(data, ':', '\0');
+        if (tokens.empty())
+            return parsed;
+
+        const wxString kind = tokens[0];
+
+        // unit:<name>
+        if (kind == "unit" && tokens.size() >= 2)
         {
-            long uid = 0;
-            long r = -1;
-            if(tokens[1].ToLong(&uid) && uid > 0)
-                parsed.commander_uid = (uint32_t)uid;
-            if(tokens[2].ToLong(&r))
-                parsed.rank = (int)r;
-            parsed.name = tokens[3];
-        }
-        else if(tokens.size() >= 3)
-        {
-            long r = -1;
-            if(tokens[1].ToLong(&r))
-                parsed.rank = (int)r;
-            parsed.name = tokens[2];
-        }
-        else
-        {
+            parsed.valid = true;
+            parsed.type = "unit";
             parsed.name = tokens[1];
+            return parsed;
         }
+
+        // commander:<uid>:<rank>:<name>
+        // commander:<rank>:<name>  (backward compatibility)
+        // commander:<name>         (very old compatibility)
+        if (kind == "commander" && tokens.size() >= 2)
+        {
+            parsed.valid = true;
+            parsed.type = "commander";
+            if (tokens.size() >= 4)
+            {
+                long uid = 0;
+                long r = -1;
+                if (tokens[1].ToLong(&uid) && uid > 0)
+                    parsed.commander_uid = (uint32_t)uid;
+                if (tokens[2].ToLong(&r))
+                    parsed.rank = (int)r;
+                parsed.name = tokens[3];
+            }
+            else if (tokens.size() >= 3)
+            {
+                long r = -1;
+                if (tokens[1].ToLong(&r))
+                    parsed.rank = (int)r;
+                parsed.name = tokens[2];
+            }
+            else
+            {
+                parsed.name = tokens[1];
+            }
+            return parsed;
+        }
+
+        // slot:<slotId>:<type>:<name>
+        // slot:<slotId>:commander:<uid>:<rank>:<name>
+        // slot:<slotId>:commander:<rank>:<name>
+        if (kind == "slot" && tokens.size() >= 4)
+        {
+            parsed.valid = true;
+            parsed.fromSlot = true;
+            parsed.slotId = tokens[1].ToStdString();
+            parsed.type = tokens[2].ToStdString();
+
+            if (parsed.type == "commander" && tokens.size() >= 6)
+            {
+                long uid = 0;
+                long r = -1;
+                if (tokens[3].ToLong(&uid) && uid > 0)
+                    parsed.commander_uid = (uint32_t)uid;
+                if (tokens[4].ToLong(&r))
+                    parsed.rank = (int)r;
+                parsed.name = tokens[5];
+            }
+            else if (parsed.type == "commander" && tokens.size() >= 5)
+            {
+                long r = -1;
+                if (tokens[3].ToLong(&r))
+                    parsed.rank = (int)r;
+                parsed.name = tokens[4];
+            }
+            else
+            {
+                parsed.name = tokens[3];
+            }
+            return parsed;
+        }
+
         return parsed;
     }
 
-    // slot:<slotId>:<type>:<name>
-    // slot:<slotId>:commander:<uid>:<rank>:<name>
-    // slot:<slotId>:commander:<rank>:<name>
-    if(kind == "slot" && tokens.size() >= 4)
+    class HierarchySlotDropTarget : public wxTextDropTarget
     {
-        parsed.valid = true;
-        parsed.fromSlot = true;
-        parsed.slotId = tokens[1].ToStdString();
-        parsed.type = tokens[2].ToStdString();
-
-        if(parsed.type == "commander" && tokens.size() >= 6)
+    public:
+        HierarchySlotDropTarget(StrategicLevelFrame* owner, std::string slotId)
+            : m_owner(owner)
+            , m_slotId(std::move(slotId))
         {
-            long uid = 0;
-            long r = -1;
-            if(tokens[3].ToLong(&uid) && uid > 0)
-                parsed.commander_uid = (uint32_t)uid;
-            if(tokens[4].ToLong(&r))
-                parsed.rank = (int)r;
-            parsed.name = tokens[5];
         }
-        else if(parsed.type == "commander" && tokens.size() >= 5)
+
+        bool OnDropText(wxCoord, wxCoord, const wxString& data) override
         {
-            long r = -1;
-            if(tokens[3].ToLong(&r))
-                parsed.rank = (int)r;
-            parsed.name = tokens[4];
+            if (!m_owner)
+                return false;
+            m_owner->ApplyHierarchyDrop(m_slotId, data);
+            return true;
         }
-        else
+
+    private:
+        StrategicLevelFrame* m_owner = nullptr;
+        std::string m_slotId;
+    };
+
+    class HierarchyPoolDropTarget : public wxTextDropTarget
+    {
+    public:
+        HierarchyPoolDropTarget(StrategicLevelFrame* owner, std::string type)
+            : m_owner(owner)
+            , m_type(std::move(type))
         {
-            parsed.name = tokens[3];
         }
-        return parsed;
-    }
 
-    return parsed;
-}
+        bool OnDropText(wxCoord, wxCoord, const wxString& data) override
+        {
+            if (!m_owner)
+                return false;
+            HierarchyDragData parsed = ParseHierarchyDragData(data);
+            if (!parsed.valid || !parsed.fromSlot || parsed.type != m_type)
+                return false;
+            m_owner->ClearHierarchySlot(parsed.slotId);
+            return true;
+        }
 
-class HierarchySlotDropTarget : public wxTextDropTarget
-{
-public:
-    HierarchySlotDropTarget(StrategicLevelFrame* owner, std::string slotId)
-        : m_owner(owner)
-        , m_slotId(std::move(slotId))
-    {
-    }
-
-    bool OnDropText(wxCoord, wxCoord, const wxString& data) override
-    {
-        if(!m_owner)
-            return false;
-        m_owner->ApplyHierarchyDrop(m_slotId, data);
-        return true;
-    }
-
-private:
-    StrategicLevelFrame* m_owner = nullptr;
-    std::string m_slotId;
-};
-
-class HierarchyPoolDropTarget : public wxTextDropTarget
-{
-public:
-    HierarchyPoolDropTarget(StrategicLevelFrame* owner, std::string type)
-        : m_owner(owner)
-        , m_type(std::move(type))
-    {
-    }
-
-    bool OnDropText(wxCoord, wxCoord, const wxString& data) override
-    {
-        if(!m_owner)
-            return false;
-        HierarchyDragData parsed = ParseHierarchyDragData(data);
-        if(!parsed.valid || !parsed.fromSlot || parsed.type != m_type)
-            return false;
-        m_owner->ClearHierarchySlot(parsed.slotId);
-        return true;
-    }
-
-private:
-    StrategicLevelFrame* m_owner = nullptr;
-    std::string m_type;
-};
+    private:
+        StrategicLevelFrame* m_owner = nullptr;
+        std::string m_type;
+    };
 } // namespace
 
 static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans, const wxFont& fallbackFont,
-                                     const wxColour& shadow, const wxColour* background = nullptr)
+    const wxColour& shadow, const wxColour* background = nullptr)
 {
-    if(spans.empty())
+    if (spans.empty())
         return wxBitmap(1, 1);
 
     //wxScreenDC measure;
@@ -289,7 +289,7 @@ static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans
     std::vector<wxSize> extents;
     extents.reserve(spans.size());
 
-    for(const auto& span : spans)
+    for (const auto& span : spans)
     {
         const wxFont& font = span.font ? *span.font : fallbackFont;
         measure.SetFont(font);
@@ -312,7 +312,7 @@ static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans
     dc.SetBackground(wxBrush(wxColour(0, 0, 0, 0)));
     dc.Clear();
 
-    if(background)
+    if (background)
     {
         dc.SetPen(*background);
         dc.SetBrush(*background);
@@ -321,7 +321,7 @@ static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans
 
     const int shadowOffset = 1;
     int x = paddingX;
-    for(size_t i = 0; i < spans.size(); ++i)
+    for (size_t i = 0; i < spans.size(); ++i)
     {
         const auto& span = spans[i];
         const wxFont& font = span.font ? *span.font : fallbackFont;
@@ -333,7 +333,7 @@ static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans
     }
 
     x = paddingX;
-    for(size_t i = 0; i < spans.size(); ++i)
+    for (size_t i = 0; i < spans.size(); ++i)
     {
         const auto& span = spans[i];
         const wxFont& font = span.font ? *span.font : fallbackFont;
@@ -349,12 +349,12 @@ static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans
 }
 
 static void UpdateStrategicLabel(wxStaticBitmap* target, const std::vector<StrategicTextSpan>& spans,
-                                 const wxFont& fallbackFont, const wxColour& shadow, const wxColour* background = nullptr)
+    const wxFont& fallbackFont, const wxColour& shadow, const wxColour* background = nullptr)
 {
-    if(!target)
+    if (!target)
         return;
 
-    if(auto bmp = RenderStrategicLabel(spans, fallbackFont, shadow, background); bmp.IsOk())
+    if (auto bmp = RenderStrategicLabel(spans, fallbackFont, shadow, background); bmp.IsOk())
         target->SetBitmap(bmp);
 }
 
@@ -372,7 +372,7 @@ static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const std::vector<
 }
 
 static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const wxString& text, const wxFont& font,
-                                            const wxColour& color, const wxColour& shadow)
+    const wxColour& color, const wxColour& shadow)
 {
     std::vector<StrategicTextSpan> spans = { { text, color, &font } };
     return CreateStrategicLabel(parent, spans, font, shadow);
@@ -466,26 +466,26 @@ static std::filesystem::path GetUnitsJsonPath()
 
 static bool ParseJsonIntField(const std::string& obj, const char* key, int& outValue)
 {
-    if(!key)
+    if (!key)
         return false;
 
     const std::string needle = std::string("\"") + key + "\"";
     size_t pos = obj.find(needle);
-    if(pos == std::string::npos)
+    if (pos == std::string::npos)
         return false;
 
     pos = obj.find(':', pos + needle.size());
-    if(pos == std::string::npos)
+    if (pos == std::string::npos)
         return false;
 
     ++pos;
-    while(pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos])))
+    while (pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos])))
         ++pos;
 
     const char* start = obj.c_str() + pos;
     char* end = nullptr;
     long value = std::strtol(start, &end, 10);
-    if(end == start)
+    if (end == start)
         return false;
 
     outValue = static_cast<int>(value);
@@ -495,50 +495,50 @@ static bool ParseJsonIntField(const std::string& obj, const char* key, int& outV
 
 static bool ParseJsonStringField(const std::string& obj, const char* key, std::string& outValue)
 {
-    if(!key)
+    if (!key)
         return false;
 
     const std::string needle = std::string("\"") + key + "\"";
     size_t pos = obj.find(needle);
-    if(pos == std::string::npos)
+    if (pos == std::string::npos)
         return false;
 
     pos = obj.find(':', pos + needle.size());
-    if(pos == std::string::npos)
+    if (pos == std::string::npos)
         return false;
 
     ++pos;
-    while(pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos])))
+    while (pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos])))
         ++pos;
 
-    if(pos >= obj.size() || obj[pos] != '"')
+    if (pos >= obj.size() || obj[pos] != '"')
         return false;
     ++pos;
 
     std::string s;
     bool escaped = false;
-    for(; pos < obj.size(); ++pos)
+    for (; pos < obj.size(); ++pos)
     {
         char c = obj[pos];
-        if(escaped)
+        if (escaped)
         {
-            switch(c)
+            switch (c)
             {
-                case '"': case '\\': case '/': s.push_back(c); break;
-                case 'n': s.push_back('\n'); break;
-                case 'r': s.push_back('\r'); break;
-                case 't': s.push_back('\t'); break;
-                default: s.push_back(c); break;
+            case '"': case '\\': case '/': s.push_back(c); break;
+            case 'n': s.push_back('\n'); break;
+            case 'r': s.push_back('\r'); break;
+            case 't': s.push_back('\t'); break;
+            default: s.push_back(c); break;
             }
             escaped = false;
             continue;
         }
-        if(c == '\\')
+        if (c == '\\')
         {
             escaped = true;
             continue;
         }
-        if(c == '"')
+        if (c == '"')
             break;
         s.push_back(c);
     }
@@ -553,16 +553,16 @@ static std::string EscapeJson(const std::string& s)
 {
     std::string out;
     out.reserve(s.size() + 8);
-    for(char c : s)
+    for (char c : s)
     {
-        switch(c)
+        switch (c)
         {
-            case '\\': out += "\\\\"; break;
-            case '"':  out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out.push_back(c); break;
+        case '\\': out += "\\\\"; break;
+        case '"':  out += "\\\""; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out.push_back(c); break;
         }
     }
     return out;
@@ -585,31 +585,31 @@ static std::string NowIsoLocal()
 
 static wxString RankNameCz(int rank)
 {
-    switch(rank)
+    switch (rank)
     {
-        case 0: return wxString(L"Lieutenant");
-        case 1: return wxString(L"First Lieutenant");
-        case 2: return wxString(L"Captain");
-        case 3: return wxString(L"Major");
-        case 4: return wxString(L"Lieutenant Colonel");
-        case 5: return wxString(L"Colonel");
-        case 6: return wxString(L"Major General");
-        case 7: return wxString(L"Lieutenant General");
-        case 8: return wxString(L"General");
-        default: return wxString::Format(L"Hodnost %d", rank);
+    case 0: return wxString(L"Lieutenant");
+    case 1: return wxString(L"First Lieutenant");
+    case 2: return wxString(L"Captain");
+    case 3: return wxString(L"Major");
+    case 4: return wxString(L"Lieutenant Colonel");
+    case 5: return wxString(L"Colonel");
+    case 6: return wxString(L"Major General");
+    case 7: return wxString(L"Lieutenant General");
+    case 8: return wxString(L"General");
+    default: return wxString::Format(L"Hodnost %d", rank);
     }
 }
 
 static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unordered_map<int, int>& outCosts)
 {
     std::ifstream file(path);
-    if(!file.is_open())
+    if (!file.is_open())
         return false;
 
     std::ostringstream buffer;
     buffer << file.rdbuf();
     const std::string content = buffer.str();
-    if(content.empty())
+    if (content.empty())
         return false;
 
     int depth = 0;
@@ -617,49 +617,49 @@ static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unorde
     bool escaped = false;
     size_t objStart = std::string::npos;
 
-    for(size_t i = 0; i < content.size(); ++i)
+    for (size_t i = 0; i < content.size(); ++i)
     {
         char c = content[i];
-        if(inString)
+        if (inString)
         {
-            if(escaped)
+            if (escaped)
             {
                 escaped = false;
             }
-            else if(c == '\\')
+            else if (c == '\\')
             {
                 escaped = true;
             }
-            else if(c == '"')
+            else if (c == '"')
             {
                 inString = false;
             }
             continue;
         }
 
-        if(c == '"')
+        if (c == '"')
         {
             inString = true;
             continue;
         }
 
-        if(c == '{')
+        if (c == '{')
         {
-            if(depth == 0)
+            if (depth == 0)
                 objStart = i;
             ++depth;
         }
-        else if(c == '}')
+        else if (c == '}')
         {
-            if(depth > 0)
+            if (depth > 0)
             {
                 --depth;
-                if(depth == 0 && objStart != std::string::npos)
+                if (depth == 0 && objStart != std::string::npos)
                 {
                     const std::string obj = content.substr(objStart, i - objStart + 1);
                     int index = -1;
                     int cost = -1;
-                    if(ParseJsonIntField(obj, "index", index) && ParseJsonIntField(obj, "cost_buy", cost))
+                    if (ParseJsonIntField(obj, "index", index) && ParseJsonIntField(obj, "cost_buy", cost))
                     {
                         outCosts[index] = cost;
                     }
@@ -674,7 +674,7 @@ static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unorde
 
 static std::string trim(std::string s)
 {
-    auto notspace = [](unsigned char c){ return !std::isspace(c); };
+    auto notspace = [](unsigned char c) { return !std::isspace(c); };
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), notspace));
     s.erase(std::find_if(s.rbegin(), s.rend(), notspace).base(), s.end());
     return s;
@@ -682,13 +682,13 @@ static std::string trim(std::string s)
 
 static std::string to_upper(std::string s)
 {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::toupper(c); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::toupper(c); });
     return s;
 }
 
 static std::string to_lower(std::string s)
 {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
     return s;
 }
 
@@ -706,10 +706,10 @@ static std::string to_lower(std::string s)
 static std::string mission_to_text_base(std::string token)
 {
     token = trim(token);
-    if(token.empty())
+    if (token.empty())
         return token;
     token = to_upper(token);
-    if(token[0] == 'M')
+    if (token[0] == 'M')
         token[0] = 'T';
     return token;
 }
@@ -717,7 +717,7 @@ static std::string mission_to_text_base(std::string token)
 static bool read_text_file(const std::filesystem::path& p, std::string& out)
 {
     std::ifstream f(p, std::ios::binary);
-    if(!f)
+    if (!f)
         return false;
     out.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     return true;
@@ -725,25 +725,25 @@ static bool read_text_file(const std::filesystem::path& p, std::string& out)
 
 static void append_text_snippet(wxString& info, const std::string& label, const std::string& raw)
 {
-    if(raw.empty())
+    if (raw.empty())
         return;
 
     // Quick cleanup: remove CR and typical in-game control marks.
     std::string s;
     s.reserve(raw.size());
-    for(size_t i = 0; i < raw.size(); ++i)
+    for (size_t i = 0; i < raw.size(); ++i)
     {
         unsigned char c = (unsigned char)raw[i];
-        if(c == '\r')
+        if (c == '\r')
             continue;
-        if(c == '~' || c == 0x1A)
+        if (c == '~' || c == 0x1A)
             continue;
         s.push_back((char)c);
     }
 
     // Limit preview to keep messagebox readable.
     const size_t kMax = 600;
-    if(s.size() > kMax)
+    if (s.size() > kMax)
         s = s.substr(0, kMax) + "...";
 
     info << "\n" << label << "\n";
@@ -752,47 +752,47 @@ static void append_text_snippet(wxString& info, const std::string& label, const 
 
 static void try_append_text_set(wxString& info, const std::filesystem::path& base_dir, std::string mission_token)
 {
-    if(mission_token.empty())
+    if (mission_token.empty())
         return;
 
     std::string base = mission_to_text_base(mission_token);
 
     // Best-effort: if token ends with digit (M02_02), try A (T02_02A)
-    if(!base.empty())
+    if (!base.empty())
     {
         char last = base.back();
-        if(last >= '0' && last <= '9')
+        if (last >= '0' && last <= '9')
             base.push_back('A');
     }
 
     auto load_and_append = [&](const std::string& suffix, const char* caption)
-    {
-        std::string raw;
-        if(read_text_file(base_dir / (base + suffix), raw))
-            append_text_snippet(info, wxString::Format("%s (%s%s)", caption, base, suffix).ToStdString(), raw);
-    };
+        {
+            std::string raw;
+            if (read_text_file(base_dir / (base + suffix), raw))
+                append_text_snippet(info, wxString::Format("%s (%s%s)", caption, base, suffix).ToStdString(), raw);
+        };
 
-    load_and_append("",     "Briefing");
-    load_and_append(".OK",  "Victory");
+    load_and_append("", "Briefing");
+    load_and_append(".OK", "Victory");
     load_and_append(".BAD", "Defeat");
-    load_and_append(".S",   "Counter-attack");
+    load_and_append(".S", "Counter-attack");
 }
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
     : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
-              wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
-      m_main(parent),
-      m_spellData(parent ? parent->spell_data : nullptr),
-      m_level(level)
+        wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
+    m_main(parent),
+    m_spellData(parent ? parent->spell_data : nullptr),
+    m_level(level)
 {
     static bool seeded = false;
-    if(!seeded) { std::srand((unsigned)std::time(nullptr)); seeded = true; }
+    if (!seeded) { std::srand((unsigned)std::time(nullptr)); seeded = true; }
     m_money = 0;
     m_research = 0;
     m_playerUnits = m_level.start_units;
 
     // init territory mission state from LevelData
-    for(const auto& t : m_level.territories)
+    for (const auto& t : m_level.territories)
     {
         m_territoryCurrentMission[t.id] = t.mission;
         m_territoryLaunchCount[t.id] = 0;
@@ -891,7 +891,7 @@ static void SaveStrategicStateFile(
 void StrategicLevelFrame::BuildMenu()
 {
     // Only build once
-    if(GetMenuBar() != nullptr)
+    if (GetMenuBar() != nullptr)
         return;
 
     auto* bar = new wxMenuBar();
@@ -943,25 +943,25 @@ static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& out
     outMoney = 0; outRank = 0; outExp = 0; outTs.clear();
 
     std::ifstream f(path);
-    if(!f)
+    if (!f)
         return false;
 
     std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if(data.empty())
+    if (data.empty())
         return false;
 
     std::smatch m;
-    if(std::regex_search(data, m, std::regex("\"money\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+    if (std::regex_search(data, m, std::regex("\"money\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         outMoney = std::stoi(m[1].str());
 
     // timestamp optional
     std::regex ts_re("\"timestamp\"\\s*:\\s*\"([^\"]*)\"");
-    if(std::regex_search(data, m, ts_re) && m.size() > 1)
+    if (std::regex_search(data, m, ts_re) && m.size() > 1)
         outTs = m[1].str();
 
     // player object optional
     std::regex player_obj_re("\"player\"\\s*:\\s*\\{([^}]*)\\}");
-    if(std::regex_search(data, m, player_obj_re) && m.size() > 1)
+    if (std::regex_search(data, m, player_obj_re) && m.size() > 1)
     {
         const std::string pobj = m[1].str();
         (void)ParseJsonIntField(pobj, "rank", outRank);
@@ -976,13 +976,13 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
     wxArrayString choices;
     choices.reserve(10);
 
-    for(int i = 1; i <= 10; ++i)
+    for (int i = 1; i <= 10; ++i)
     {
         const auto p = GetStrategicSaveSlotPath(m_level, i);
         std::error_code ec;
-        if(std::filesystem::exists(p, ec))
+        if (std::filesystem::exists(p, ec))
         {
-            int money=0, rank=0, xp=0;
+            int money = 0, rank = 0, xp = 0;
             std::string ts;
             PeekStrategicSaveSummary(p, money, rank, xp, ts);
             wxString line = wxString::Format("Slot %02d  |  %s  |  $%d  |  XP %d  |  %s",
@@ -1001,7 +1001,7 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
 
     wxSingleChoiceDialog dlg(this, "Choose a slot to save:", "Save game", choices);
     dlg.SetSelection(0);
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     const int slot = dlg.GetSelection() + 1;
@@ -1009,9 +1009,9 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
 
     // Save full strategic state into slot file
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
-                          m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-                          /*timestamp*/NowIsoLocal());
+        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        /*timestamp*/NowIsoLocal());
 
     wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
 }
@@ -1022,14 +1022,14 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     choices.reserve(10);
 
     std::vector<bool> exists(10, false);
-    for(int i = 1; i <= 10; ++i)
+    for (int i = 1; i <= 10; ++i)
     {
         const auto p = GetStrategicSaveSlotPath(m_level, i);
         std::error_code ec;
-        exists[i-1] = std::filesystem::exists(p, ec);
-        if(exists[i-1])
+        exists[i - 1] = std::filesystem::exists(p, ec);
+        if (exists[i - 1])
         {
-            int money=0, rank=0, xp=0;
+            int money = 0, rank = 0, xp = 0;
             std::string ts;
             PeekStrategicSaveSummary(p, money, rank, xp, ts);
             wxString line = wxString::Format("Slot %02d  |  %s  |  $%d  |  XP %d  |  %s",
@@ -1048,11 +1048,11 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
     wxSingleChoiceDialog dlg(this, "Choose a slot to load:", "Load game", choices);
     dlg.SetSelection(0);
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     const int slot = dlg.GetSelection() + 1;
-    if(!exists[slot-1])
+    if (!exists[slot - 1])
     {
         wxMessageBox("This slot is empty.", "Load game", wxOK | wxICON_WARNING, this);
         return;
@@ -1062,94 +1062,94 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
     std::string loaded_level_def;
     std::string ts;
-    if(!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-                              m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
-                              m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-                              &loaded_level_def, &ts))
+    if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
+        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        &loaded_level_def, &ts))
     {
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
         return;
     }
 
-    
-// Save slot may belong to a different strategic LEVEL_XX.DEF.
-// In that case, automatically switch to the correct level and load there.
-if(!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
-{
-    if(!m_main)
+
+    // Save slot may belong to a different strategic LEVEL_XX.DEF.
+    // In that case, automatically switch to the correct level and load there.
+    if (!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
     {
-        wxString msg;
-        msg << L"This save belongs to a different level/DEF:\n\n";
-        msg << wxString::FromUTF8(loaded_level_def) << L"\n\n";
-        msg << L"Current level is:\n\n";
-        msg << wxString::FromUTF8(m_level.source_path) << L"\n";
-        wxMessageBox(msg, L"Load game", wxOK | wxICON_WARNING, this);
+        if (!m_main)
+        {
+            wxString msg;
+            msg << L"This save belongs to a different level/DEF:\n\n";
+            msg << wxString::FromUTF8(loaded_level_def) << L"\n\n";
+            msg << L"Current level is:\n\n";
+            msg << wxString::FromUTF8(m_level.source_path) << L"\n";
+            wxMessageBox(msg, L"Load game", wxOK | wxICON_WARNING, this);
+            return;
+        }
+
+        LevelData lvl;
+        std::string err;
+        LevelLoader loader;
+        if (!loader.LoadLevelDef(loaded_level_def, lvl, &err))
+        {
+            wxMessageBox(L"Failed to load the level DEF from this save:\n" + wxString::FromUTF8(err),
+                L"Load game", wxOK | wxICON_ERROR, this);
+            return;
+        }
+
+        // Re-load the save file using the correct level, so territory defaults match.
+        int turn = 1, money = 0, research = 0, selTerr = -1;
+        PlayerProgress pl;
+        std::unordered_map<int, std::string> terrMission;
+        std::unordered_map<int, int> terrLaunch;
+        std::vector<LevelData::PlayerUnitAdd> units;
+        std::string def2, ts2;
+
+
+        std::vector<CommanderRec> playerCmds2;
+        std::vector<CommanderRec> availCmds2;
+        int windowStart2 = 1;
+        int genCount2 = 0;
+
+        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
+            terrMission, terrLaunch, units,
+            playerCmds2, availCmds2, windowStart2, genCount2,
+            &def2, &ts2))
+        {
+            wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
+            return;
+        }
+
+        // Open new Strategic Level window for that DEF and apply loaded state.
+        auto* win = new StrategicLevelFrame(m_main, lvl);
+
+        win->m_turn = turn;
+        win->m_money = money;
+        win->m_research = research;
+        win->m_selectedTerritory = selTerr;
+        win->m_player = pl;
+        win->m_territoryCurrentMission = std::move(terrMission);
+        win->m_territoryLaunchCount = std::move(terrLaunch);
+        win->m_playerUnits = std::move(units);
+        win->m_playerCommanders = std::move(playerCmds2);
+        win->m_availableCommanders = std::move(availCmds2);
+        win->m_cmdGenWindowStartTurn = windowStart2;
+        win->m_cmdGenCountInWindow = genCount2;
+
+        win->TryLoadBackground();
+        win->RefreshUI();
+        if (win->m_selectedTerritory >= 0)
+            win->SelectTerritoryById(win->m_selectedTerritory);
+
+        win->Show();
+        win->Raise();
+
+        // Close this (wrong-level) window.
+        Close(true);
         return;
     }
 
-    LevelData lvl;
-    std::string err;
-    LevelLoader loader;
-    if(!loader.LoadLevelDef(loaded_level_def, lvl, &err))
-    {
-        wxMessageBox(L"Failed to load the level DEF from this save:\n" + wxString::FromUTF8(err),
-                     L"Load game", wxOK | wxICON_ERROR, this);
-        return;
-    }
-
-    // Re-load the save file using the correct level, so territory defaults match.
-    int turn=1, money=0, research=0, selTerr=-1;
-    PlayerProgress pl;
-    std::unordered_map<int, std::string> terrMission;
-    std::unordered_map<int, int> terrLaunch;
-    std::vector<LevelData::PlayerUnitAdd> units;
-    std::string def2, ts2;
-
-    
-std::vector<CommanderRec> playerCmds2;
-std::vector<CommanderRec> availCmds2;
-int windowStart2 = 1;
-int genCount2 = 0;
-
-if(!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
-                          terrMission, terrLaunch, units,
-                          playerCmds2, availCmds2, windowStart2, genCount2,
-                          &def2, &ts2))
-{
-        wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
-        return;
-    }
-
-    // Open new Strategic Level window for that DEF and apply loaded state.
-    auto* win = new StrategicLevelFrame(m_main, lvl);
-
-    win->m_turn = turn;
-    win->m_money = money;
-    win->m_research = research;
-    win->m_selectedTerritory = selTerr;
-    win->m_player = pl;
-    win->m_territoryCurrentMission = std::move(terrMission);
-    win->m_territoryLaunchCount = std::move(terrLaunch);
-    win->m_playerUnits = std::move(units);
-    win->m_playerCommanders = std::move(playerCmds2);
-    win->m_availableCommanders = std::move(availCmds2);
-    win->m_cmdGenWindowStartTurn = windowStart2;
-    win->m_cmdGenCountInWindow = genCount2;
-
-    win->TryLoadBackground();
-    win->RefreshUI();
-    if(win->m_selectedTerritory >= 0)
-        win->SelectTerritoryById(win->m_selectedTerritory);
-
-    win->Show();
-    win->Raise();
-
-    // Close this (wrong-level) window.
-    Close(true);
-    return;
-}
-
-    if(m_selectedTerritory >= 0)
+    if (m_selectedTerritory >= 0)
         SelectTerritoryById(m_selectedTerritory);
 
     RefreshUI();
@@ -1159,15 +1159,15 @@ if(!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
 
 bool StrategicLevelFrame::EnsureUnitCostsLoaded()
 {
-    if(m_unitCostsLoaded)
+    if (m_unitCostsLoaded)
         return true;
 
     m_unitCosts.clear();
     const auto path = GetUnitsJsonPath();
-    if(!LoadUnitCostsFromJson(path, m_unitCosts))
+    if (!LoadUnitCostsFromJson(path, m_unitCosts))
     {
         wxMessageBox(wxString::Format("Units pricing file not found or invalid.\nExpected: %s", path.string().c_str()),
-                     "Units pricing", wxOK | wxICON_WARNING, this);
+            "Units pricing", wxOK | wxICON_WARNING, this);
         return false;
     }
 
@@ -1178,7 +1178,7 @@ bool StrategicLevelFrame::EnsureUnitCostsLoaded()
 int StrategicLevelFrame::GetUnitBuyCost(int unit_id) const
 {
     auto it = m_unitCosts.find(unit_id);
-    if(it == m_unitCosts.end())
+    if (it == m_unitCosts.end())
         return -1;
     return it->second;
 }
@@ -1233,7 +1233,7 @@ void StrategicLevelFrame::BuildUI()
     m_territoryButtonsPanel = new wxPanel(under);
     m_territoryButtonsPanel->SetBackgroundColour(m_palette.background);
     auto* grid = new wxGridSizer(0, 4, 6, 6);
-    for(size_t i = 0; i < m_level.territories.size(); ++i)
+    for (size_t i = 0; i < m_level.territories.size(); ++i)
     {
         const auto& t = m_level.territories[i];
         const auto id = ID_TERRITORY_BASE + (int)i;
@@ -1294,7 +1294,7 @@ void StrategicLevelFrame::BuildUI()
     auto* midSizer = new wxBoxSizer(wxVERTICAL);
 
 
-// Commanders (owned) - list (max 14 commanders)
+    // Commanders (owned) - list (max 14 commanders)
     auto* cmdTitle = CreateStrategicLabel(
         mid,
         { { "Commanders", m_palette.heading, &m_fontHeading } },
@@ -1302,37 +1302,37 @@ void StrategicLevelFrame::BuildUI()
         m_palette.shadow,
         &m_palette.background);
 
-midSizer->Add(cmdTitle, 0, wxALL, 8);
+    midSizer->Add(cmdTitle, 0, wxALL, 8);
 
-m_cmdRoster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
-m_cmdRoster->SetFont(m_fontText);
-m_cmdRoster->SetBackgroundColour(m_palette.background);
-m_cmdRoster->SetForegroundColour(m_palette.text);
-m_cmdRoster->InsertColumn(0, "Commander");
-m_cmdRoster->InsertColumn(1, "Rank");
-m_cmdRoster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnCommanderBeginDrag, this);
-m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
-// Keep the commanders list compact (14 rows max)
-// NOVĚ: výška podle fontu + menší počet řádků
-{
-    const int rowsVisible = 8;                   // uprav dle potřeby (např. 6–8)
-    const int ch = m_cmdRoster->GetCharHeight(); // výška znaku dle aktuálního fontu
-    const int rowH = ch + 8;                     // odhad výšky řádku (font + padding)
-    const int headerH = ch + 18;                 // odhad výšky headeru
-    m_cmdRoster->SetMinSize(wxSize(-1, headerH + rowsVisible * rowH));
-};
-midSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    m_cmdRoster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_cmdRoster->SetFont(m_fontText);
+    m_cmdRoster->SetBackgroundColour(m_palette.background);
+    m_cmdRoster->SetForegroundColour(m_palette.text);
+    m_cmdRoster->InsertColumn(0, "Commander");
+    m_cmdRoster->InsertColumn(1, "Rank");
+    m_cmdRoster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnCommanderBeginDrag, this);
+    m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
+    // Keep the commanders list compact (14 rows max)
+    // NOVĚ: výška podle fontu + menší počet řádků
+    {
+        const int rowsVisible = 8;                   // uprav dle potřeby (např. 6–8)
+        const int ch = m_cmdRoster->GetCharHeight(); // výška znaku dle aktuálního fontu
+        const int rowH = ch + 8;                     // odhad výšky řádku (font + padding)
+        const int headerH = ch + 18;                 // odhad výšky headeru
+        m_cmdRoster->SetMinSize(wxSize(-1, headerH + rowsVisible * rowH));
+    };
+    midSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-auto* midTitle = CreateStrategicLabel(
-    mid,
-    { { "Player units", m_palette.heading, &m_fontHeading } },
-    m_fontHeading,
-    m_palette.shadow,
-    &m_palette.background);
+    auto* midTitle = CreateStrategicLabel(
+        mid,
+        { { "Player units", m_palette.heading, &m_fontHeading } },
+        m_fontHeading,
+        m_palette.shadow,
+        &m_palette.background);
 
-midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-// v BuildUI(): úprava definice sloupců m_roster
+    // v BuildUI(): úprava definice sloupců m_roster
     m_roster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->SetFont(m_fontText);
     m_roster->SetBackgroundColour(m_palette.background);
@@ -1344,7 +1344,7 @@ midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     // Units are no longer dragged into hierarchy slots; assignment is done by selecting a unit under a commander.
     // m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
     // m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
-midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
+    midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
     mainSizer->Add(mid, 1, wxEXPAND);
@@ -1398,39 +1398,39 @@ midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
     rightSizer->Add(status, 0, wxALL | wxEXPAND, 8);
 
     auto makeBtn = [&](int id, const wxString& label) -> wxButton*
-    {
-        //return CreateStrategicButton(right, id, label, m_fontText, m_palette.buttonText,
-        //                             m_palette.shadow, m_palette.buttonBackground, wxSize(-1, 44));
-       return CreateStrategicButton(right, id, label,
-           m_fontText,
-           m_palette.buttonText,
-           m_palette.buttonBackground,
-           wxSize(-1, 44));
+        {
+            //return CreateStrategicButton(right, id, label, m_fontText, m_palette.buttonText,
+            //                             m_palette.shadow, m_palette.buttonBackground, wxSize(-1, 44));
+            return CreateStrategicButton(right, id, label,
+                m_fontText,
+                m_palette.buttonText,
+                m_palette.buttonBackground,
+                wxSize(-1, 44));
 
-    };
+        };
 
     // Buttons (order matches original-ish layout)
-    
-    m_btnStrategicMap  = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
+
+    m_btnStrategicMap = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
     m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
-    m_btnResearch      = makeBtn(ID_BTN_RESEARCH, "Research");
-    m_btnBuy           = makeBtn(ID_BTN_BUY, "Buy units");
-    m_btnBuyCmd        = makeBtn(ID_BTN_BUY_CMD, "Buy commander");
-    m_btnSell          = makeBtn(ID_BTN_SELL, "Sell units");
-    m_btnStats         = makeBtn(ID_BTN_STATS, "Statistics");
-    m_btnLaunch        = makeBtn(ID_BTN_LAUNCH, "Launch mission");
-    m_btnEndTurn       = makeBtn(ID_BTN_ENDTURN, "End turn");
+    m_btnResearch = makeBtn(ID_BTN_RESEARCH, "Research");
+    m_btnBuy = makeBtn(ID_BTN_BUY, "Buy units");
+    m_btnBuyCmd = makeBtn(ID_BTN_BUY_CMD, "Buy commander");
+    m_btnSell = makeBtn(ID_BTN_SELL, "Sell units");
+    m_btnStats = makeBtn(ID_BTN_STATS, "Statistics");
+    m_btnLaunch = makeBtn(ID_BTN_LAUNCH, "Launch mission");
+    m_btnEndTurn = makeBtn(ID_BTN_ENDTURN, "End turn");
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
-    btnSizer->Add(m_btnResearch,     0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuy,          0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuyCmd,       0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnSell,         0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuyCmd, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnSell, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnHierarchy,    0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnStats,        0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(m_btnLaunch,       0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(m_btnEndTurn,      0, wxEXPAND);
+    btnSizer->Add(m_btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnStats, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnEndTurn, 0, wxEXPAND);
 
     rightSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     right->SetSizer(rightSizer);
@@ -1474,9 +1474,9 @@ void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
 }
 
 wxPanel* StrategicLevelFrame::BuildHierarchyFormation(wxWindow* parent,
-                                                      const wxString& label,
-                                                      const wxColour& color,
-                                                      wxSizer* contents)
+    const wxString& label,
+    const wxColour& color,
+    wxSizer* contents)
 {
     auto* panel = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_SIMPLE);
     panel->SetBackgroundColour(m_palette.background);
@@ -1522,7 +1522,7 @@ wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
 
     RegisterHierarchySlot(slotId, type, label, placeholder);
 
-    if(type == "commander")
+    if (type == "commander")
     {
         // Commander slots: drag & drop from the commanders roster.
         panel->SetDropTarget(new HierarchySlotDropTarget(this, slotId));
@@ -1532,12 +1532,12 @@ wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
             w->Bind(wxEVT_LEFT_DOWN, [this, slotId](wxMouseEvent& ev) {
                 BeginHierarchySlotDrag(slotId, static_cast<wxWindow*>(ev.GetEventObject()));
                 ev.Skip();
-            });
-        };
+                });
+            };
         bindDrag(label);
         bindDrag(panel);
     }
-    else if(type == "unit")
+    else if (type == "unit")
     {
         // Unit slots:
         // - left click on empty slot => choose a unit instance from roster
@@ -1546,21 +1546,21 @@ wxPanel* StrategicLevelFrame::BuildHierarchySlot(wxWindow* parent,
         auto bindHandlers = [this, slotId](wxWindow* w) {
             w->Bind(wxEVT_LEFT_UP, [this, slotId](wxMouseEvent& ev) {
                 auto it = m_hierarchySlotIndex.find(slotId);
-                if(it != m_hierarchySlotIndex.end())
+                if (it != m_hierarchySlotIndex.end())
                 {
                     HierarchySlot& s = m_hierarchySlots[it->second];
-                    if(s.unit_uid == 0)
+                    if (s.unit_uid == 0)
                         ChooseUnitForHierarchySlot(slotId);
                     else
                         TryAssignCommanderToUnitSlot(slotId);
                 }
                 ev.Skip();
-            });
+                });
             w->Bind(wxEVT_RIGHT_UP, [this, slotId](wxMouseEvent& ev) {
                 ChooseUnitForHierarchySlot(slotId);
                 ev.Skip();
-            });
-        };
+                });
+            };
         bindHandlers(label);
         bindHandlers(panel);
     }
@@ -1808,9 +1808,9 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
 
 
 void StrategicLevelFrame::RegisterHierarchySlot(const std::string& slotId,
-                                                const std::string& type,
-                                                wxStaticText* label,
-                                                const wxString& placeholder)
+    const std::string& type,
+    wxStaticText* label,
+    const wxString& placeholder)
 {
     HierarchySlot slot;
     slot.id = slotId;
@@ -1825,31 +1825,31 @@ void StrategicLevelFrame::RegisterHierarchySlot(const std::string& slotId,
 void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wxString& data)
 {
     auto it = m_hierarchySlotIndex.find(slotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
 
     HierarchySlot& slot = m_hierarchySlots[it->second];
     HierarchyDragData parsed = ParseHierarchyDragData(data);
-    if(!parsed.valid)
+    if (!parsed.valid)
         return;
-    if(parsed.type != slot.type)
+    if (parsed.type != slot.type)
         return;
 
     // Rank gating for commander slots:
     // - battalion: any commander
     // - regiment: rank >= Major (3)
     // - brigade:  rank >= Major General (6)
-    if(slot.type == "commander")
+    if (slot.type == "commander")
     {
         // Resolve commander UID (required to ensure a commander cannot occupy multiple slots).
         uint32_t cmdUid = parsed.commander_uid;
-        if(cmdUid == 0)
+        if (cmdUid == 0)
         {
             // Backward compatibility payloads don't carry UID. Best-effort lookup by name + rank.
             const std::string name = parsed.name.ToStdString();
-            for(const auto& c : m_playerCommanders)
+            for (const auto& c : m_playerCommanders)
             {
-                if(c.name == name && (parsed.rank < 0 || c.rank == parsed.rank))
+                if (c.name == name && (parsed.rank < 0 || c.rank == parsed.rank))
                 {
                     cmdUid = c.uid;
                     break;
@@ -1858,19 +1858,19 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
         }
 
         int required = 0;
-        if(slotId.find("regiment_") != std::string::npos)
+        if (slotId.find("regiment_") != std::string::npos)
             required = 3;
-        else if(slotId.find("brigade_") != std::string::npos)
+        else if (slotId.find("brigade_") != std::string::npos)
             required = 6;
 
         // If we didn't receive rank, attempt a best-effort lookup by name.
         int rank = parsed.rank;
-        if(rank < 0)
+        if (rank < 0)
         {
             const std::string name = parsed.name.ToStdString();
-            for(const auto& c : m_playerCommanders)
+            for (const auto& c : m_playerCommanders)
             {
-                if(c.name == name)
+                if (c.name == name)
                 {
                     rank = c.rank;
                     break;
@@ -1878,7 +1878,7 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
             }
         }
 
-        if(rank < required)
+        if (rank < required)
         {
             wxMessageBox(
                 wxString::Format("This commander needs at least %s for this slot.",
@@ -1890,11 +1890,11 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
         }
 
         // Enforce uniqueness: move the commander if they're already placed elsewhere.
-        if(cmdUid != 0)
+        if (cmdUid != 0)
         {
-            for(auto& s : m_hierarchySlots)
+            for (auto& s : m_hierarchySlots)
             {
-                if(s.type == "commander" && s.commander_uid == cmdUid && s.id != slotId)
+                if (s.type == "commander" && s.commander_uid == cmdUid && s.id != slotId)
                 {
                     ClearHierarchySlot(s.id);
                     break;
@@ -1906,7 +1906,7 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
         slot.commander_uid = cmdUid;
         wxString baseName = parsed.name;
         const wxString abbr = GetRankAbbrev(rank);
-        if(baseName.StartsWith(abbr + " "))
+        if (baseName.StartsWith(abbr + " "))
             baseName = baseName.Mid(abbr.length() + 1);
         slot.commander_name = baseName.ToUTF8().data();
         // Switching commander resets its assigned unit.
@@ -1924,18 +1924,18 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
 
     slot.label->GetParent()->Layout();
 
-    if(parsed.fromSlot && parsed.slotId != slotId)
+    if (parsed.fromSlot && parsed.slotId != slotId)
         ClearHierarchySlot(parsed.slotId);
 }
 
 void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
 {
     auto it = m_hierarchySlotIndex.find(slotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
     HierarchySlot& slot = m_hierarchySlots[it->second];
 
-    if(slot.type == "unit")
+    if (slot.type == "unit")
     {
         // Clearing a unit slot should NOT wipe commander state.
         const uint32_t oldUid = slot.unit_uid;
@@ -1945,14 +1945,14 @@ void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
         slot.label->GetParent()->Layout();
 
         // If this unit was the assigned unit for the commander above, unassign it.
-        if(oldUid != 0)
+        if (oldUid != 0)
         {
             const std::string commanderId = GetCommanderSlotForUnitSlot(slotId);
             auto itc = m_hierarchySlotIndex.find(commanderId);
-            if(itc != m_hierarchySlotIndex.end())
+            if (itc != m_hierarchySlotIndex.end())
             {
                 HierarchySlot& cs = m_hierarchySlots[itc->second];
-                if(cs.type == "commander" && cs.assigned_unit_uid == oldUid)
+                if (cs.type == "commander" && cs.assigned_unit_uid == oldUid)
                 {
                     cs.assigned_unit_uid = 0;
                     cs.assigned_unit_display.clear();
@@ -1974,14 +1974,14 @@ void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
     // Also clear the paired "assignment unit" slot (the "?" slot under commander nodes), if present.
     {
         std::string assignmentId;
-        if(slotId.find("battalion_") == 0 && endsWith(slotId, "_commander"))
+        if (slotId.find("battalion_") == 0 && endsWith(slotId, "_commander"))
             assignmentId = slotId + "_unit"; // battalion_X_commander -> battalion_X_commander_unit
-        else if(slotId.find("regiment_") == 0 && endsWith(slotId, "_commander"))
+        else if (slotId.find("regiment_") == 0 && endsWith(slotId, "_commander"))
             assignmentId = slotId.substr(0, slotId.size() - std::string("_commander").size()) + "_unit";
-        else if(slotId.find("brigade_") == 0 && endsWith(slotId, "_commander"))
+        else if (slotId.find("brigade_") == 0 && endsWith(slotId, "_commander"))
             assignmentId = slotId.substr(0, slotId.size() - std::string("_commander").size()) + "_unit";
 
-        if(!assignmentId.empty())
+        if (!assignmentId.empty())
             ClearHierarchySlot(assignmentId);
     }
     slot.label->GetParent()->Layout();
@@ -1990,17 +1990,17 @@ void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
 void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWindow* source)
 {
     auto it = m_hierarchySlotIndex.find(slotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
     HierarchySlot& slot = m_hierarchySlots[it->second];
-    if(slot.label->GetLabel() == slot.placeholder)
+    if (slot.label->GetLabel() == slot.placeholder)
         return;
     wxTextDataObject dataObject(
         slot.type == "commander"
-            ? wxString::Format("slot:%s:%s:%u:%d:%s", slot.id.c_str(), slot.type.c_str(),
-                (unsigned)slot.commander_uid, slot.rank,
-                slot.commander_name.empty() ? slot.label->GetLabel() : wxString::FromUTF8(slot.commander_name))
-            : wxString::Format("slot:%s:%s:%s", slot.id.c_str(), slot.type.c_str(), slot.label->GetLabel()));
+        ? wxString::Format("slot:%s:%s:%u:%d:%s", slot.id.c_str(), slot.type.c_str(),
+            (unsigned)slot.commander_uid, slot.rank,
+            slot.commander_name.empty() ? slot.label->GetLabel() : wxString::FromUTF8(slot.commander_name))
+        : wxString::Format("slot:%s:%s:%s", slot.id.c_str(), slot.type.c_str(), slot.label->GetLabel()));
     wxDropSource dropSource(dataObject, source);
     dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
@@ -2009,19 +2009,19 @@ void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWi
 std::vector<StrategicLevelFrame::RosterPickItem> StrategicLevelFrame::GetRosterPickItems() const
 {
     std::vector<RosterPickItem> out;
-    if(!m_roster)
+    if (!m_roster)
         return out;
 
     const long count = m_roster->GetItemCount();
     out.reserve((size_t)count);
 
     // Build stable-ish uids per roster row. We store uid in ItemData when inserting.
-    for(long i = 0; i < count; ++i)
+    for (long i = 0; i < count; ++i)
     {
         const wxString display = m_roster->GetItemText(i);
         const long data = m_roster->GetItemData(i);
         const uint32_t uid = (data >= 0) ? (uint32_t)data : 0;
-        if(display.empty() || uid == 0)
+        if (display.empty() || uid == 0)
             continue;
 
         RosterPickItem it;
@@ -2041,16 +2041,16 @@ std::string StrategicLevelFrame::GetCommanderSlotForUnitSlot(const std::string& 
     // brigade_X_unit            -> brigade_X_commander
     auto endsWith = [](const std::string& s, const std::string& suf) {
         return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
-    };
+        };
 
     // battalion_X_unit_N -> battalion_X_commander (unit slots are numbered, so they don't end with "_unit")
     {
         const std::string pre = "battalion_";
         const std::string mid = "_unit_";
-        if(unitSlotId.rfind(pre, 0) == 0)
+        if (unitSlotId.rfind(pre, 0) == 0)
         {
             const size_t p = unitSlotId.find(mid);
-            if(p != std::string::npos)
+            if (p != std::string::npos)
             {
                 const std::string idx = unitSlotId.substr(pre.size(), p - pre.size());
                 // idx should be numeric, but even if not, keep best-effort.
@@ -2059,13 +2059,13 @@ std::string StrategicLevelFrame::GetCommanderSlotForUnitSlot(const std::string& 
         }
     }
 
-    if(endsWith(unitSlotId, "_commander_unit"))
+    if (endsWith(unitSlotId, "_commander_unit"))
         return unitSlotId.substr(0, unitSlotId.size() - std::string("_unit").size());
 
-    if(endsWith(unitSlotId, "_unit"))
+    if (endsWith(unitSlotId, "_unit"))
     {
         std::string base = unitSlotId.substr(0, unitSlotId.size() - std::string("_unit").size());
-        if(base.find("_commander") == std::string::npos)
+        if (base.find("_commander") == std::string::npos)
             base += "_commander";
         return base;
     }
@@ -2076,11 +2076,11 @@ std::string StrategicLevelFrame::GetCommanderSlotForUnitSlot(const std::string& 
 void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlotId)
 {
     auto it = m_hierarchySlotIndex.find(unitSlotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
 
     HierarchySlot& slot = m_hierarchySlots[it->second];
-    if(slot.type != "unit")
+    if (slot.type != "unit")
         return;
 
     // Special case: assignment slot (the "?" slot under commander nodes). This slot must NOT
@@ -2089,11 +2089,11 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
     {
         auto endsWith = [](const std::string& s, const std::string& suf) {
             return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
-        };
+            };
         const bool isBattalionAssign = endsWith(unitSlotId, "_commander_unit");
         const bool isRegimentAssign = (unitSlotId.rfind("regiment_", 0) == 0) && endsWith(unitSlotId, "_unit");
-        const bool isBrigadeAssign  = (unitSlotId.rfind("brigade_", 0) == 0)  && endsWith(unitSlotId, "_unit");
-        if(isBattalionAssign || isRegimentAssign || isBrigadeAssign)
+        const bool isBrigadeAssign = (unitSlotId.rfind("brigade_", 0) == 0) && endsWith(unitSlotId, "_unit");
+        if (isBattalionAssign || isRegimentAssign || isBrigadeAssign)
         {
             ChooseAssignedUnitForCommanderAssignmentSlot(unitSlotId);
             return;
@@ -2103,13 +2103,13 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
     // If commander above is missing, still allow CLEARING a filled slot, but block ASSIGNING a new unit.
     const std::string commanderId = GetCommanderSlotForUnitSlot(unitSlotId);
     bool commanderPresent = true;
-    if(!commanderId.empty())
+    if (!commanderId.empty())
     {
         auto itc = m_hierarchySlotIndex.find(commanderId);
-        if(itc != m_hierarchySlotIndex.end())
+        if (itc != m_hierarchySlotIndex.end())
         {
             const HierarchySlot& cslot = m_hierarchySlots[itc->second];
-            if(cslot.label && cslot.label->GetLabel() == cslot.placeholder)
+            if (cslot.label && cslot.label->GetLabel() == cslot.placeholder)
                 commanderPresent = false;
         }
     }
@@ -2117,15 +2117,15 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
     const auto items = GetRosterPickItems();
     wxArrayString choices;
     choices.Add("<none>");
-    for(const auto& it : items)
+    for (const auto& it : items)
         choices.Add(it.label);
 
     int sel = 0;
-    if(slot.unit_uid != 0)
+    if (slot.unit_uid != 0)
     {
-        for(size_t i = 0; i < items.size(); ++i)
+        for (size_t i = 0; i < items.size(); ++i)
         {
-            if(items[i].uid == slot.unit_uid)
+            if (items[i].uid == slot.unit_uid)
             {
                 sel = (int)i + 1; // +1 due to <none>
                 break;
@@ -2140,17 +2140,17 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
         choices);
     dlg.SetSelection(sel);
 
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     const wxString picked = dlg.GetStringSelection();
-    if(picked == "<none>")
+    if (picked == "<none>")
     {
         ClearHierarchySlot(unitSlotId);
         return;
     }
 
-    if(!commanderPresent)
+    if (!commanderPresent)
     {
         wxMessageBox(
             "Assign a commander first, then choose a unit for this commander.\n\n"
@@ -2164,26 +2164,26 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
     // Resolve picked item -> uid
     uint32_t uid = 0;
     wxString display;
-    for(const auto& it : items)
+    for (const auto& it : items)
     {
-        if(it.label == picked)
+        if (it.label == picked)
         {
             uid = it.uid;
             display = it.display;
             break;
         }
     }
-    if(uid == 0 || display.empty())
+    if (uid == 0 || display.empty())
         return;
 
     // Enforce uniqueness by UID across hierarchy (but do NOT remove from roster).
-    for(const auto& other : m_hierarchySlots)
+    for (const auto& other : m_hierarchySlots)
     {
-        if(other.id == unitSlotId)
+        if (other.id == unitSlotId)
             continue;
-        if(other.type != "unit")
+        if (other.type != "unit")
             continue;
-        if(other.unit_uid != 0 && other.unit_uid == uid)
+        if (other.unit_uid != 0 && other.unit_uid == uid)
         {
             wxMessageBox(
                 "This exact unit instance is already assigned elsewhere in the hierarchy.\n\n"
@@ -2208,31 +2208,31 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
 void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId)
 {
     auto it = m_hierarchySlotIndex.find(assignmentSlotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
 
     HierarchySlot& aslot = m_hierarchySlots[it->second];
-    if(aslot.type != "unit")
+    if (aslot.type != "unit")
         return;
 
     auto endsWith = [](const std::string& s, const std::string& suf) {
         return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
-    };
+        };
 
     const bool isBattalionAssign = endsWith(assignmentSlotId, "_commander_unit");
-    const bool isRegimentAssign  = (assignmentSlotId.rfind("regiment_", 0) == 0) && endsWith(assignmentSlotId, "_unit");
-    const bool isBrigadeAssign   = (assignmentSlotId.rfind("brigade_", 0) == 0)  && endsWith(assignmentSlotId, "_unit");
+    const bool isRegimentAssign = (assignmentSlotId.rfind("regiment_", 0) == 0) && endsWith(assignmentSlotId, "_unit");
+    const bool isBrigadeAssign = (assignmentSlotId.rfind("brigade_", 0) == 0) && endsWith(assignmentSlotId, "_unit");
 
     // Identify owning commander slot
     const std::string commanderId = GetCommanderSlotForUnitSlot(assignmentSlotId);
     auto itc = m_hierarchySlotIndex.find(commanderId);
-    if(itc == m_hierarchySlotIndex.end())
+    if (itc == m_hierarchySlotIndex.end())
         return;
     HierarchySlot& cslot = m_hierarchySlots[itc->second];
-    if(cslot.type != "commander" || !cslot.label)
+    if (cslot.type != "commander" || !cslot.label)
         return;
 
-    if(cslot.label->GetLabel() == cslot.placeholder)
+    if (cslot.label->GetLabel() == cslot.placeholder)
     {
         wxMessageBox(
             "Assign a commander first, then choose which of their units they are part of.",
@@ -2247,53 +2247,54 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
     candidateSlotIds.reserve(16);
 
     auto parseNumberBetween = [](const std::string& s, const std::string& pre, const std::string& suf, int& out) {
-        if(s.rfind(pre, 0) != 0)
+        if (s.rfind(pre, 0) != 0)
             return false;
         const size_t p = s.find(suf, pre.size());
-        if(p == std::string::npos)
+        if (p == std::string::npos)
             return false;
         const std::string num = s.substr(pre.size(), p - pre.size());
-        if(num.empty())
+        if (num.empty())
             return false;
-        try { out = std::stoi(num); return true; } catch(...) { return false; }
-    };
+        try { out = std::stoi(num); return true; }
+        catch (...) { return false; }
+        };
 
-    if(isBattalionAssign)
+    if (isBattalionAssign)
     {
         int bIndex = 0;
-        if(parseNumberBetween(assignmentSlotId, "battalion_", "_commander_unit", bIndex))
+        if (parseNumberBetween(assignmentSlotId, "battalion_", "_commander_unit", bIndex))
         {
-            for(int u = 1; u <= 4; ++u)
+            for (int u = 1; u <= 4; ++u)
                 candidateSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
         }
     }
-    else if(isRegimentAssign)
+    else if (isRegimentAssign)
     {
         int rIndex = 0;
-        if(parseNumberBetween(assignmentSlotId, "regiment_", "_unit", rIndex))
+        if (parseNumberBetween(assignmentSlotId, "regiment_", "_unit", rIndex))
         {
             const int brigadeIndex = (rIndex - 1) / 2 + 1;
             const int rLocal = (rIndex - 1) % 2; // 0/1 within brigade
             const int battalionBase = (brigadeIndex - 1) * 4;
             const int b0 = battalionBase + rLocal * 2 + 1;
             const int b1 = battalionBase + rLocal * 2 + 2;
-            for(int u = 1; u <= 4; ++u)
+            for (int u = 1; u <= 4; ++u)
             {
                 candidateSlotIds.push_back("battalion_" + std::to_string(b0) + "_unit_" + std::to_string(u));
                 candidateSlotIds.push_back("battalion_" + std::to_string(b1) + "_unit_" + std::to_string(u));
             }
         }
     }
-    else if(isBrigadeAssign)
+    else if (isBrigadeAssign)
     {
         int brigIndex = 0;
-        if(parseNumberBetween(assignmentSlotId, "brigade_", "_unit", brigIndex))
+        if (parseNumberBetween(assignmentSlotId, "brigade_", "_unit", brigIndex))
         {
             const int battalionBase = (brigIndex - 1) * 4;
-            for(int b = 1; b <= 4; ++b)
+            for (int b = 1; b <= 4; ++b)
             {
                 const int bIndex = battalionBase + b;
-                for(int u = 1; u <= 4; ++u)
+                for (int u = 1; u <= 4; ++u)
                     candidateSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
             }
         }
@@ -2303,13 +2304,13 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
     std::vector<Choice> choices;
     choices.reserve(candidateSlotIds.size());
 
-    for(const auto& sid : candidateSlotIds)
+    for (const auto& sid : candidateSlotIds)
     {
         auto itu = m_hierarchySlotIndex.find(sid);
-        if(itu == m_hierarchySlotIndex.end())
+        if (itu == m_hierarchySlotIndex.end())
             continue;
         const HierarchySlot& us = m_hierarchySlots[itu->second];
-        if(us.type != "unit" || us.unit_uid == 0 || us.unit_display.empty())
+        if (us.type != "unit" || us.unit_uid == 0 || us.unit_display.empty())
             continue;
         Choice c;
         c.uid = us.unit_uid;
@@ -2320,16 +2321,16 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
 
     wxArrayString pick;
     pick.Add("<none>");
-    for(const auto& c : choices)
+    for (const auto& c : choices)
         pick.Add(c.label);
 
     int sel = 0;
     const uint32_t current = (cslot.assigned_unit_uid != 0) ? cslot.assigned_unit_uid : aslot.unit_uid;
-    if(current != 0)
+    if (current != 0)
     {
-        for(size_t i = 0; i < choices.size(); ++i)
+        for (size_t i = 0; i < choices.size(); ++i)
         {
-            if(choices[i].uid == current)
+            if (choices[i].uid == current)
             {
                 sel = (int)i + 1;
                 break;
@@ -2343,11 +2344,11 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
         "Assign Commander",
         pick);
     dlg.SetSelection(sel);
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     const wxString picked = dlg.GetStringSelection();
-    if(picked == "<none>")
+    if (picked == "<none>")
     {
         // Clear assignment only
         aslot.unit_uid = 0;
@@ -2362,16 +2363,16 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
 
     uint32_t uid = 0;
     wxString display;
-    for(const auto& c : choices)
+    for (const auto& c : choices)
     {
-        if(c.label == picked)
+        if (c.label == picked)
         {
             uid = c.uid;
             display = c.display;
             break;
         }
     }
-    if(uid == 0 || display.empty())
+    if (uid == 0 || display.empty())
         return;
 
     // Set assignment slot + commander display
@@ -2389,26 +2390,26 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
 void StrategicLevelFrame::TryAssignCommanderToUnitSlot(const std::string& unitSlotId)
 {
     auto it = m_hierarchySlotIndex.find(unitSlotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
 
     HierarchySlot& us = m_hierarchySlots[it->second];
-    if(us.type != "unit" || us.unit_uid == 0)
+    if (us.type != "unit" || us.unit_uid == 0)
         return;
 
     const std::string commanderId = GetCommanderSlotForUnitSlot(unitSlotId);
-    if(commanderId.empty())
+    if (commanderId.empty())
         return;
 
     auto itc = m_hierarchySlotIndex.find(commanderId);
-    if(itc == m_hierarchySlotIndex.end())
+    if (itc == m_hierarchySlotIndex.end())
         return;
 
     HierarchySlot& cs = m_hierarchySlots[itc->second];
-    if(cs.type != "commander" || !cs.label)
+    if (cs.type != "commander" || !cs.label)
         return;
 
-    if(cs.label->GetLabel() == cs.placeholder)
+    if (cs.label->GetLabel() == cs.placeholder)
     {
         wxMessageBox(
             "Assign a commander first, then choose which unit under them is the assigned unit.",
@@ -2427,21 +2428,21 @@ void StrategicLevelFrame::TryAssignCommanderToUnitSlot(const std::string& unitSl
 void StrategicLevelFrame::UpdateCommanderHierarchyLabel(const std::string& commanderSlotId)
 {
     auto it = m_hierarchySlotIndex.find(commanderSlotId);
-    if(it == m_hierarchySlotIndex.end())
+    if (it == m_hierarchySlotIndex.end())
         return;
 
     HierarchySlot& cs = m_hierarchySlots[it->second];
-    if(cs.type != "commander" || !cs.label)
+    if (cs.type != "commander" || !cs.label)
         return;
 
-    if(cs.commander_name.empty())
+    if (cs.commander_name.empty())
     {
         // Best effort fallback: try to parse label (may already include rank)
         cs.commander_name = cs.label->GetLabel().ToStdString();
     }
 
     wxString base = wxString::Format("%s %s", GetRankAbbrev(cs.rank), wxString::FromUTF8(cs.commander_name));
-    if(cs.assigned_unit_uid != 0 && !cs.assigned_unit_display.empty())
+    if (cs.assigned_unit_uid != 0 && !cs.assigned_unit_display.empty())
         base += wxString::Format(" → %s", cs.assigned_unit_display);
 
     cs.label->SetLabel(base);
@@ -2450,7 +2451,7 @@ void StrategicLevelFrame::UpdateCommanderHierarchyLabel(const std::string& comma
 
 void StrategicLevelFrame::OnHierarchyTogglePage(wxCommandEvent&)
 {
-    if(!m_hierarchyBook || !m_btnHierarchyPageToggle)
+    if (!m_hierarchyBook || !m_btnHierarchyPageToggle)
         return;
 
     size_t current = m_hierarchyBook->GetSelection();
@@ -2462,10 +2463,10 @@ void StrategicLevelFrame::OnHierarchyTogglePage(wxCommandEvent&)
 void StrategicLevelFrame::OnRosterBeginDrag(wxListEvent& event)
 {
     const long item = event.GetIndex();
-    if(item < 0)
+    if (item < 0)
         return;
     wxString name = m_roster->GetItemText(item);
-    if(name.empty())
+    if (name.empty())
         return;
     wxTextDataObject dataObject("unit:" + name);
     wxDropSource dropSource(dataObject, m_roster);
@@ -2475,17 +2476,17 @@ void StrategicLevelFrame::OnRosterBeginDrag(wxListEvent& event)
 void StrategicLevelFrame::OnCommanderBeginDrag(wxListEvent& event)
 {
     const long item = event.GetIndex();
-    if(item < 0)
+    if (item < 0)
         return;
 
     wxString name = m_cmdRoster->GetItemText(item);
-    if(name.empty())
+    if (name.empty())
         return;
 
     const uint32_t uid = (uint32_t)m_cmdRoster->GetItemData(item);
     int rank = 0;
     auto it = m_commanderRankByUid.find(uid);
-    if(it != m_commanderRankByUid.end())
+    if (it != m_commanderRankByUid.end())
         rank = it->second;
     wxTextDataObject dataObject(wxString::Format("commander:%u:%d:%s", (unsigned)uid, rank, name));
     wxDropSource dropSource(dataObject, m_cmdRoster);
@@ -2501,42 +2502,42 @@ void StrategicLevelFrame::RefreshUI()
     if (m_lblTurnValue)
         m_lblTurnValue->SetLabel(wxString::Format("%d", m_turn));
 
-// Commanders list
-if(m_cmdRoster)
-{
-    while(m_cmdRoster->GetColumnCount() > 0)
-        m_cmdRoster->DeleteColumn(0);
-    m_cmdRoster->InsertColumn(0, "Commander");
-    m_cmdRoster->InsertColumn(1, "Rank");
-
-    m_cmdRoster->DeleteAllItems();
-
-    // Ensure commander UIDs exist and rebuild uid->rank helper map
-    m_commanderRankByUid.clear();
-
-    long crow = 0;
-    for(auto& c : m_playerCommanders)
+    // Commanders list
+    if (m_cmdRoster)
     {
-        if(crow >= 14) break;
-        if(c.uid == 0)
-            c.uid = m_nextCommanderUid++;
+        while (m_cmdRoster->GetColumnCount() > 0)
+            m_cmdRoster->DeleteColumn(0);
+        m_cmdRoster->InsertColumn(0, "Commander");
+        m_cmdRoster->InsertColumn(1, "Rank");
 
-        long cidx = m_cmdRoster->InsertItem(crow++, wxString::FromUTF8(c.name));
-        m_cmdRoster->SetItem(cidx, 1, GetRankAbbrev(c.rank));
-        m_cmdRoster->SetItemData(cidx, (long)c.uid);
-        m_commanderRankByUid[c.uid] = c.rank;
+        m_cmdRoster->DeleteAllItems();
+
+        // Ensure commander UIDs exist and rebuild uid->rank helper map
+        m_commanderRankByUid.clear();
+
+        long crow = 0;
+        for (auto& c : m_playerCommanders)
+        {
+            if (crow >= 14) break;
+            if (c.uid == 0)
+                c.uid = m_nextCommanderUid++;
+
+            long cidx = m_cmdRoster->InsertItem(crow++, wxString::FromUTF8(c.name));
+            m_cmdRoster->SetItem(cidx, 1, GetRankAbbrev(c.rank));
+            m_cmdRoster->SetItemData(cidx, (long)c.uid);
+            m_commanderRankByUid[c.uid] = c.rank;
+        }
+
+        int cW = 0, cH = 0;
+        m_cmdRoster->GetClientSize(&cW, &cH);
+        const int rankW = 70;
+        const int nameW = std::max(90, cW - rankW - 4);
+        m_cmdRoster->SetColumnWidth(1, rankW);
+        m_cmdRoster->SetColumnWidth(0, nameW);
     }
 
-    int cW=0,cH=0;
-    m_cmdRoster->GetClientSize(&cW,&cH);
-    const int rankW = 70;
-    const int nameW = std::max(90, cW - rankW - 4);
-    m_cmdRoster->SetColumnWidth(1, rankW);
-    m_cmdRoster->SetColumnWidth(0, nameW);
-}
-
-// Reset sloupců: vynutit přesně 2 sloupce (Unit, HP)
-    // Smaž existující sloupce bez ohledu na stav
+    // Reset sloupců: vynutit přesně 2 sloupce (Unit, HP)
+        // Smaž existující sloupce bez ohledu na stav
     while (m_roster->GetColumnCount() > 0)
         m_roster->DeleteColumn(0);
 
@@ -2549,22 +2550,22 @@ if(m_cmdRoster)
     // Expand units into roster rows. Each row gets a stable-ish UID so hierarchy
     // can reference a specific instance even if there are duplicates by name.
     int totalRows = 0;
-    for(const auto& u : m_playerUnits)
+    for (const auto& u : m_playerUnits)
         totalRows += std::max(0, u.count);
 
-    if((int)m_rosterRowUids.size() != totalRows)
+    if ((int)m_rosterRowUids.size() != totalRows)
     {
         m_rosterRowUids.clear();
         m_rosterRowUids.reserve((size_t)totalRows);
-        for(int i = 0; i < totalRows; ++i)
+        for (int i = 0; i < totalRows; ++i)
             m_rosterRowUids.push_back(m_nextRosterUid++);
     }
 
     long row = 0;
     int uidIndex = 0;
-    for(const auto& u : m_playerUnits)
+    for (const auto& u : m_playerUnits)
     {
-        for(int i = 0; i < u.count; ++i)
+        for (int i = 0; i < u.count; ++i)
         {
             const uint32_t uid = (uidIndex < (int)m_rosterRowUids.size()) ? m_rosterRowUids[(size_t)uidIndex++] : (uint32_t)m_nextRosterUid++;
             long idx = m_roster->InsertItem(row++, GetUnitDisplayName(u.unit_id));
@@ -2574,16 +2575,16 @@ if(m_cmdRoster)
         }
     }
 
-//    // Automatická šířka sloupců (jen 2 sloupce)
-//    m_roster->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
-//    m_roster->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
-//
-//    m_btnLaunch->Enable(m_selectedTerritory >= 0);
-//    if(m_btnSell)
-//        m_btnSell->Enable(!m_playerUnits.empty());
-//}
+    //    // Automatická šířka sloupců (jen 2 sloupce)
+    //    m_roster->SetColumnWidth(0, wxLIST_AUTOSIZE_USEHEADER);
+    //    m_roster->SetColumnWidth(1, wxLIST_AUTOSIZE_USEHEADER);
+    //
+    //    m_btnLaunch->Enable(m_selectedTerritory >= 0);
+    //    if(m_btnSell)
+    //        m_btnSell->Enable(!m_playerUnits.empty());
+    //}
 
-    // Pevná šířka pro HP, zbytek pro název jednotky
+        // Pevná šířka pro HP, zbytek pro název jednotky
     int clientW = 0, clientH = 0;
     m_roster->GetClientSize(&clientW, &clientH);
 
@@ -2597,7 +2598,7 @@ if(m_cmdRoster)
     if (m_btnSell)
         m_btnSell->Enable(!m_playerUnits.empty());
 
-    if(m_btnBuyCmd)
+    if (m_btnBuyCmd)
     {
         const bool haveOffer = !m_availableCommanders.empty();
         const bool haveSpace = (int)m_playerCommanders.size() < 14;
@@ -2607,13 +2608,13 @@ if(m_cmdRoster)
 
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
-    if(m_leftBook)
+    if (m_leftBook)
         m_leftBook->SetSelection(0);
 }
 
 void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 {
-    if(m_leftBook)
+    if (m_leftBook)
         m_leftBook->SetSelection(1);
 }
 
@@ -2626,22 +2627,22 @@ void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
     RecomputePlayerRank();
     RefreshStatsPage();
 
-    if(m_leftBook)
+    if (m_leftBook)
         m_leftBook->SetSelection(2);
 }
 void StrategicLevelFrame::SelectTerritoryById(int territory_id)
 {
     // Find index in LevelData by id.
     int idx = -1;
-    for(size_t i = 0; i < m_level.territories.size(); ++i)
+    for (size_t i = 0; i < m_level.territories.size(); ++i)
     {
-        if(m_level.territories[i].id == territory_id)
+        if (m_level.territories[i].id == territory_id)
         {
             idx = (int)i;
             break;
         }
     }
-    if(idx < 0)
+    if (idx < 0)
         return;
 
     m_selectedTerritory = territory_id;
@@ -2653,14 +2654,14 @@ void StrategicLevelFrame::SelectTerritoryById(int territory_id)
 
 void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
 {
-    if(!m_hasBg || !m_bgBitmap.IsOk() || !m_hasClk || m_clkValues.empty())
+    if (!m_hasBg || !m_bgBitmap.IsOk() || !m_hasClk || m_clkValues.empty())
     {
         ev.Skip();
         return;
     }
 
     wxWindow* target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
-    if(!target)
+    if (!target)
     {
         ev.Skip();
         return;
@@ -2670,7 +2671,7 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     target->GetClientSize(&pw, &ph);
     const int bw = m_bgBitmap.GetWidth();
     const int bh = m_bgBitmap.GetHeight();
-    if(pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
+    if (pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
     {
         ev.Skip();
         return;
@@ -2678,24 +2679,24 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
 
     const double sx = (double)pw / (double)bw;
     const double sy = (double)ph / (double)bh;
-    const double s  = std::min(sx, sy);
+    const double s = std::min(sx, sy);
     const int dw = std::max(1, (int)std::lround((double)bw * s));
     const int dh = std::max(1, (int)std::lround((double)bh * s));
     const int ox = (pw - dw) / 2;
     const int oy = (ph - dh) / 2;
 
     const wxPoint p = ev.GetPosition();
-    if(p.x < ox || p.y < oy || p.x >= ox + dw || p.y >= oy + dh)
+    if (p.x < ox || p.y < oy || p.x >= ox + dw || p.y >= oy + dh)
         return;
 
     // Map click from scaled bitmap to original pixel coords.
     const int mx = (int)std::floor(((double)(p.x - ox) * (double)bw) / (double)dw);
     const int my = (int)std::floor(((double)(p.y - oy) * (double)bh) / (double)dh);
-    if(mx < 0 || my < 0 || mx >= bw || my >= bh)
+    if (mx < 0 || my < 0 || mx >= bw || my >= bh)
         return;
 
     // CLK map must match bitmap dimensions.
-    if(m_clkW != bw || m_clkH != bh || (size_t)m_clkW * (size_t)m_clkH != m_clkValues.size())
+    if (m_clkW != bw || m_clkH != bh || (size_t)m_clkW * (size_t)m_clkH != m_clkValues.size())
         return;
 
     //const unsigned char tid = m_clkValues[(size_t)my * (size_t)m_clkW + (size_t)mx];
@@ -2749,7 +2750,7 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 {
     int idx = ev.GetId() - ID_TERRITORY_BASE;
-    if(idx < 0 || idx >= (int)m_level.territories.size())
+    if (idx < 0 || idx >= (int)m_level.territories.size())
         return;
 
     m_selectedTerritory = m_level.territories[idx].id;
@@ -2763,11 +2764,11 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
     info << wxString::Format("Strategic point: %d,%d\n", t.strategic_x, t.strategic_y);
 
     auto itc = m_territoryCurrentMission.find(t.id);
-    if(itc != m_territoryCurrentMission.end())
+    if (itc != m_territoryCurrentMission.end())
         info << "Current: " << itc->second << "\n";
 
     auto itn = m_territoryLaunchCount.find(t.id);
-    if(itn != m_territoryLaunchCount.end())
+    if (itn != m_territoryLaunchCount.end())
         info << wxString::Format("Played: %d\n", itn->second);
 
     // --- Show per-mission texts from DATA/TEXTS (briefing + OK/BAD/S) ---
@@ -2781,14 +2782,14 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         std::error_code ec;
 
         auto try_dir = [&](const fs::path& p)
-        {
-            if(texts_dir.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
-                texts_dir = p;
-        };
+            {
+                if (texts_dir.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
+                    texts_dir = p;
+            };
 
         // 1) Walk up from the level DEF location and try common layouts
         fs::path base = fs::path(m_level.source_path).parent_path();
-        for(int i = 0; i < 8 && !base.empty() && texts_dir.empty(); ++i)
+        for (int i = 0; i < 8 && !base.empty() && texts_dir.empty(); ++i)
         {
             try_dir(base / "DATA" / "TEXTS");
             try_dir(base / "DATA" / "texts");
@@ -2799,7 +2800,7 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         }
 
         // 2) Fallback: current working directory
-        if(texts_dir.empty())
+        if (texts_dir.empty())
         {
             const fs::path cwd = fs::current_path(ec);
             try_dir(cwd / "DATA" / "TEXTS");
@@ -2809,18 +2810,18 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         }
     }
 
-    if(!texts_dir.empty())
+    if (!texts_dir.empty())
     {
         // Use the *current* mission token (can change as you replay territories)
         std::string cur = t.mission;
         auto itc2 = m_territoryCurrentMission.find(t.id);
-        if(itc2 != m_territoryCurrentMission.end() && !itc2->second.empty())
+        if (itc2 != m_territoryCurrentMission.end() && !itc2->second.empty())
             cur = itc2->second;
 
         try_append_text_set(info, texts_dir, cur);
 
         // Also show intro (some territories use different intro token)
-        if(!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
+        if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
             try_append_text_set(info, texts_dir, t.intro_mission);
     }
     else
@@ -2837,7 +2838,7 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         return;
     }
 
-    if(auto* box = wxDynamicCast(m_mapPanel->FindWindow(ID_TERRITORY_TEXTBOX), wxTextCtrl))
+    if (auto* box = wxDynamicCast(m_mapPanel->FindWindow(ID_TERRITORY_TEXTBOX), wxTextCtrl))
     {
         box->SetValue(info);
         box->ShowPosition(0);
@@ -2847,10 +2848,11 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
 void StrategicLevelFrame::OnResearch(wxCommandEvent&)
 {
-    if(m_money >= 100) {
+    if (m_money >= 100) {
         m_money -= 100;
         m_research += 1;
-    } else {
+    }
+    else {
         wxMessageBox("Not enough money for research (demo cost 100).", "Research", wxOK | wxICON_WARNING, this);
     }
     SaveStrategicState();
@@ -2872,9 +2874,9 @@ static std::filesystem::path FindCommanderNamesDefPath()
         fs::path("C_NAMES.DEF"),
     };
 
-    for(const auto& p : candidates)
+    for (const auto& p : candidates)
     {
-        if(!p.empty() && fs::exists(p, ec))
+        if (!p.empty() && fs::exists(p, ec))
             return p;
     }
     return {};
@@ -2882,12 +2884,12 @@ static std::filesystem::path FindCommanderNamesDefPath()
 
 bool StrategicLevelFrame::EnsureCommanderNamesLoaded()
 {
-    if(m_commanderNamesLoaded)
+    if (m_commanderNamesLoaded)
         return true;
 
     m_commanderNames.clear();
     const auto p = FindCommanderNamesDefPath();
-    if(p.empty())
+    if (p.empty())
     {
         wxLogWarning("[COMMANDERS] C_NAMES.DEF not found.");
         m_commanderNamesLoaded = true; // avoid spamming warnings
@@ -2895,14 +2897,14 @@ bool StrategicLevelFrame::EnsureCommanderNamesLoaded()
     }
 
     std::ifstream f(p);
-    if(!f)
+    if (!f)
         return false;
 
     std::string line;
-    while(std::getline(f, line))
+    while (std::getline(f, line))
     {
         line = trim(line);
-        if(line.empty())
+        if (line.empty())
             continue;
         m_commanderNames.push_back(line);
     }
@@ -2917,8 +2919,8 @@ wxString StrategicLevelFrame::GetRankAbbrev(int rank) const
     static const char* kAbbr[] = {
         "2Lt.", "1Lt.", "Cpt.", "Maj.", "LtCol.", "Col.", "MajGen.", "LtGen.", "Gen."
     };
-    if(rank < 0) rank = 0;
-    if(rank >= (int)(sizeof(kAbbr)/sizeof(kAbbr[0])))
+    if (rank < 0) rank = 0;
+    if (rank >= (int)(sizeof(kAbbr) / sizeof(kAbbr[0])))
         return wxString::Format("R%d", rank);
     return wxString::FromUTF8(kAbbr[rank]);
 }
@@ -2926,51 +2928,51 @@ wxString StrategicLevelFrame::GetRankAbbrev(int rank) const
 void StrategicLevelFrame::MaybeGenerateCommanderOffer()
 {
     // Enforce windowed limit: max 2 per 25 turns.
-    if(m_turn >= m_cmdGenWindowStartTurn + 25)
+    if (m_turn >= m_cmdGenWindowStartTurn + 25)
     {
         m_cmdGenWindowStartTurn = m_turn;
         m_cmdGenCountInWindow = 0;
     }
-    if(m_cmdGenCountInWindow >= 2)
+    if (m_cmdGenCountInWindow >= 2)
         return;
 
-    if(!EnsureCommanderNamesLoaded())
+    if (!EnsureCommanderNamesLoaded())
         return;
 
     // Already have an offer in this turn (shouldn't happen if we clear on end-turn).
-    if(!m_availableCommanders.empty())
+    if (!m_availableCommanders.empty())
         return;
 
     // Chance: tweak here if you want different pacing.
     const int chancePercent = 20; // 20% per turn => many "rolls" but capped to 2 per 25 turns.
-    if((std::rand() % 100) >= chancePercent)
+    if ((std::rand() % 100) >= chancePercent)
         return;
 
     // Pick random unique name (avoid duplicates among owned + current offer).
     auto nameTaken = [&](const std::string& n) -> bool
-    {
-        for(const auto& c : m_playerCommanders) if(to_upper(c.name) == to_upper(n)) return true;
-        for(const auto& c : m_availableCommanders) if(to_upper(c.name) == to_upper(n)) return true;
-        return false;
-    };
+        {
+            for (const auto& c : m_playerCommanders) if (to_upper(c.name) == to_upper(n)) return true;
+            for (const auto& c : m_availableCommanders) if (to_upper(c.name) == to_upper(n)) return true;
+            return false;
+        };
 
     std::string name;
-    for(int tries = 0; tries < 32; ++tries)
+    for (int tries = 0; tries < 32; ++tries)
     {
         const std::string& cand = m_commanderNames[(size_t)(std::rand() % (int)m_commanderNames.size())];
-        if(!cand.empty() && !nameTaken(cand))
+        if (!cand.empty() && !nameTaken(cand))
         {
             name = cand;
             break;
         }
     }
-    if(name.empty())
+    if (name.empty())
         name = m_commanderNames[(size_t)(std::rand() % (int)m_commanderNames.size())];
 
     // Rank is never higher than player's rank.
     int rankMax = std::max(0, m_player.rank);
     int rank = 0;
-    if(rankMax > 0)
+    if (rankMax > 0)
         rank = std::rand() % (rankMax + 1);
 
     CommanderRec rec;
@@ -2983,13 +2985,13 @@ void StrategicLevelFrame::MaybeGenerateCommanderOffer()
 
 void StrategicLevelFrame::OnBuyCommander(wxCommandEvent&)
 {
-    if((int)m_playerCommanders.size() >= 14)
+    if ((int)m_playerCommanders.size() >= 14)
     {
         wxMessageBox("Commander limit reached (14).", "Buy commander", wxOK | wxICON_INFORMATION, this);
         return;
     }
 
-    if(m_availableCommanders.empty())
+    if (m_availableCommanders.empty())
     {
         wxMessageBox("No commanders available this turn.", "Buy commander", wxOK | wxICON_INFORMATION, this);
         return;
@@ -3011,10 +3013,10 @@ void StrategicLevelFrame::OnBuyCommander(wxCommandEvent&)
     list->SetBackgroundColour(m_palette.background);
     list->SetForegroundColour(m_palette.text);
 
-    for(const auto& c : m_availableCommanders)
+    for (const auto& c : m_availableCommanders)
         list->Append(wxString::FromUTF8(c.name) + " (" + GetRankAbbrev(c.rank) + ")");
 
-    if(list->GetCount() > 0)
+    if (list->GetCount() > 0)
         list->SetSelection(0);
 
     rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
@@ -3035,11 +3037,11 @@ void StrategicLevelFrame::OnBuyCommander(wxCommandEvent&)
 
     dlg.SetSizerAndFit(rootSizer);
 
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     int sel = list->GetSelection();
-    if(sel == wxNOT_FOUND || sel >= (int)m_availableCommanders.size())
+    if (sel == wxNOT_FOUND || sel >= (int)m_availableCommanders.size())
         return;
 
     // Buy: move from offers to owned. (No selling.)
@@ -3052,12 +3054,12 @@ void StrategicLevelFrame::OnBuyCommander(wxCommandEvent&)
 
 void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
 {
-    if(!m_spellData || !m_spellData->units)
+    if (!m_spellData || !m_spellData->units)
     {
         wxMessageBox("Units data not loaded.", "Buy units", wxOK | wxICON_WARNING, this);
         return;
     }
-    if(!EnsureUnitCostsLoaded())
+    if (!EnsureUnitCostsLoaded())
         return;
 
     wxDialog dlg(this, wxID_ANY, "Buy units", wxDefaultPosition, wxSize(420, 480));
@@ -3079,19 +3081,19 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     std::vector<int> unit_costs;
     unit_ids.reserve(m_spellData->units->GetUnits().size());
     unit_costs.reserve(m_spellData->units->GetUnits().size());
-    for(const auto* unit : m_spellData->units->GetUnits())
+    for (const auto* unit : m_spellData->units->GetUnits())
     {
-        if(!unit)
+        if (!unit)
             continue;
         unit_ids.push_back(unit->type_id);
         int cost = GetUnitBuyCost(unit->type_id);
         unit_costs.push_back(cost);
         wxString label = wxString::Format("#%02d: %s", unit->type_id, wxString(char2wstringCP895(unit->name)));
-        if(cost > 0)
+        if (cost > 0)
             label += wxString::Format(" (%d)", cost);
         list->Append(label);
     }
-    if(!unit_ids.empty())
+    if (!unit_ids.empty())
         list->SetSelection(0);
     rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
 
@@ -3123,16 +3125,16 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
 
     dlg.SetSizerAndFit(rootSizer);
 
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     int sel = list->GetSelection();
-    if(sel == wxNOT_FOUND || sel >= (int)unit_ids.size())
+    if (sel == wxNOT_FOUND || sel >= (int)unit_ids.size())
     {
         wxMessageBox("No unit selected.", "Buy units", wxOK | wxICON_WARNING, this);
         return;
     }
-    if(sel >= (int)unit_costs.size() || unit_costs[sel] <= 0)
+    if (sel >= (int)unit_costs.size() || unit_costs[sel] <= 0)
     {
         wxMessageBox("Selected unit has no price defined.", "Buy units", wxOK | wxICON_WARNING, this);
         return;
@@ -3141,10 +3143,10 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     const int count = spinCount->GetValue();
     const int unitCost = unit_costs[sel];
     const int totalCost = unitCost * count;
-    if(m_money < totalCost)
+    if (m_money < totalCost)
     {
         wxMessageBox(wxString::Format("Not enough money. Need %d, you have %d.", totalCost, m_money),
-                     "Buy units", wxOK | wxICON_WARNING, this);
+            "Buy units", wxOK | wxICON_WARNING, this);
         return;
     }
 
@@ -3163,7 +3165,7 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     //    it->count += add.count;
     //else
     //    m_playerUnits.push_back(add);
-    
+
     // v OnBuyUnits(): místo agregace přidej 'count' kusů jako samostatné položky
     LevelData::PlayerUnitAdd addProto;
     addProto.unit_id = unit_ids[sel];
@@ -3184,12 +3186,12 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
 
 void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
 {
-    if(m_playerUnits.empty())
+    if (m_playerUnits.empty())
     {
         wxMessageBox("No units to sell.", "Sell units", wxOK | wxICON_INFORMATION, this);
         return;
     }
-    if(!EnsureUnitCostsLoaded())
+    if (!EnsureUnitCostsLoaded())
         return;
 
     struct SellEntry
@@ -3219,7 +3221,7 @@ void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
     list->SetFont(m_fontText);
     list->SetBackgroundColour(m_palette.background);
     list->SetForegroundColour(m_palette.text);
-    for(size_t i = 0; i < m_playerUnits.size(); ++i)
+    for (size_t i = 0; i < m_playerUnits.size(); ++i)
     {
         const auto& u = m_playerUnits[i];
         SellEntry entry;
@@ -3231,13 +3233,13 @@ void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
         entries.push_back(entry);
 
         wxString label = wxString::Format("%s x%d", GetUnitDisplayName(u.unit_id), u.count);
-        if(entry.cost > 0)
+        if (entry.cost > 0)
             label += wxString::Format(" (sell %d)", entry.cost / 2);
         else
             label += " (no price)";
         list->Append(label);
     }
-    if(!entries.empty())
+    if (!entries.empty())
         list->SetSelection(0);
     rootSizer->Add(list, 1, wxALL | wxEXPAND, 10);
 
@@ -3254,17 +3256,17 @@ void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
     rootSizer->Add(countSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
 
     auto updateSpinRange = [&]()
-    {
-        int sel = list->GetSelection();
-        if(sel == wxNOT_FOUND || sel >= (int)entries.size())
-            return;
-        int maxCount = std::max(1, entries[sel].count);
-        spinCount->SetRange(1, maxCount);
-        if(spinCount->GetValue() > maxCount)
-            spinCount->SetValue(maxCount);
-    };
+        {
+            int sel = list->GetSelection();
+            if (sel == wxNOT_FOUND || sel >= (int)entries.size())
+                return;
+            int maxCount = std::max(1, entries[sel].count);
+            spinCount->SetRange(1, maxCount);
+            if (spinCount->GetValue() > maxCount)
+                spinCount->SetValue(maxCount);
+        };
     updateSpinRange();
-    list->Bind(wxEVT_LISTBOX, [&](wxCommandEvent&){ updateSpinRange(); });
+    list->Bind(wxEVT_LISTBOX, [&](wxCommandEvent&) { updateSpinRange(); });
 
     auto* btnSizer = new wxBoxSizer(wxHORIZONTAL);
     auto* btnSell = new wxButton(&dlg, wxID_OK, "Sell");
@@ -3282,37 +3284,37 @@ void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
 
     dlg.SetSizerAndFit(rootSizer);
 
-    if(dlg.ShowModal() != wxID_OK)
+    if (dlg.ShowModal() != wxID_OK)
         return;
 
     int sel = list->GetSelection();
-    if(sel == wxNOT_FOUND || sel >= (int)entries.size())
+    if (sel == wxNOT_FOUND || sel >= (int)entries.size())
     {
         wxMessageBox("No unit selected.", "Sell units", wxOK | wxICON_WARNING, this);
         return;
     }
 
     const auto& entry = entries[sel];
-    if(entry.cost <= 0)
+    if (entry.cost <= 0)
     {
         wxMessageBox("Selected unit has no price defined.", "Sell units", wxOK | wxICON_WARNING, this);
         return;
     }
 
     int sellCount = spinCount->GetValue();
-    if(sellCount <= 0)
+    if (sellCount <= 0)
         return;
-    if(sellCount > entry.count)
+    if (sellCount > entry.count)
         sellCount = entry.count;
 
     int refund = (entry.cost * sellCount) / 2;
     m_money += refund;
 
-    if(entry.index >= 0 && entry.index < (int)m_playerUnits.size())
+    if (entry.index >= 0 && entry.index < (int)m_playerUnits.size())
     {
         auto& unit = m_playerUnits[entry.index];
         unit.count -= sellCount;
-        if(unit.count <= 0)
+        if (unit.count <= 0)
             m_playerUnits.erase(m_playerUnits.begin() + entry.index);
     }
 
@@ -3322,9 +3324,9 @@ void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
 
 const LevelMission* StrategicLevelFrame::FindMissionByNameUpper(const std::string& name_upper) const
 {
-    for(const auto& m : m_level.missions)
+    for (const auto& m : m_level.missions)
     {
-        if(to_upper(m.name) == name_upper)
+        if (to_upper(m.name) == name_upper)
             return &m;
     }
     return nullptr;
@@ -3335,21 +3337,21 @@ std::string StrategicLevelFrame::ResolveMissionTokenForTerritory(int territory_i
     // first play can use intro
     int launches = 0;
     auto itL = m_territoryLaunchCount.find(territory_id);
-    if(itL != m_territoryLaunchCount.end()) launches = itL->second;
+    if (itL != m_territoryLaunchCount.end()) launches = itL->second;
 
     // find territory record
     const LevelTerritory* terr = nullptr;
-    for(const auto& t : m_level.territories)
-        if(t.id == territory_id) { terr = &t; break; }
+    for (const auto& t : m_level.territories)
+        if (t.id == territory_id) { terr = &t; break; }
 
-    if(!terr)
+    if (!terr)
         return std::string();
 
-    if(launches == 0 && !terr->intro_mission.empty() && terr->intro_mission != "none")
+    if (launches == 0 && !terr->intro_mission.empty() && terr->intro_mission != "none")
         return terr->intro_mission;
 
     auto it = m_territoryCurrentMission.find(territory_id);
-    if(it != m_territoryCurrentMission.end() && !it->second.empty() && it->second != "none")
+    if (it != m_territoryCurrentMission.end() && !it->second.empty() && it->second != "none")
         return it->second;
 
     return terr->mission;
@@ -3428,7 +3430,7 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
 
 void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 {
-    if(m_selectedTerritory < 0 || !m_main)
+    if (m_selectedTerritory < 0 || !m_main)
         return;
 
     const int terr_id = m_selectedTerritory;
@@ -3438,12 +3440,12 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         terr_id,
         token.c_str()
     );
-    if(token.empty() || token == "none")
+    if (token.empty() || token == "none")
         return;
 
     std::wstring defPath = ResolveMapDefPathForMissionToken(token);
 
-    if(defPath.empty())
+    if (defPath.empty())
     {
         wxMessageBox("Map DEF not found for mission: " + wxString(token), "Launch", wxOK | wxICON_WARNING, this);
         return;
@@ -3480,9 +3482,9 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     // very simple progression for multi-variant missions:
     // if Mission(MXX_YYA) has EndOKMission(MXX_YYB) -> advance.
     const std::string upperName = to_upper(token);
-    if(const LevelMission* m = FindMissionByNameUpper(upperName))
+    if (const LevelMission* m = FindMissionByNameUpper(upperName))
     {
-        if(!m->end_ok_mission.empty() && m->end_ok_mission != "none")
+        if (!m->end_ok_mission.empty() && m->end_ok_mission != "none")
         {
             m_territoryCurrentMission[terr_id] = to_lower(m->end_ok_mission);
         }
@@ -3506,7 +3508,7 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 
     // Commander offers are generated on end-turn (for the *new* turn).
     // Offers do not carry over between turns.
-	// Store offer of commanders only for the current turn.
+    // Store offer of commanders only for the current turn.
     // m_availableCommanders.clear();
     MaybeGenerateCommanderOffer();
 
@@ -3552,49 +3554,49 @@ static bool LoadStrategicStateFile(
 
     territoryMission.clear();
     territoryLaunchCount.clear();
-    for(const auto& t : level.territories)
+    for (const auto& t : level.territories)
     {
         territoryMission[t.id] = t.mission;
         territoryLaunchCount[t.id] = 0;
     }
 
-    if(out_level_def) out_level_def->clear();
-    if(out_timestamp) out_timestamp->clear();
+    if (out_level_def) out_level_def->clear();
+    if (out_timestamp) out_timestamp->clear();
 
     std::ifstream f(path);
-    if(!f)
+    if (!f)
         return false;
 
     std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if(data.empty())
+    if (data.empty())
         return false;
 
     std::smatch m;
 
     // version/level_def/timestamp are optional but recommended
     std::regex leveldef_re("\"level_def\"\\s*:\\s*\"([^\"]*)\"");
-    if(out_level_def && std::regex_search(data, m, leveldef_re) && m.size() > 1)
+    if (out_level_def && std::regex_search(data, m, leveldef_re) && m.size() > 1)
         *out_level_def = m[1].str();
 
     std::regex ts_re("\"timestamp\"\\s*:\\s*\"([^\"]*)\"");
-    if(out_timestamp && std::regex_search(data, m, ts_re) && m.size() > 1)
+    if (out_timestamp && std::regex_search(data, m, ts_re) && m.size() > 1)
         *out_timestamp = m[1].str();
 
-    if(std::regex_search(data, m, std::regex("\"turn\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+    if (std::regex_search(data, m, std::regex("\"turn\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         turn = std::stoi(m[1].str());
 
-    if(std::regex_search(data, m, std::regex("\"money\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+    if (std::regex_search(data, m, std::regex("\"money\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         money = std::stoi(m[1].str());
 
-    if(std::regex_search(data, m, std::regex("\"research\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+    if (std::regex_search(data, m, std::regex("\"research\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         research = std::stoi(m[1].str());
 
-    if(std::regex_search(data, m, std::regex("\"selected_territory\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+    if (std::regex_search(data, m, std::regex("\"selected_territory\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         selected_territory = std::stoi(m[1].str());
 
     // player object optional (backward compatible)
     std::regex player_obj_re("\"player\"\\s*:\\s*\\{([^}]*)\\}");
-    if(std::regex_search(data, m, player_obj_re) && m.size() > 1)
+    if (std::regex_search(data, m, player_obj_re) && m.size() > 1)
     {
         const std::string pobj = m[1].str();
         (void)ParseJsonStringField(pobj, "name", player.name);
@@ -3606,10 +3608,10 @@ static bool LoadStrategicStateFile(
     // territory list optional (backward compatible)
     // {"id":7,"mission":"M02_01","launches":2}
     std::regex terr_re("\\{\\s*\"id\"\\s*:\\s*(\\d+)\\s*,\\s*\"mission\"\\s*:\\s*\"([^\"]*)\"\\s*,\\s*\"launches\"\\s*:\\s*(\\d+)\\s*\\}");
-    for(auto it = std::sregex_iterator(data.begin(), data.end(), terr_re); it != std::sregex_iterator(); ++it)
+    for (auto it = std::sregex_iterator(data.begin(), data.end(), terr_re); it != std::sregex_iterator(); ++it)
     {
         const auto& mm = *it;
-        if(mm.size() < 4)
+        if (mm.size() < 4)
             continue;
         const int id = std::stoi(mm[1].str());
         const std::string mission = mm[2].str();
@@ -3622,10 +3624,10 @@ static bool LoadStrategicStateFile(
     std::regex unit_re("\\{\\s*\"unit_id\"\\s*:\\s*(\\d+)\\s*,\\s*\"count\"\\s*:\\s*(\\d+)\\s*,\\s*\"health\"\\s*:\\s*(\\d+)\\s*\\}");
     auto begin = std::sregex_iterator(data.begin(), data.end(), unit_re);
     auto end = std::sregex_iterator();
-    for(auto it = begin; it != end; ++it)
+    for (auto it = begin; it != end; ++it)
     {
         const auto& match = *it;
-        if(match.size() < 4)
+        if (match.size() < 4)
             continue;
         LevelData::PlayerUnitAdd entry;
         entry.unit_id = std::stoi(match[1].str());
@@ -3638,7 +3640,7 @@ static bool LoadStrategicStateFile(
 
     // commander generation (optional)
     std::regex gen_re("\"commander_generation\"\\s*:\\s*\\{([^}]*)\\}");
-    if(std::regex_search(data, m, gen_re) && m.size() > 1)
+    if (std::regex_search(data, m, gen_re) && m.size() > 1)
     {
         const std::string g = m[1].str();
         (void)ParseJsonIntField(g, "window_start_turn", cmdGenWindowStartTurn);
@@ -3646,25 +3648,25 @@ static bool LoadStrategicStateFile(
     }
 
     auto parse_commander_array = [&](const char* key, std::vector<StrategicLevelFrame::CommanderRec>& out)
-    {
-        out.clear();
-        std::smatch mm;
-        std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript);
-        if(!std::regex_search(data, mm, arr_re) || mm.size() < 2)
-            return;
-
-        const std::string arr = mm[1].str();
-        std::regex item_re("\\{([^}]*)\\}");
-        for(auto it = std::sregex_iterator(arr.begin(), arr.end(), item_re); it != std::sregex_iterator(); ++it)
         {
-            const std::string obj = (*it)[1].str();
-            StrategicLevelFrame::CommanderRec c;
-            (void)ParseJsonStringField(obj, "name", c.name);
-            (void)ParseJsonIntField(obj, "rank", c.rank);
-            if(!c.name.empty())
-                out.push_back(c);
-        }
-    };
+            out.clear();
+            std::smatch mm;
+            std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript);
+            if (!std::regex_search(data, mm, arr_re) || mm.size() < 2)
+                return;
+
+            const std::string arr = mm[1].str();
+            std::regex item_re("\\{([^}]*)\\}");
+            for (auto it = std::sregex_iterator(arr.begin(), arr.end(), item_re); it != std::sregex_iterator(); ++it)
+            {
+                const std::string obj = (*it)[1].str();
+                StrategicLevelFrame::CommanderRec c;
+                (void)ParseJsonStringField(obj, "name", c.name);
+                (void)ParseJsonIntField(obj, "rank", c.rank);
+                if (!c.name.empty())
+                    out.push_back(c);
+            }
+        };
 
     parse_commander_array("player_commanders", playerCommanders);
     parse_commander_array("available_commanders", availableCommanders);
@@ -3690,7 +3692,7 @@ static void SaveStrategicStateFile(
     const std::string& timestamp)
 {
     std::ofstream f(path);
-    if(!f)
+    if (!f)
         return;
 
     f << "{\n";
@@ -3702,15 +3704,15 @@ static void SaveStrategicStateFile(
     f << "  \"research\": " << research << ",\n";
     f << "  \"selected_territory\": " << selected_territory << ",\n";
     f << "  \"player\": {"
-      << "\"name\": \"" << EscapeJson(player.name) << "\", "
-      << "\"rank\": " << player.rank << ", "
-      << "\"experience\": " << player.experience << ", "
-      << "\"actions\": " << player.actions
-      << "},\n";
+        << "\"name\": \"" << EscapeJson(player.name) << "\", "
+        << "\"rank\": " << player.rank << ", "
+        << "\"experience\": " << player.experience << ", "
+        << "\"actions\": " << player.actions
+        << "},\n";
 
     // territories
     f << "  \"territories\": [\n";
-    for(size_t i = 0; i < level.territories.size(); ++i)
+    for (size_t i = 0; i < level.territories.size(); ++i)
     {
         const auto& t = level.territories[i];
         auto itM = territoryMission.find(t.id);
@@ -3719,50 +3721,50 @@ static void SaveStrategicStateFile(
         const int launches = (itL != territoryLaunchCount.end()) ? itL->second : 0;
 
         f << "    {\"id\": " << t.id
-          << ", \"mission\": \"" << EscapeJson(mission)
-          << "\", \"launches\": " << launches << "}";
-        if(i + 1 < level.territories.size())
+            << ", \"mission\": \"" << EscapeJson(mission)
+            << "\", \"launches\": " << launches << "}";
+        if (i + 1 < level.territories.size())
             f << ",";
         f << "\n";
     }
     f << "  ],\n";
 
 
-// commanders
-f << "  \"commander_generation\": {"
-  << "\"window_start_turn\": " << cmdGenWindowStartTurn << ", "
-  << "\"generated_in_window\": " << cmdGenCountInWindow
-  << "},\n";
+    // commanders
+    f << "  \"commander_generation\": {"
+        << "\"window_start_turn\": " << cmdGenWindowStartTurn << ", "
+        << "\"generated_in_window\": " << cmdGenCountInWindow
+        << "},\n";
 
-f << "  \"player_commanders\": [\n";
-for(size_t i = 0; i < playerCommanders.size(); ++i)
-{
-    const auto& c = playerCommanders[i];
-    f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
-    if(i + 1 < playerCommanders.size())
-        f << ",";
-    f << "\n";
-}
-f << "  ],\n";
+    f << "  \"player_commanders\": [\n";
+    for (size_t i = 0; i < playerCommanders.size(); ++i)
+    {
+        const auto& c = playerCommanders[i];
+        f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
+        if (i + 1 < playerCommanders.size())
+            f << ",";
+        f << "\n";
+    }
+    f << "  ],\n";
 
-f << "  \"available_commanders\": [\n";
-for(size_t i = 0; i < availableCommanders.size(); ++i)
-{
-    const auto& c = availableCommanders[i];
-    f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
-    if(i + 1 < availableCommanders.size())
-        f << ",";
-    f << "\n";
-}
-f << "  ],\n";
+    f << "  \"available_commanders\": [\n";
+    for (size_t i = 0; i < availableCommanders.size(); ++i)
+    {
+        const auto& c = availableCommanders[i];
+        f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
+        if (i + 1 < availableCommanders.size())
+            f << ",";
+        f << "\n";
+    }
+    f << "  ],\n";
 
-// units
+    // units
     f << "  \"units\": [\n";
-    for(size_t i = 0; i < units.size(); ++i)
+    for (size_t i = 0; i < units.size(); ++i)
     {
         const auto& u = units[i];
         f << "    {\"unit_id\": " << u.unit_id << ", \"count\": " << u.count << ", \"health\": " << u.health << "}";
-        if(i + 1 < units.size())
+        if (i + 1 < units.size())
             f << ",";
         f << "\n";
     }
@@ -3786,7 +3788,7 @@ void StrategicLevelFrame::LoadStrategicState()
     std::string level_def, ts;
 
     if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
-                              playerCmds, availCmds, windowStart, genCount, &level_def, &ts))
+        playerCmds, availCmds, windowStart, genCount, &level_def, &ts))
     {
         // Validate that this save matches current level (compare stem)
         const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
@@ -3822,16 +3824,16 @@ void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-                          m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
-                          m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-                          NowIsoLocal());
+        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        NowIsoLocal());
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
 {
-    if(m_spellData && m_spellData->units)
+    if (m_spellData && m_spellData->units)
     {
-        if(auto* unit = m_spellData->units->GetUnit(unit_id))
+        if (auto* unit = m_spellData->units->GetUnit(unit_id))
             return wxString(char2wstringCP895(unit->name));
     }
     return wxString::Format("%d", unit_id);
@@ -3841,11 +3843,11 @@ static bool LoadFileBytes(const std::filesystem::path& p, std::vector<unsigned c
 {
     out.clear();
     std::ifstream f(p, std::ios::binary);
-    if(!f) return false;
+    if (!f) return false;
     f.seekg(0, std::ios::end);
     std::streamsize n = f.tellg();
     f.seekg(0, std::ios::beg);
-    if(n <= 0) return false;
+    if (n <= 0) return false;
     out.resize((size_t)n);
     return (bool)f.read((char*)out.data(), n);
 }
@@ -3857,17 +3859,17 @@ static std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path
 {
     namespace fs = std::filesystem;
     std::error_code ec;
-    if(!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
         return {};
 
     const std::string w = to_lower(wanted);
-    for(const auto& de : fs::directory_iterator(dir, ec))
+    for (const auto& de : fs::directory_iterator(dir, ec))
     {
-        if(ec) break;
-        if(!de.is_regular_file(ec))
+        if (ec) break;
+        if (!de.is_regular_file(ec))
             continue;
         const std::string fn = to_lower(de.path().filename().string());
-        if(fn == w)
+        if (fn == w)
             return de.path();
     }
     return {};
@@ -3876,25 +3878,25 @@ static std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path
 static bool ExpandPaletteTo256(const std::vector<unsigned char>& palBytes, std::array<unsigned char, 256 * 3>& pal256)
 {
     pal256.fill(0);
-    if(palBytes.size() < 3)
+    if (palBytes.size() < 3)
         return false;
 
     const size_t colors = palBytes.size() / 3;
-    if(colors != 32 && colors != 64 && colors != 256)
+    if (colors != 32 && colors != 64 && colors != 256)
         return false;
 
     // Detect VGA 6-bit (0..63) values and scale to 0..255.
     unsigned char maxv = 0;
-    for(size_t i = 0; i < colors * 3; ++i)
+    for (size_t i = 0; i < colors * 3; ++i)
         maxv = std::max(maxv, palBytes[i]);
 
     const bool is_vga6 = (maxv <= 63);
     auto to8 = [&](unsigned char v) -> unsigned char {
         return is_vga6 ? (unsigned char)std::min(255, (int)v * 4) : v;
-    };
+        };
 
     // Python tool repeats palette to fill 256 entries.
-    for(size_t i = 0; i < 256; ++i)
+    for (size_t i = 0; i < 256; ++i)
     {
         const size_t src = (i % colors) * 3;
         pal256[i * 3 + 0] = to8(palBytes[src + 0]);
@@ -3910,45 +3912,45 @@ static bool DecodeCLK(const std::vector<unsigned char>& clkBytes, int& outW, int
     outH = 0;
     values.clear();
 
-    if(clkBytes.size() < 4)
+    if (clkBytes.size() < 4)
         return false;
 
     auto rd16 = [&](size_t off) -> unsigned {
-        if(off + 1 >= clkBytes.size()) return 0;
+        if (off + 1 >= clkBytes.size()) return 0;
         return (unsigned)clkBytes[off] | ((unsigned)clkBytes[off + 1] << 8);
-    };
+        };
 
     // NOTE: format observed in python tool: uint16 H, uint16 W
     const unsigned H = rd16(0);
     const unsigned W = rd16(2);
-    if(W == 0 || H == 0)
+    if (W == 0 || H == 0)
         return false;
 
     const size_t offsets_off = 4;
     const size_t offsets_size = (size_t)H * 2;
-    if(offsets_off + offsets_size > clkBytes.size())
+    if (offsets_off + offsets_size > clkBytes.size())
         return false;
 
     std::vector<unsigned> offsets;
     offsets.reserve(H);
-    for(unsigned y = 0; y < H; ++y)
+    for (unsigned y = 0; y < H; ++y)
         offsets.push_back(rd16(offsets_off + (size_t)y * 2));
 
     values.assign((size_t)W * H, 0);
 
-    for(unsigned y = 0; y < H; ++y)
+    for (unsigned y = 0; y < H; ++y)
     {
         const unsigned start = offsets[y];
         const unsigned end = (y + 1 < H) ? offsets[y + 1] : (unsigned)clkBytes.size();
-        if(start >= clkBytes.size() || end > clkBytes.size() || end <= start)
+        if (start >= clkBytes.size() || end > clkBytes.size() || end <= start)
             continue;
 
         size_t x = 0;
-        for(unsigned i = start; i + 1 < end && x < W; i += 2)
+        for (unsigned i = start; i + 1 < end && x < W; i += 2)
         {
             const unsigned run_len = clkBytes[i];
             const unsigned val = clkBytes[i + 1];
-            if(run_len == 0)
+            if (run_len == 0)
                 continue;
             const size_t x2 = std::min((size_t)W, x + (size_t)run_len);
             std::fill(values.begin() + (size_t)y * W + x, values.begin() + (size_t)y * W + x2, (unsigned char)val);
@@ -3963,31 +3965,31 @@ static bool DecodeCLK(const std::vector<unsigned char>& clkBytes, int& outW, int
 }
 
 static bool NormalizeIndexedBuffer(const std::vector<unsigned char>& src, size_t need,
-                                   const std::vector<unsigned char>& clkValues,
-                                   std::vector<unsigned char>& out)
+    const std::vector<unsigned char>& clkValues,
+    std::vector<unsigned char>& out)
 {
     out.clear();
-    if(src.size() == need)
+    if (src.size() == need)
     {
         out = src;
         return true;
     }
-    if(src.size() == need + 1)
+    if (src.size() == need + 1)
     {
         // Choose whether to drop first or last byte by comparing how well the outside area
         // compresses to a single key color (matches python tool behavior).
         auto score_drop = [&](bool drop_first) -> size_t
-        {
-            const unsigned char* p = src.data() + (drop_first ? 1 : 0);
-            // count most frequent color on outside (clk==0)
-            std::array<size_t, 256> counts{};
-            for(size_t i = 0; i < need; ++i)
             {
-                if(i < clkValues.size() && clkValues[i] == 0)
-                    counts[p[i]]++;
-            }
-            return *std::max_element(counts.begin(), counts.end());
-        };
+                const unsigned char* p = src.data() + (drop_first ? 1 : 0);
+                // count most frequent color on outside (clk==0)
+                std::array<size_t, 256> counts{};
+                for (size_t i = 0; i < need; ++i)
+                {
+                    if (i < clkValues.size() && clkValues[i] == 0)
+                        counts[p[i]]++;
+                }
+                return *std::max_element(counts.begin(), counts.end());
+            };
 
         size_t s1 = score_drop(true);
         size_t s2 = score_drop(false); // dropping last means using first need bytes
@@ -3998,7 +4000,7 @@ static bool NormalizeIndexedBuffer(const std::vector<unsigned char>& src, size_t
     }
 
     // Larger buffers: take the last 'need' bytes as a best-effort (some assets contain a small header).
-    if(src.size() > need)
+    if (src.size() > need)
     {
         out.assign(src.end() - (ptrdiff_t)need, src.end());
         return true;
@@ -4006,44 +4008,143 @@ static bool NormalizeIndexedBuffer(const std::vector<unsigned char>& src, size_t
     return false;
 }
 
+static bool MaybeDecompressSpellLZ(const std::vector<unsigned char>& in, std::vector<unsigned char>& out)
+{
+    out.clear();
+    if (in.empty()) return false;
+
+    // Zkus Spellcross LZW decode. Když to není LZ stream, většinou to vrátí prázdno nebo nesmyslnou délku.
+    LZWexpand delz(1024 * 1024); // 1MB buffer, strategic mapy jsou typicky do ~300k
+    std::vector<uint8_t>& dec = delz.Decode((uint8_t*)in.data(), (uint8_t*)in.data() + in.size());
+    if (dec.empty())
+        return false;
+
+    out.assign(dec.begin(), dec.end());
+    return true;
+}
+
+static void StripWHHeaderIfMatches(std::vector<unsigned char>& buf, int W, int H)
+{
+    if (buf.size() < 4) return;
+    const unsigned w = (unsigned)buf[0] | ((unsigned)buf[1] << 8);
+    const unsigned h = (unsigned)buf[2] | ((unsigned)buf[3] << 8);
+    if ((int)w == W && (int)h == H)
+        buf.erase(buf.begin(), buf.begin() + 4);
+}
+
+static bool LoadFileBytesMaybeExpandLZ(const std::filesystem::path& path,
+    size_t need,
+    std::vector<unsigned char>& out)
+{
+    out.clear();
+    if (!LoadFileBytes(path, out))
+        return false;
+
+    // Když už to je dost velké, necháme být (raw .bin typicky need nebo need+1).
+    if (out.size() >= need)
+        return true;
+
+    // Pokud je to menší než need, velmi pravděpodobně je to LZ stream -> zkus expand.
+    LZWexpand delz((int)std::max<size_t>(1024 * 1024, need + 64));
+    std::vector<uint8_t> decoded = delz.Decode((uint8_t*)out.data(), (uint8_t*)out.data() + out.size());
+
+    if (decoded.empty())
+        return false;
+
+    // Po dekompresi čekáme aspoň need (nebo need+něco – header/extra byte).
+    if (decoded.size() < need)
+        return false;
+
+    out.assign(decoded.begin(), decoded.end());
+    return true;
+}
+
 static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folder, int levelNum, wxBitmap& outBmp,
-                                           int* outW = nullptr, int* outH = nullptr, std::vector<unsigned char>* outClk = nullptr)
+    int* outW = nullptr, int* outH = nullptr, std::vector<unsigned char>* outClk = nullptr)
 {
     namespace fs = std::filesystem;
     outBmp = wxBitmap();
-    if(levelNum < 0 || levelNum > 99)
+    if (levelNum < 0 || levelNum > 99)
         return false;
 
-    const std::string lvl = wxString::Format("LEVEL_%02d.BIN", levelNum).ToStdString();
-    const std::string fog = wxString::Format("HMLA__%02d.BIN", levelNum).ToStdString();
+    const std::string lvlBIN = wxString::Format("LEVEL_%02d.BIN", levelNum).ToStdString();
+    const std::string fogBIN = wxString::Format("HMLA__%02d.BIN", levelNum).ToStdString();
+
+    const std::string lvlLZ = wxString::Format("LEVEL_%02d.LZ", levelNum).ToStdString();
+    const std::string fogLZ = wxString::Format("HMLA__%02d.LZ", levelNum).ToStdString();
+
+    const std::string lvlLZ0 = wxString::Format("LEVEL_%02d.LZ0", levelNum).ToStdString();
+    const std::string fogLZ0 = wxString::Format("HMLA__%02d.LZ0", levelNum).ToStdString();
+
     const std::string pal = wxString::Format("LEVEL_%02d.PAL", levelNum).ToStdString();
     const std::string clk = wxString::Format("LEVEL_%02d.CLK", levelNum).ToStdString();
 
-    fs::path pLevel = FindFileCaseInsensitive(folder, lvl);
-    fs::path pFog   = FindFileCaseInsensitive(folder, fog);
-    fs::path pPal   = FindFileCaseInsensitive(folder, pal);
-    fs::path pClk   = FindFileCaseInsensitive(folder, clk);
-    if(pLevel.empty() || pFog.empty() || pPal.empty() || pClk.empty())
+    fs::path pLevel = FindFileCaseInsensitive(folder, lvlBIN);
+    if (pLevel.empty()) pLevel = FindFileCaseInsensitive(folder, lvlLZ);
+    if (pLevel.empty()) pLevel = FindFileCaseInsensitive(folder, lvlLZ0);
+
+    fs::path pFog = FindFileCaseInsensitive(folder, fogBIN);
+    if (pFog.empty()) pFog = FindFileCaseInsensitive(folder, fogLZ);
+    if (pFog.empty()) pFog = FindFileCaseInsensitive(folder, fogLZ0);
+
+    fs::path pPal = FindFileCaseInsensitive(folder, pal);
+    fs::path pClk = FindFileCaseInsensitive(folder, clk);
+
+    if (pLevel.empty() || pFog.empty() || pPal.empty() || pClk.empty())
         return false;
 
-    std::vector<unsigned char> levelBytes, fogBytes, palBytes, clkBytes;
-    if(!LoadFileBytes(pLevel, levelBytes) || !LoadFileBytes(pFog, fogBytes) || !LoadFileBytes(pPal, palBytes) || !LoadFileBytes(pClk, clkBytes))
+    std::vector<unsigned char> palBytes, clkBytes;
+    if (!LoadFileBytes(pPal, palBytes) || !LoadFileBytes(pClk, clkBytes))
         return false;
 
     int W = 0, H = 0;
     std::vector<unsigned char> clkValues;
-    if(!DecodeCLK(clkBytes, W, H, clkValues))
+    if (!DecodeCLK(clkBytes, W, H, clkValues))
         return false;
 
     const size_t need = (size_t)W * (size_t)H;
-    std::vector<unsigned char> levelPix, fogPix;
-    if(!NormalizeIndexedBuffer(levelBytes, need, clkValues, levelPix))
+
+    // teď teprve načti LEVEL/HMLA – když budou LZ, expandnou se
+    std::vector<unsigned char> levelBytes, fogBytes;
+    if (!LoadFileBytesMaybeExpandLZ(pLevel, need, levelBytes))
         return false;
-    if(!NormalizeIndexedBuffer(fogBytes, need, clkValues, fogPix))
+    if (!LoadFileBytesMaybeExpandLZ(pFog, need, fogBytes))
         return false;
 
+    std::vector<unsigned char> levelPix, fogPix;
+    if (!NormalizeIndexedBuffer(levelBytes, need, clkValues, levelPix))
+        return false;
+    if (!NormalizeIndexedBuffer(fogBytes, need, clkValues, fogPix))
+        return false;
+
+    // 1) LEVEL
+    if (!NormalizeIndexedBuffer(levelBytes, need, clkValues, levelPix))
+    {
+        std::vector<unsigned char> dec;
+        if (!MaybeDecompressSpellLZ(levelBytes, dec))
+            return false;
+
+        StripWHHeaderIfMatches(dec, W, H);
+
+        if (!NormalizeIndexedBuffer(dec, need, clkValues, levelPix))
+            return false;
+    }
+
+    // 2) HMLA
+    if (!NormalizeIndexedBuffer(fogBytes, need, clkValues, fogPix))
+    {
+        std::vector<unsigned char> dec;
+        if (!MaybeDecompressSpellLZ(fogBytes, dec))
+            return false;
+
+        StripWHHeaderIfMatches(dec, W, H);
+
+        if (!NormalizeIndexedBuffer(dec, need, clkValues, fogPix))
+            return false;
+    }
+
     std::array<unsigned char, 256 * 3> pal256;
-    if(!ExpandPaletteTo256(palBytes, pal256))
+    if (!ExpandPaletteTo256(palBytes, pal256))
         return false;
 
     // Compose like python tool:
@@ -4053,50 +4154,50 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     wxImage img(W, H, true);
     img.InitAlpha();
 
-    for(int y = 0; y < H; ++y)
-    for(int x = 0; x < W; ++x)
-    {
-        const size_t i = (size_t)y * W + (size_t)x;
-        const bool inside = (clkValues[i] != 0);
-        const unsigned char idx = inside ? levelPix[i] : fogPix[i];
-
-        unsigned char r = pal256[(size_t)idx * 3 + 0];
-        unsigned char g = pal256[(size_t)idx * 3 + 1];
-        unsigned char b = pal256[(size_t)idx * 3 + 2];
-
-        if(!inside)
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
         {
-            r = (unsigned char)std::clamp((int)std::lround((double)r * fog_darken), 0, 255);
-            g = (unsigned char)std::clamp((int)std::lround((double)g * fog_darken), 0, 255);
-            b = (unsigned char)std::clamp((int)std::lround((double)b * fog_darken), 0, 255);
-        }
+            const size_t i = (size_t)y * W + (size_t)x;
+            const bool inside = (clkValues[i] != 0);
+            const unsigned char idx = inside ? levelPix[i] : fogPix[i];
 
-        img.SetRGB(x, y, r, g, b);
-        img.SetAlpha(x, y, 255);
-    }
+            unsigned char r = pal256[(size_t)idx * 3 + 0];
+            unsigned char g = pal256[(size_t)idx * 3 + 1];
+            unsigned char b = pal256[(size_t)idx * 3 + 2];
 
-    // Outline (white) where neighboring CLK values differ, limited to inside area.
-    for(int y = 0; y < H; ++y)
-    for(int x = 0; x < W; ++x)
-    {
-        const size_t i = (size_t)y * W + (size_t)x;
-        if(clkValues[i] == 0)
-            continue;
+            if (!inside)
+            {
+                r = (unsigned char)std::clamp((int)std::lround((double)r * fog_darken), 0, 255);
+                g = (unsigned char)std::clamp((int)std::lround((double)g * fog_darken), 0, 255);
+                b = (unsigned char)std::clamp((int)std::lround((double)b * fog_darken), 0, 255);
+            }
 
-        bool edge = false;
-        if(x > 0 && clkValues[i - 1] != 0 && clkValues[i] != clkValues[i - 1]) edge = true;
-        if(y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
-        if(edge)
-        {
-            img.SetRGB(x, y, 20, 20, 20);
+            img.SetRGB(x, y, r, g, b);
             img.SetAlpha(x, y, 255);
         }
-    }
+
+    // Outline (white) where neighboring CLK values differ, limited to inside area.
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+        {
+            const size_t i = (size_t)y * W + (size_t)x;
+            if (clkValues[i] == 0)
+                continue;
+
+            bool edge = false;
+            if (x > 0 && clkValues[i - 1] != 0 && clkValues[i] != clkValues[i - 1]) edge = true;
+            if (y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
+            if (edge)
+            {
+                img.SetRGB(x, y, 20, 20, 20);
+                img.SetAlpha(x, y, 255);
+            }
+        }
 
     outBmp = wxBitmap(img);
-    if(outW) *outW = W;
-    if(outH) *outH = H;
-    if(outClk) *outClk = std::move(clkValues);
+    if (outW) *outW = W;
+    if (outH) *outH = H;
+    if (outClk) *outClk = std::move(clkValues);
     return outBmp.IsOk();
 }
 
@@ -4112,10 +4213,10 @@ static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath,
     fs::path pal = base; pal.replace_extension(".PAL");
 
     std::vector<unsigned char> lzBytes, palBytes;
-    if(!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
+    if (!LoadFileBytes(lz, lzBytes) || !LoadFileBytes(pal, palBytes))
         return false;
 
-    if(lzBytes.size() < 4)
+    if (lzBytes.size() < 4)
         return false;
 
     // Best-effort:
@@ -4126,48 +4227,48 @@ static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath,
 
     auto rd16 = [&](const uint8_t* p, size_t off) -> unsigned {
         return (unsigned)p[off] | ((unsigned)p[off + 1] << 8);
-    };
+        };
 
     unsigned w = 0, h = 0;
     const uint8_t* pix = nullptr;
     std::vector<uint8_t> raw;
 
     auto try_parse_raw = [&](const uint8_t* p, size_t len) -> bool {
-        if(len < 4) return false;
+        if (len < 4) return false;
         unsigned tw = rd16(p, 0);
         unsigned th = rd16(p, 2);
-        if(tw == 0 || th == 0) return false;
+        if (tw == 0 || th == 0) return false;
         const size_t need = 4ull + (size_t)tw * (size_t)th;
-        if(need > len) return false;
+        if (need > len) return false;
         w = tw; h = th;
         pix = p + 4;
         return true;
-    };
+        };
 
-    if(!try_parse_raw(src, srcLen))
+    if (!try_parse_raw(src, srcLen))
     {
         LZWexpand delz(256 * 1024);
         raw = delz.Decode((uint8_t*)src, (uint8_t*)src + srcLen);
-        if(raw.empty() || !try_parse_raw(raw.data(), raw.size()))
+        if (raw.empty() || !try_parse_raw(raw.data(), raw.size()))
             return false;
     }
 
     std::array<unsigned char, 256 * 3> pal256;
-    if(!ExpandPaletteTo256(palBytes, pal256))
+    if (!ExpandPaletteTo256(palBytes, pal256))
         return false;
 
     wxImage img((int)w, (int)h, true);
     img.InitAlpha();
-    for(unsigned y = 0; y < h; ++y)
-    for(unsigned x = 0; x < w; ++x)
-    {
-        const unsigned char idx = pix[(size_t)y * w + x];
-        img.SetRGB((int)x, (int)y,
-            pal256[(size_t)idx * 3 + 0],
-            pal256[(size_t)idx * 3 + 1],
-            pal256[(size_t)idx * 3 + 2]);
-        img.SetAlpha((int)x, (int)y, 255);
-    }
+    for (unsigned y = 0; y < h; ++y)
+        for (unsigned x = 0; x < w; ++x)
+        {
+            const unsigned char idx = pix[(size_t)y * w + x];
+            img.SetRGB((int)x, (int)y,
+                pal256[(size_t)idx * 3 + 0],
+                pal256[(size_t)idx * 3 + 1],
+                pal256[(size_t)idx * 3 + 2]);
+            img.SetAlpha((int)x, (int)y, 255);
+        }
 
     outBmp = wxBitmap(img);
     return outBmp.IsOk();
@@ -4195,7 +4296,7 @@ void StrategicLevelFrame::TryLoadBackground()
     {
         std::smatch m;
         std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex::icase);
-        if(std::regex_search(fnU, m, re) && m.size() >= 2)
+        if (std::regex_search(fnU, m, re) && m.size() >= 2)
             levelNum = std::stoi(m[1].str());
     }
 
@@ -4206,13 +4307,13 @@ void StrategicLevelFrame::TryLoadBackground()
     int cw = 0, ch = 0;
     std::vector<unsigned char> cclk;
 
-    if(levelNum >= 0)
+    if (levelNum >= 0)
     {
         // Search in reasonable places: folder of DEF, and a few parents with common subfolders.
         std::vector<fs::path> dirs;
         std::error_code ec;
         fs::path base = defPath.parent_path();
-        for(int depth = 0; depth < 8 && !base.empty(); ++depth)
+        for (int depth = 0; depth < 8 && !base.empty(); ++depth)
         {
             dirs.push_back(base);
             dirs.push_back(base / "DATA");
@@ -4228,19 +4329,19 @@ void StrategicLevelFrame::TryLoadBackground()
         // De-dup while preserving order.
         std::vector<fs::path> uniq;
         uniq.reserve(dirs.size());
-        for(const auto& d : dirs)
+        for (const auto& d : dirs)
         {
-            if(d.empty()) continue;
-            if(!fs::exists(d, ec) || !fs::is_directory(d, ec)) continue;
+            if (d.empty()) continue;
+            if (!fs::exists(d, ec) || !fs::is_directory(d, ec)) continue;
             bool seen = false;
-            for(const auto& u : uniq)
-                if(u == d) { seen = true; break; }
-            if(!seen) uniq.push_back(d);
+            for (const auto& u : uniq)
+                if (u == d) { seen = true; break; }
+            if (!seen) uniq.push_back(d);
         }
 
-        for(const auto& folder : uniq)
+        for (const auto& folder : uniq)
         {
-            if(BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk))
+            if (BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk))
             {
                 composite_ok = true;
                 break;
@@ -4249,15 +4350,15 @@ void StrategicLevelFrame::TryLoadBackground()
     }
 
     // Fallback: older simple LZ background (no CLK).
-    if(!bmp.IsOk())
+    if (!bmp.IsOk())
         BuildLegacyLZBackgroundFromDef(defPath, bmp);
 
-    if(bmp.IsOk())
+    if (bmp.IsOk())
     {
         m_bgBitmap = bmp;
         m_hasBg = true;
 
-        if(composite_ok && !cclk.empty() && cw > 0 && ch > 0)
+        if (composite_ok && !cclk.empty() && cw > 0 && ch > 0)
         {
             m_clkValues = std::move(cclk);
             m_clkW = cw;
@@ -4265,10 +4366,10 @@ void StrategicLevelFrame::TryLoadBackground()
             m_hasClk = ((size_t)m_clkW * (size_t)m_clkH == m_clkValues.size());
 
             // Hide the territory button grid when region click-detection is available.
-            if(m_territoryButtonsPanel)
+            if (m_territoryButtonsPanel)
             {
                 m_territoryButtonsPanel->Show(!m_hasClk);
-                if(m_mapPanel) m_mapPanel->Layout();
+                if (m_mapPanel) m_mapPanel->Layout();
             }
 
 
@@ -4277,9 +4378,9 @@ void StrategicLevelFrame::TryLoadBackground()
         }
     }
 
-    if(m_mapCanvas)
+    if (m_mapCanvas)
         m_mapCanvas->Refresh();
-    else if(m_mapPanel)
+    else if (m_mapPanel)
         m_mapPanel->Refresh();
 }
 
@@ -4288,7 +4389,7 @@ void StrategicLevelFrame::RebuildTerritoryCentroids()
 {
     m_territoryCentroids.clear();
 
-    if(!m_hasClk || m_clkValues.empty() || m_clkW <= 0 || m_clkH <= 0)
+    if (!m_hasClk || m_clkValues.empty() || m_clkW <= 0 || m_clkH <= 0)
         return;
 
     // Accumulate pixel sums per territory id.
@@ -4296,25 +4397,25 @@ void StrategicLevelFrame::RebuildTerritoryCentroids()
     std::unordered_map<int, Acc> acc;
     acc.reserve(std::max<size_t>(16, m_level.territories.size() * 2));
 
-    for(int y = 0; y < m_clkH; ++y)
+    for (int y = 0; y < m_clkH; ++y)
     {
         const unsigned char* row = &m_clkValues[(size_t)y * (size_t)m_clkW];
-        for(int x = 0; x < m_clkW; ++x)
+        for (int x = 0; x < m_clkW; ++x)
         {
             const int tid = (int)row[x];
-            if(tid == 0)
+            if (tid == 0)
                 continue;
 
             auto& a = acc[tid];
             a.sx += x;
             a.sy += y;
-            a.n  += 1;
+            a.n += 1;
         }
     }
 
-    for(const auto& kv : acc)
+    for (const auto& kv : acc)
     {
-        if(kv.second.n <= 0)
+        if (kv.second.n <= 0)
             continue;
 
         const int cx = (int)std::lround((double)kv.second.sx / (double)kv.second.n);
@@ -4326,31 +4427,31 @@ void StrategicLevelFrame::RebuildTerritoryCentroids()
 void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 {
     wxWindow* target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
-    if(!target)
+    if (!target)
         return;
 
     wxAutoBufferedPaintDC dc(target);
     dc.Clear();
 
-    if(m_hasBg && m_bgBitmap.IsOk())
+    if (m_hasBg && m_bgBitmap.IsOk())
     {
         int pw, ph;
         target->GetClientSize(&pw, &ph);
 
         const int bw = m_bgBitmap.GetWidth();
         const int bh = m_bgBitmap.GetHeight();
-        if(pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
+        if (pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
             return;
 
         // Scale to fit panel while keeping aspect ratio.
         const double sx = (double)pw / (double)bw;
         const double sy = (double)ph / (double)bh;
-        const double s  = std::min(sx, sy);
+        const double s = std::min(sx, sy);
         const int dw = std::max(1, (int)std::lround((double)bw * s));
         const int dh = std::max(1, (int)std::lround((double)bh * s));
 
         // Cache the scaled bitmap so we don't rescale on every paint.
-        if(!m_bgBitmapScaled.IsOk() || m_bgScaledW != dw || m_bgScaledH != dh)
+        if (!m_bgBitmapScaled.IsOk() || m_bgScaledW != dw || m_bgScaledH != dh)
         {
             wxImage img = m_bgBitmap.ConvertToImage();
             m_bgBitmapScaled = wxBitmap(img.Scale(dw, dh, wxIMAGE_QUALITY_NEAREST));
@@ -4362,8 +4463,8 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
         const int y = (ph - dh) / 2;
         dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
 
-// Territory labels directly on the map (replacement for the temporary button grid).
-// Prefer centroids computed from CLK (exact), fallback to LEVEL_XX.DEF "strategic_x/y".
+        // Territory labels directly on the map (replacement for the temporary button grid).
+        // Prefer centroids computed from CLK (exact), fallback to LEVEL_XX.DEF "strategic_x/y".
         {
             dc.SetFont(m_fontText);
 
@@ -4451,7 +4552,7 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
 void StrategicLevelFrame::OnActivate(wxActivateEvent& ev)
 {
-    if(ev.GetActive())
+    if (ev.GetActive())
         Raise();
     ev.Skip();
 }
@@ -4463,7 +4564,7 @@ void StrategicLevelFrame::OnActivate(wxActivateEvent& ev)
 
 void StrategicLevelFrame::BuildStatsPage()
 {
-    if(!m_statsPanel)
+    if (!m_statsPanel)
         return;
 
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
@@ -4481,26 +4582,26 @@ void StrategicLevelFrame::BuildStatsPage()
         row->Add(CreateStrategicLabel(parent, "Alliance", m_fontHeading, m_palette.heading, m_palette.shadow), 0, wxRIGHT, 12);
         row->Add(CreateStrategicLabel(parent, "Enemy", m_fontHeading, m_palette.heading, m_palette.shadow), 0);
         return row;
-    };
+        };
 
     overallSizer->Add(addHeader(overallBox), 0, wxALL | wxEXPAND, 8);
 
     auto addRow = [&](wxWindow* parent, const char* caption, wxStaticBitmap*& outA, wxStaticBitmap*& outE)
-    {
-        auto* row = new wxBoxSizer(wxHORIZONTAL);
-        row->Add(CreateStrategicLabel(parent, wxString::FromUTF8(caption), m_fontText, m_palette.text, m_palette.shadow), 1, wxRIGHT, 8);
+        {
+            auto* row = new wxBoxSizer(wxHORIZONTAL);
+            row->Add(CreateStrategicLabel(parent, wxString::FromUTF8(caption), m_fontText, m_palette.text, m_palette.shadow), 1, wxRIGHT, 8);
 
-        outA = CreateStrategicLabel(parent, "0", m_fontText, m_palette.text, m_palette.shadow);
-        outE = CreateStrategicLabel(parent, "0", m_fontText, m_palette.text, m_palette.shadow);
-        row->Add(outA, 0, wxRIGHT, 12);
-        row->Add(outE, 0);
-        return row;
-    };
+            outA = CreateStrategicLabel(parent, "0", m_fontText, m_palette.text, m_palette.shadow);
+            outE = CreateStrategicLabel(parent, "0", m_fontText, m_palette.text, m_palette.shadow);
+            row->Add(outA, 0, wxRIGHT, 12);
+            row->Add(outE, 0);
+            return row;
+        };
 
     overallSizer->Add(addRow(overallBox, "Light units", m_lblAllLightA, m_lblAllLightE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     overallSizer->Add(addRow(overallBox, "Heavy units", m_lblAllHeavyA, m_lblAllHeavyE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-    overallSizer->Add(addRow(overallBox, "Air units",   m_lblAllAirA,  m_lblAllAirE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-    overallSizer->Add(addRow(overallBox, "Commanders",  m_lblAllCmdA,  m_lblAllCmdE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    overallSizer->Add(addRow(overallBox, "Air units", m_lblAllAirA, m_lblAllAirE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    overallSizer->Add(addRow(overallBox, "Commanders", m_lblAllCmdA, m_lblAllCmdE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     overallBox->SetSizer(overallSizer);
     rootSizer->Add(overallBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
@@ -4516,8 +4617,8 @@ void StrategicLevelFrame::BuildStatsPage()
 
     levelSizer->Add(addRow(levelBox, "Light units", m_lblLvlLightA, m_lblLvlLightE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     levelSizer->Add(addRow(levelBox, "Heavy units", m_lblLvlHeavyA, m_lblLvlHeavyE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-    levelSizer->Add(addRow(levelBox, "Air units",   m_lblLvlAirA,  m_lblLvlAirE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-    levelSizer->Add(addRow(levelBox, "Commanders",  m_lblLvlCmdA,  m_lblLvlCmdE),  0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    levelSizer->Add(addRow(levelBox, "Air units", m_lblLvlAirA, m_lblLvlAirE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    levelSizer->Add(addRow(levelBox, "Commanders", m_lblLvlCmdA, m_lblLvlCmdE), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     levelBox->SetSizer(levelSizer);
     rootSizer->Add(levelBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
@@ -4531,15 +4632,15 @@ void StrategicLevelFrame::BuildStatsPage()
 
     m_lblPlayerName = CreateStrategicLabel(playerBox, "Player - John Alexander", m_fontText, m_palette.text, m_palette.shadow);
     m_lblPlayerRank = CreateStrategicLabel(playerBox, "Rank: 0", m_fontText, m_palette.text, m_palette.shadow);
-    m_lblPlayerExp  = CreateStrategicLabel(playerBox, "Experience: 0", m_fontText, m_palette.text, m_palette.shadow);
+    m_lblPlayerExp = CreateStrategicLabel(playerBox, "Experience: 0", m_fontText, m_palette.text, m_palette.shadow);
     m_lblPlayerMaxUnits = CreateStrategicLabel(playerBox, "Max units: 0", m_fontText, m_palette.text, m_palette.shadow);
-    m_lblPlayerMaxCmds  = CreateStrategicLabel(playerBox, "Max commanders: 0", m_fontText, m_palette.text, m_palette.shadow);
+    m_lblPlayerMaxCmds = CreateStrategicLabel(playerBox, "Max commanders: 0", m_fontText, m_palette.text, m_palette.shadow);
 
     playerSizer->Add(m_lblPlayerName, 0, wxALL, 8);
     playerSizer->Add(m_lblPlayerRank, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
-    playerSizer->Add(m_lblPlayerExp,  0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    playerSizer->Add(m_lblPlayerExp, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     playerSizer->Add(m_lblPlayerMaxUnits, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
-    playerSizer->Add(m_lblPlayerMaxCmds,  0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    playerSizer->Add(m_lblPlayerMaxCmds, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
     playerBox->SetSizer(playerSizer);
     rootSizer->Add(playerBox, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
@@ -4549,58 +4650,58 @@ void StrategicLevelFrame::BuildStatsPage()
 
 void StrategicLevelFrame::RefreshStatsPage()
 {
-    if(!m_statsPanel)
+    if (!m_statsPanel)
         return;
 
     UpdateStrategicLabel(m_lblAllLightA, { { wxString::Format("%d", m_lossStats.alliance_all.light), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllLightE, { { wxString::Format("%d", m_lossStats.enemy_all.light), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllHeavyA, { { wxString::Format("%d", m_lossStats.alliance_all.heavy), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllHeavyE, { { wxString::Format("%d", m_lossStats.enemy_all.heavy), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllAirA, { { wxString::Format("%d", m_lossStats.alliance_all.air), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllAirE, { { wxString::Format("%d", m_lossStats.enemy_all.air), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllCmdA, { { wxString::Format("%d", m_lossStats.alliance_all.commanders), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblAllCmdE, { { wxString::Format("%d", m_lossStats.enemy_all.commanders), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
 
     UpdateStrategicLabel(m_lblLvlLightA, { { wxString::Format("%d", m_lossStats.alliance_level.light), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlLightE, { { wxString::Format("%d", m_lossStats.enemy_level.light), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlHeavyA, { { wxString::Format("%d", m_lossStats.alliance_level.heavy), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlHeavyE, { { wxString::Format("%d", m_lossStats.enemy_level.heavy), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlAirA, { { wxString::Format("%d", m_lossStats.alliance_level.air), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlAirE, { { wxString::Format("%d", m_lossStats.enemy_level.air), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlCmdA, { { wxString::Format("%d", m_lossStats.alliance_level.commanders), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblLvlCmdE, { { wxString::Format("%d", m_lossStats.enemy_level.commanders), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
 
     const CommanderRankRec* rec = FindRankRec(m_player.rank);
     const int maxUnits = rec ? rec->max_units : 0;
-    const int maxCmds  = rec ? rec->max_commanders : 0;
-    const int nextExp  = FindNextRankExp(m_player.rank);
+    const int maxCmds = rec ? rec->max_commanders : 0;
+    const int nextExp = FindNextRankExp(m_player.rank);
 
     UpdateStrategicLabel(m_lblPlayerName, { { wxString::Format("Player - %s", wxString::FromUTF8(m_player.name)), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblPlayerRank, { { wxString::Format("Rank: %s", GetRankNameCz(m_player.rank)), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblPlayerExp, { { wxString::Format("Experience: %d (%d)", m_player.experience, nextExp), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblPlayerMaxUnits, { { wxString::Format("Max units: %d", maxUnits), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
     UpdateStrategicLabel(m_lblPlayerMaxCmds, { { wxString::Format("Max commanders: %d", maxCmds), m_palette.text, &m_fontText } },
-                         m_fontText, m_palette.shadow);
+        m_fontText, m_palette.shadow);
 
     m_statsPanel->Layout();
 }
@@ -4612,7 +4713,7 @@ wxString StrategicLevelFrame::FindStrategicStatsPath() const
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::path base = fs::path(m_level.source_path).parent_path();
-    if(base.empty() || !fs::exists(base, ec))
+    if (base.empty() || !fs::exists(base, ec))
         base = fs::current_path(ec);
     return wxString::FromUTF8((base / "strategic_stats.json").string());
 }
@@ -4623,7 +4724,7 @@ wxString StrategicLevelFrame::FindHodnostiDefPath() const
     std::error_code ec;
 
     fs::path base = fs::path(m_level.source_path).parent_path();
-    if(base.empty() || !fs::exists(base, ec))
+    if (base.empty() || !fs::exists(base, ec))
         base = fs::current_path(ec);
 
     const std::array<fs::path, 6> candidates = {
@@ -4635,9 +4736,9 @@ wxString StrategicLevelFrame::FindHodnostiDefPath() const
         fs::current_path(ec) / "HODNOSTI.DEF"
     };
 
-    for(const auto& p : candidates)
+    for (const auto& p : candidates)
     {
-        if(fs::exists(p, ec) && fs::is_regular_file(p, ec))
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec))
             return wxString::FromUTF8(p.string());
     }
     return "";
@@ -4645,11 +4746,11 @@ wxString StrategicLevelFrame::FindHodnostiDefPath() const
 
 void StrategicLevelFrame::LoadRanksTable()
 {
-    if(!m_ranks.empty())
+    if (!m_ranks.empty())
         return;
 
     wxString p = FindHodnostiDefPath();
-    if(p.empty())
+    if (p.empty())
     {
         // Fallback defaults (kept identical to former form_strategic.*)
         m_ranks = {
@@ -4667,18 +4768,18 @@ void StrategicLevelFrame::LoadRanksTable()
     }
 
     std::ifstream f(p.ToStdString());
-    if(!f)
+    if (!f)
         return;
 
     std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if(data.empty())
+    if (data.empty())
         return;
 
     std::regex re(R"(DefineCommander\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*,\s*(\d+)\s*\))");
-    for(auto it = std::sregex_iterator(data.begin(), data.end(), re); it != std::sregex_iterator(); ++it)
+    for (auto it = std::sregex_iterator(data.begin(), data.end(), re); it != std::sregex_iterator(); ++it)
     {
         const auto& m = *it;
-        if(m.size() < 6)
+        if (m.size() < 6)
             continue;
 
         CommanderRankRec r;
@@ -4691,7 +4792,7 @@ void StrategicLevelFrame::LoadRanksTable()
     }
 
     std::sort(m_ranks.begin(), m_ranks.end(),
-              [](const CommanderRankRec& a, const CommanderRankRec& b) { return a.rank < b.rank; });
+        [](const CommanderRankRec& a, const CommanderRankRec& b) { return a.rank < b.rank; });
 }
 
 static bool ReadLossBlockFromObj_StrategicLevel(const std::string& obj, StrategicLevelFrame::LossBlock& out)
@@ -4713,34 +4814,34 @@ void StrategicLevelFrame::LoadMissionStatsIfPresent()
     // }
     wxString p = FindStrategicStatsPath();
     std::ifstream f(p.ToStdString());
-    if(!f)
+    if (!f)
         return;
 
     std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if(data.empty())
+    if (data.empty())
         return;
 
     auto extractObj = [&](const char* section, const char* side, std::string& outObj) -> bool
-    {
-        std::regex re(std::string("\"") + section + "\"\\s*:\\s*\\{([^}]*)\\}");
-        std::smatch m;
-        if(!std::regex_search(data, m, re) || m.size() < 2)
-            return false;
-        std::string sec = m[1].str();
+        {
+            std::regex re(std::string("\"") + section + "\"\\s*:\\s*\\{([^}]*)\\}");
+            std::smatch m;
+            if (!std::regex_search(data, m, re) || m.size() < 2)
+                return false;
+            std::string sec = m[1].str();
 
-        std::regex re2(std::string("\"") + side + "\"\\s*:\\s*\\{([^}]*)\\}");
-        if(!std::regex_search(sec, m, re2) || m.size() < 2)
-            return false;
-        outObj = m[1].str();
-        return true;
-    };
+            std::regex re2(std::string("\"") + side + "\"\\s*:\\s*\\{([^}]*)\\}");
+            if (!std::regex_search(sec, m, re2) || m.size() < 2)
+                return false;
+            outObj = m[1].str();
+            return true;
+        };
 
     std::string obj;
-    if(extractObj("all", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_all);
-    if(extractObj("all", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_all);
+    if (extractObj("all", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_all);
+    if (extractObj("all", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_all);
 
-    if(extractObj("level", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_level);
-    if(extractObj("level", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_level);
+    if (extractObj("level", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_level);
+    if (extractObj("level", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_level);
 }
 
 // ---------------- Rank helpers ----------------
@@ -4748,9 +4849,9 @@ void StrategicLevelFrame::LoadMissionStatsIfPresent()
 void StrategicLevelFrame::RecomputePlayerRank()
 {
     int best = 0;
-    for(const auto& r : m_ranks)
+    for (const auto& r : m_ranks)
     {
-        if(m_player.experience >= r.exp_required && m_player.actions >= r.actions_required)
+        if (m_player.experience >= r.exp_required && m_player.actions >= r.actions_required)
             best = std::max(best, r.rank);
     }
     m_player.rank = best;
@@ -4758,8 +4859,8 @@ void StrategicLevelFrame::RecomputePlayerRank()
 
 const StrategicLevelFrame::CommanderRankRec* StrategicLevelFrame::FindRankRec(int rank) const
 {
-    for(const auto& r : m_ranks)
-        if(r.rank == rank)
+    for (const auto& r : m_ranks)
+        if (r.rank == rank)
             return &r;
     return nullptr;
 }
@@ -4768,14 +4869,14 @@ int StrategicLevelFrame::FindNextRankExp(int current_rank) const
 {
     int nextExp = 0;
     bool found = false;
-    for(const auto& r : m_ranks)
+    for (const auto& r : m_ranks)
     {
-        if(r.rank == current_rank) { found = true; continue; }
-        if(found && r.rank > current_rank) { nextExp = r.exp_required; break; }
+        if (r.rank == current_rank) { found = true; continue; }
+        if (found && r.rank > current_rank) { nextExp = r.exp_required; break; }
     }
-    if(nextExp <= 0)
+    if (nextExp <= 0)
     {
-        for(const auto& r : m_ranks)
+        for (const auto& r : m_ranks)
             nextExp = std::max(nextExp, r.exp_required);
     }
     return nextExp;
@@ -4783,7 +4884,7 @@ int StrategicLevelFrame::FindNextRankExp(int current_rank) const
 
 wxString StrategicLevelFrame::GetRankNameCz(int rank) const
 {
-    switch(rank)
+    switch (rank)
     {
     case 0: return "Lieutenant";
     case 1: return "First Lieutenant";
@@ -4797,3 +4898,4 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
     default: return wxString::Format("Rank %d", rank);
     }
 }
+

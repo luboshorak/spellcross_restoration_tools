@@ -54,6 +54,8 @@ void BuildMenu();
 void OnSaveGame(wxCommandEvent& ev);
 void OnLoadGame(wxCommandEvent& ev);
 
+void OnOptionsAudio(wxCommandEvent& ev);
+
 struct PlayerProgress
 {
     std::string name = "John Alexander";
@@ -335,8 +337,9 @@ bool m_commanderNamesLoaded = false;
         ID_BTN_STRATEGIC_MAP,
         ID_BTN_HIERARCHY,
         ID_BTN_STATS,
-                ID_MENU_SAVE_GAME,
-        ID_MENU_LOAD_GAME
+        ID_MENU_SAVE_GAME,
+        ID_MENU_LOAD_GAME,
+        ID_MENU_OPTIONS_AUDIO
     };
 
     wxDECLARE_EVENT_TABLE();
