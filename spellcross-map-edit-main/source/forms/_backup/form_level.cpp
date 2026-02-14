@@ -778,6 +778,90 @@ static void try_append_text_set(wxString& info, const std::filesystem::path& bas
     load_and_append(".S", "Counter-attack");
 }
 
+// ---------------- Campaign start territory helper ----------------
+// In some levels the campaign starting territory is NOT T01.
+// Heuristic: pick the first territory whose mission has no Briefing text file.
+// (In the original game, those typically represent the already-secured / home region.)
+static std::filesystem::path FindTextsDirForLevel(const LevelData& level)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path texts_dir;
+
+    auto try_dir = [&](const fs::path& p)
+    {
+        if (texts_dir.empty() && !p.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
+            texts_dir = p;
+    };
+
+    // Walk up from level DEF location and try common layouts
+    fs::path base = fs::path(level.source_path).parent_path();
+    for (int i = 0; i < 8 && !base.empty() && texts_dir.empty(); ++i)
+    {
+        try_dir(base / "DATA" / "TEXTS");
+        try_dir(base / "DATA" / "texts");
+        try_dir(base / "TEXTS");
+        try_dir(base / "texts");
+        base = base.parent_path();
+    }
+
+    // Fallback: current working directory
+    if (texts_dir.empty())
+    {
+        const fs::path cwd = fs::current_path(ec);
+        try_dir(cwd / "DATA" / "TEXTS");
+        try_dir(cwd / "DATA" / "texts");
+        try_dir(cwd / "TEXTS");
+        try_dir(cwd / "texts");
+    }
+
+    return texts_dir;
+}
+
+static bool HasBriefingForMissionToken(const std::filesystem::path& texts_dir, const std::string& mission_token)
+{
+    if (texts_dir.empty() || mission_token.empty() || mission_token == "none")
+        return false;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    std::string base = mission_to_text_base(mission_token);
+    if (base.empty())
+        return false;
+
+    // Briefing is stored as the A variant (Txx_yyA) when token ends with digit.
+    char last = base.back();
+    if (last >= '0' && last <= '9')
+        base.push_back('A');
+
+    const fs::path p1 = texts_dir / base;
+    const fs::path p2 = texts_dir / to_lower(base);
+    const fs::path p3 = texts_dir / to_upper(base);
+
+    return fs::exists(p1, ec) || fs::exists(p2, ec) || fs::exists(p3, ec);
+}
+
+static int ChooseDefaultStartTerritoryId_NoBriefing(const LevelData& level)
+{
+    if (level.territories.empty())
+        return 0;
+
+    const auto texts_dir = FindTextsDirForLevel(level);
+
+    // 1) Prefer a territory whose mission has NO briefing file.
+    for (const auto& t : level.territories)
+    {
+        if (!HasBriefingForMissionToken(texts_dir, t.mission))
+            return t.id;
+    }
+
+    // 2) Fallback: first territory.
+    return level.territories.front().id;
+}
+
+
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
     : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
         wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
@@ -1193,6 +1277,23 @@ void StrategicLevelFrame::MarkOverlayDirty()
     else if (m_mapPanel) m_mapPanel->Refresh();
 }
 
+static int PickStartTerritoryIdForGameMode(const LevelData& level)
+{
+    // 1) Some levels explicitly mark the "home" territory with an empty mission token.
+    for (const auto& t : level.territories)
+        if (trim(t.mission).empty())
+            return t.id;
+
+    // 2) Otherwise, pick the first territory that has NO briefing text file.
+    // (This matches the original campaign behavior for e.g. LEVEL_07 where start != T01.)
+    const int byNoBrief = ChooseDefaultStartTerritoryId_NoBriefing(level);
+    if (byNoBrief > 0)
+        return byNoBrief;
+
+    // 3) Fallback: first territory in list.
+    return !level.territories.empty() ? level.territories.front().id : 1;
+}
+
 void StrategicLevelFrame::ApplyTerritoryVisibility()
 {
     // Determine max territory id
@@ -1207,6 +1308,11 @@ void StrategicLevelFrame::ApplyTerritoryVisibility()
 
     // In game mode: visible = owned + neighbors(owned)
     std::fill(m_visibleTerritory.begin(), m_visibleTerritory.end(), 0);
+
+    // Ensure we always have a start territory; otherwise everything becomes "fog".
+    if (m_ownedTerritories.empty())
+        m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+
 
     auto mark = [&](int tid)
     {
@@ -1237,8 +1343,11 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
     if (m_gameModeEnabled)
     {
         // Ensure at least one owned territory (start territory).
-        if (m_ownedTerritories.empty() && !m_level.territories.empty())
-            m_ownedTerritories.push_back(m_level.territories.front().id);
+        if (m_ownedTerritories.empty())
+            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+
+        m_hoverTerritory = 0;
+
     }
 
     ApplyTerritoryVisibility();
@@ -4099,6 +4208,10 @@ void StrategicLevelFrame::LoadStrategicState()
         m_gameModeEnabled = gm;
         m_ownedTerritories = std::move(owned);
 
+        // Ensure start territory when loading older saves / empty campaign state.
+        if (m_gameModeEnabled && m_ownedTerritories.empty())
+            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+
         if (GetMenuBar())
         {
             auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
@@ -4821,7 +4934,22 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
                 wxImage ovImg(bw, bh, true);
                 ovImg.InitAlpha();
 
+                // InitAlpha() nastaví defaultně alpha=255 (neprůhledné). My chceme defaultně plně průhledné.
+                std::memset(ovImg.GetAlpha(), 0, (size_t)bw * (size_t)bh);
+
                 const int maxId = (int)m_visibleTerritory.size() - 1;
+
+                // Helper: decode territory id from CLK byte (interior: 1..N, border: 129..128+N)
+                auto decodeTid = [&](uint8_t vv) -> int
+                    {
+                        if (vv >= 1 && vv <= (uint8_t)maxId) return (int)vv;
+                        if (vv >= 129 && vv <= (uint8_t)(128 + maxId)) return (int)vv - 128;
+                        return 0;
+                    };
+                auto isVisibleTid = [&](int t) -> bool
+                    {
+                        return (t > 0 && t < (int)m_visibleTerritory.size() && m_visibleTerritory[t] != 0);
+                    };
 
                 for (int py = 0; py < bh; ++py)
                 {
@@ -4836,24 +4964,70 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
                         const size_t cidx = (size_t)cy * (size_t)m_clkW + (size_t)cx;
                         if (cidx >= m_clkValues.size()) continue;
-                        const uint8_t v = m_clkValues[cidx];
 
-                        int tid = 0;
-                        if (v >= 1 && v <= (uint8_t)maxId) tid = (int)v;
-                        else if (v >= 129 && v <= (uint8_t)(128 + maxId)) tid = (int)v - 128;
+                        const uint8_t v = m_clkValues[cidx];
+                        const bool isBorder = (v >= 129);
+
+                        const int tid = decodeTid(v);
                         if (tid <= 0) continue;
 
-                        const bool isVis = (tid < (int)m_visibleTerritory.size() && m_visibleTerritory[tid] != 0);
+                        const bool isVis = isVisibleTid(tid);
                         const bool isOwned = (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end());
                         const bool isHover = (m_hoverTerritory == tid);
 
+                        // If this is a border pixel and it borders any UNKNOWN (non-visible) territory,
+                        // we must "erase" the baked border even if the border pixel belongs to a visible territory.
+                        bool borderToUnknown = false;
+                        if (m_gameModeEnabled && isBorder)
+                        {
+                            auto nt = [&](int nx, int ny) -> int
+                                {
+                                    if (nx < 0 || ny < 0 || nx >= m_clkW || ny >= m_clkH) return 0;
+                                    const size_t ni = (size_t)ny * (size_t)m_clkW + (size_t)nx;
+                                    if (ni >= m_clkValues.size()) return 0;
+                                    return decodeTid(m_clkValues[ni]);
+                                };
+
+                            const int tL = nt(cx - 1, cy);
+                            const int tR = nt(cx + 1, cy);
+                            const int tU = nt(cx, cy - 1);
+                            const int tD = nt(cx, cy + 1);
+
+                            auto unknownOther = [&](int t) -> bool
+                                {
+                                    if (t == 0) return true;      // outside any territory (background)
+                                    if (t == tid) return false;   // same territory
+                                    return !isVisibleTid(t);      // different and not visible => unknown
+                                };
+
+                            if (unknownOther(tL) || unknownOther(tR) || unknownOther(tU) || unknownOther(tD))
+                                borderToUnknown = true;
+                        }
+
                         unsigned char r = 0, g = 0, b = 0, a = 0;
 
-                        if (!isVis)
+                        // Fog tone: keeps terrain visible but hides borders
+                        const unsigned char fogR = 10, fogG = 20, fogB = 10;
+                        const unsigned char fogInteriorA = 90;
+                        const unsigned char fogBorderA = 160;
+
+                        if (borderToUnknown)
                         {
-                            // fog
-                            r = g = b = 0;
-                            a = 140;
+                            // "Erase" baked border into unknown area
+                            r = fogR; g = fogG; b = fogB;
+                            a = fogBorderA;
+                        }
+                        else if (!isVis)
+                        {
+                            // Unknown (not discovered): keep terrain visible, hide any territory border
+                            r = fogR; g = fogG; b = fogB;
+                            a = fogInteriorA;
+
+                            if (isBorder)
+                            {
+                                r = fogR; g = fogG; b = fogB;
+                                a = fogBorderA;
+                            }
                         }
                         else if (!isOwned)
                         {
@@ -4869,8 +5043,8 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
                         if (isHover)
                         {
-                            // hover highlight (yellow)
-                            r = 240; g = 220; b = 60;
+                            // hover highlight (red)
+                            r = 178; g = 45; b = 35;
                             a = std::max<unsigned char>(a, 120);
                         }
 
