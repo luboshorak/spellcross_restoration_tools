@@ -11,6 +11,7 @@
 #include <wx/statbmp.h>
 #include <wx/bmpbuttn.h>
 #include <wx/simplebook.h>
+#include <wx/slider.h>
 #include <wx/dnd.h>
 #include <wx/scrolwin.h>
 
@@ -26,6 +27,10 @@ public:
 
     void BuildUI();
     void RefreshUI();
+
+    void BuildResourcesPage();
+    void RefreshResourcesPage();
+    void ApplyResourceTickEndTurn();
 
     // background (LEVEL_XX.LZ + LEVEL_XX.PAL) - best effort
     void TryLoadBackground();
@@ -47,6 +52,7 @@ public:
     void OnShowStrategicMap(wxCommandEvent& ev);
     void OnShowHierarchy(wxCommandEvent& ev);
     void OnShowStats(wxCommandEvent& ev);
+    void OnShowResources(wxCommandEvent& ev);
 
 
 // menu (Strategic Level saves)
@@ -215,6 +221,20 @@ public:
     bool m_gameModeEnabled = false;
     std::vector<int> m_ownedTerritories;
 
+    struct TerritoryResourceState
+    {
+        int total = 20;
+        int remaining = 20;
+        // 0..100: percent of extracted resource "ticks" routed toward research.
+        int researchPercent = 0;
+        // 0..99 accumulator for deterministic ratio routing.
+        int allocAccum = 0;
+        // 0..3 carry for converting 4 resource ticks -> 1 research point.
+        int researchCarry = 0;
+    };
+
+    std::unordered_map<int, TerritoryResourceState> m_territoryResources;
+
     // Territory visibility / overlay for Game mode
     std::vector<uint32_t> m_territoryAdjMask; // indexed by territory id (1..N)
     std::vector<uint8_t>  m_visibleTerritory; // 0/1 per territory id
@@ -331,6 +351,13 @@ bool m_commanderNamesLoaded = false;
     wxPanel* m_territoryButtonsPanel = nullptr;
     // Dedicated paint surface for the strategic background (so it isn't fully covered by child controls).
     wxPanel* m_mapCanvas = nullptr;
+    // --- Resources page (strategic resource allocation)
+    wxPanel* m_resourcesPanel = nullptr;
+    wxPanel* m_resourcesCanvas = nullptr;
+    wxStaticText* m_resourcesSelectedLabel = nullptr;
+    wxSlider* m_resourcesSlider = nullptr;
+    wxStaticText* m_resourcesRatioLabel = nullptr;
+
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_cmdRoster = nullptr;
     wxListCtrl* m_roster = nullptr;
@@ -348,6 +375,7 @@ bool m_commanderNamesLoaded = false;
     wxButton* m_btnLaunch = nullptr;
     wxButton* m_btnStrategicMap = nullptr;
     wxButton* m_btnHierarchy = nullptr;
+    wxButton* m_btnResources = nullptr;
     wxButton* m_btnStats = nullptr;
 
     wxBitmap m_bgBitmapScaled;
@@ -365,6 +393,7 @@ bool m_commanderNamesLoaded = false;
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
         ID_BTN_HIERARCHY,
+        ID_BTN_RESOURCES,
         ID_BTN_STATS,
         ID_MENU_SAVE_GAME,
         ID_MENU_LOAD_GAME,

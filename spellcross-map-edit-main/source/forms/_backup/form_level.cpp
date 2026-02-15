@@ -38,6 +38,7 @@ EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN, StrategicLevelFrame::OnEndTurn)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH, StrategicLevelFrame::OnLaunch)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_HIERARCHY, StrategicLevelFrame::OnShowHierarchy)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESOURCES, StrategicLevelFrame::OnShowResources)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_STATS, StrategicLevelFrame::OnShowStats)
 wxEND_EVENT_TABLE()
 
@@ -370,6 +371,8 @@ static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const std::vector<
     UpdateStrategicLabel(b, spans, fallbackFont, shadow, background);
     return b;
 }
+
+static bool g_bakeStrategicBorders = true;
 
 static wxStaticBitmap* CreateStrategicLabel(wxWindow* parent, const wxString& text, const wxFont& font,
     const wxColour& color, const wxColour& shadow)
@@ -861,6 +864,26 @@ static int ChooseDefaultStartTerritoryId_NoBriefing(const LevelData& level)
     return level.territories.front().id;
 }
 
+static std::vector<int> ChooseStartTerritories_NoBriefing(const LevelData& level)
+{
+    std::vector<int> out;
+    if (level.territories.empty())
+        return out;
+
+    const auto texts_dir = FindTextsDirForLevel(level);
+
+    for (const auto& t : level.territories)
+    {
+        // "start territories" = those whose mission has NO briefing file
+        if (!HasBriefingForMissionToken(texts_dir, t.mission))
+            out.push_back(t.id);
+    }
+
+    // make deterministic & unique
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
     : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
@@ -881,6 +904,10 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
         m_territoryCurrentMission[t.id] = t.mission;
         m_territoryLaunchCount[t.id] = 0;
     }
+
+    // init default resources state (20/20) for all territories
+    for (const auto& t : m_level.territories)
+        m_territoryResources[t.id] = TerritoryResourceState{};
 
     BuildMenu();
 
@@ -954,6 +981,7 @@ static bool LoadStrategicStateFile(
     int& cmdGenCountInWindow,
     bool& gameModeEnabled,
     std::vector<int>& ownedTerritories,
+    std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
     std::string* out_level_def,
     std::string* out_timestamp);
 
@@ -974,6 +1002,7 @@ static void SaveStrategicStateFile(
     int cmdGenCountInWindow,
     bool gameModeEnabled,
     const std::vector<int>& ownedTerritories,
+    const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
     const std::string& timestamp);
 
 void StrategicLevelFrame::BuildMenu()
@@ -1110,7 +1139,7 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-        m_gameModeEnabled, m_ownedTerritories,
+        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         /*timestamp*/NowIsoLocal());
 
     wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
@@ -1165,7 +1194,7 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-        m_gameModeEnabled, m_ownedTerritories,
+        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         &loaded_level_def, &ts))
     {
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
@@ -1220,13 +1249,11 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
         bool gm2 = false;
         std::vector<int> owned2;
+        // Add this declaration with the other local variables (around line with other declarations):
+        std::unordered_map<int, TerritoryResourceState> terrRes;
 
-        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl,
-            terrMission, terrLaunch, units,
-            playerCmds2, availCmds2, windowStart2, genCount2,
-            gm2, owned2,
-            &def2, &ts2))
-        {
+        // Then update the function call to include terrRes:
+        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
             wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
             return;
         }
@@ -1344,15 +1371,30 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
     {
         // Ensure at least one owned territory (start territory).
         if (m_ownedTerritories.empty())
-            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+        {
+            // Some levels start with MULTIPLE owned territories = those WITHOUT briefing
+            m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level);
+
+            // Fallback: at least one
+            if (m_ownedTerritories.empty() && !m_level.territories.empty())
+                m_ownedTerritories.push_back(m_level.territories.front().id);
+        }
 
         m_hoverTerritory = 0;
 
     }
 
+    SaveStrategicState(); // persist into autosave.json
+
+    // Rebuild background, because baked borders must be ON in editor mode and OFF in game mode.
+    TryLoadBackground();
     ApplyTerritoryVisibility();
     MarkOverlayDirty();
-    SaveStrategicState(); // persist into autosave
+    RefreshUI();
+
+    if (m_mapCanvas) m_mapCanvas->Refresh();
+    else if (m_mapPanel) m_mapPanel->Refresh();
+
 }
 
 
@@ -1553,13 +1595,19 @@ void StrategicLevelFrame::BuildUI()
     hierarchyPanel->SetBackgroundColour(m_palette.background);
     BuildHierarchyPage(hierarchyPanel);
 
-    // --- Page 2: Statistics (integrated into this frame) ---
+    // --- Page 2: Resources ---
+    m_resourcesPanel = new wxPanel(m_leftBook);
+    m_resourcesPanel->SetBackgroundColour(m_palette.background);
+    BuildResourcesPage();
+
+    // --- Page 3: Statistics (integrated into this frame) ---
     m_statsPanel = new wxPanel(m_leftBook);
     m_statsPanel->SetBackgroundColour(m_palette.background);
     BuildStatsPage();
 
     m_leftBook->AddPage(m_mapPanel, "Strategic map", true);
     m_leftBook->AddPage(hierarchyPanel, "Hierarchy", false);
+    m_leftBook->AddPage(m_resourcesPanel, "Resources", false);
     m_leftBook->AddPage(m_statsPanel, "Statistics", false);
 
     mainSizer->Add(m_leftBook, 4, wxEXPAND);
@@ -1691,6 +1739,7 @@ void StrategicLevelFrame::BuildUI()
 
     m_btnStrategicMap = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
     m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
+    m_btnResources = makeBtn(ID_BTN_RESOURCES, "Resources");
     m_btnResearch = makeBtn(ID_BTN_RESEARCH, "Research");
     m_btnBuy = makeBtn(ID_BTN_BUY, "Buy units");
     m_btnBuyCmd = makeBtn(ID_BTN_BUY_CMD, "Buy commander");
@@ -1706,6 +1755,7 @@ void StrategicLevelFrame::BuildUI()
     btnSizer->Add(m_btnSell, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnResources, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnStats, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnEndTurn, 0, wxEXPAND);
@@ -2884,6 +2934,179 @@ void StrategicLevelFrame::RefreshUI()
     }
 }
 
+
+// ============================================================
+// Resources page + mechanics
+// ============================================================
+
+void StrategicLevelFrame::BuildResourcesPage()
+{
+    if (!m_resourcesPanel)
+        return;
+
+    auto* s = new wxBoxSizer(wxVERTICAL);
+
+    // Paint surface (same background as strategic map)
+    m_resourcesCanvas = new wxPanel(m_resourcesPanel);
+    m_resourcesCanvas->SetBackgroundColour(m_palette.background);
+    m_resourcesCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_resourcesCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
+    m_resourcesCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
+    m_resourcesCanvas->Bind(wxEVT_MOTION, &StrategicLevelFrame::OnMapMouseMove, this);
+    s->Add(m_resourcesCanvas, 3, wxALL | wxEXPAND, 8);
+
+    // Under-map controls (allocation)
+    auto* under = new wxPanel(m_resourcesPanel);
+    under->SetBackgroundColour(m_palette.background);
+    auto* us = new wxBoxSizer(wxVERTICAL);
+
+    m_resourcesSelectedLabel = new wxStaticText(under, wxID_ANY, "Select a territory on the map");
+    m_resourcesSelectedLabel->SetFont(m_fontHeading);
+    m_resourcesSelectedLabel->SetForegroundColour(m_palette.heading);
+    us->Add(m_resourcesSelectedLabel, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+
+    m_resourcesRatioLabel = new wxStaticText(under, wxID_ANY, "Allocation: 100% Money / 0% Research");
+    m_resourcesRatioLabel->SetFont(m_fontText);
+    m_resourcesRatioLabel->SetForegroundColour(m_palette.text);
+    us->Add(m_resourcesRatioLabel, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+
+    // Slider: 0..100 = percent routed to Research
+    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+    m_resourcesSlider->SetMinSize(wxSize(-1, 40));
+    us->Add(m_resourcesSlider, 0, wxALL | wxEXPAND, 8);
+
+    m_resourcesSlider->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
+        {
+            const int tid = m_selectedTerritory;
+            if (tid <= 0)
+                return;
+            auto& st = m_territoryResources[tid];
+            st.researchPercent = m_resourcesSlider->GetValue();
+            SaveStrategicState();
+            RefreshResourcesPage();
+        });
+
+    auto* hint = new wxStaticText(under, wxID_ANY,
+        "Rule: 1 Research = 4 Money.\n"
+        "Each turn: owned territory spends 1 resource until depleted (20 total).\n"
+        "Money yields: up to 20 per territory. Research yields: up to 5 per territory.");
+    hint->SetFont(m_fontText);
+    hint->SetForegroundColour(m_palette.inactive);
+    us->Add(hint, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+
+    under->SetSizer(us);
+    s->Add(under, 2, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    m_resourcesPanel->SetSizer(s);
+
+    RefreshResourcesPage();
+}
+
+void StrategicLevelFrame::RefreshResourcesPage()
+{
+    // Ensure all territories have a state entry
+    for (const auto& t : m_level.territories)
+    {
+        if (m_territoryResources.find(t.id) == m_territoryResources.end())
+            m_territoryResources[t.id] = TerritoryResourceState{};
+    }
+
+    if (m_resourcesSelectedLabel)
+    {
+        if (m_selectedTerritory > 0)
+        {
+            const auto& st = m_territoryResources[m_selectedTerritory];
+            m_resourcesSelectedLabel->SetLabel(wxString::Format("Territory T%02d  —  Resources: %d (%d)",
+                m_selectedTerritory, st.total, st.remaining));
+        }
+        else
+        {
+            m_resourcesSelectedLabel->SetLabel("Select a territory on the map");
+        }
+    }
+
+    if (m_resourcesSlider)
+    {
+        if (m_selectedTerritory > 0)
+        {
+            const auto& st = m_territoryResources[m_selectedTerritory];
+            m_resourcesSlider->SetValue(std::clamp(st.researchPercent, 0, 100));
+            m_resourcesSlider->Enable(true);
+        }
+        else
+        {
+            m_resourcesSlider->SetValue(0);
+            m_resourcesSlider->Enable(false);
+        }
+    }
+
+    if (m_resourcesRatioLabel)
+    {
+        if (m_selectedTerritory > 0)
+        {
+            const auto& st = m_territoryResources[m_selectedTerritory];
+            const int rp = std::clamp(st.researchPercent, 0, 100);
+            m_resourcesRatioLabel->SetLabel(wxString::Format("Allocation: %d%% Money / %d%% Research", 100 - rp, rp));
+        }
+        else
+        {
+            m_resourcesRatioLabel->SetLabel("Allocation: 100% Money / 0% Research");
+        }
+    }
+
+    // Force overlay rebuild (depletion / ownership colors can change).
+    m_overlayDirty = true;
+
+    if (m_resourcesCanvas)
+        m_resourcesCanvas->Refresh();
+}
+
+void StrategicLevelFrame::ApplyResourceTickEndTurn()
+{
+    // One resource per owned territory per turn, until exhausted.
+    for (int tid : m_ownedTerritories)
+    {
+        if (tid <= 0)
+            continue;
+
+        auto& st = m_territoryResources[tid];
+        if (st.total <= 0) st.total = 20;
+        if (st.remaining <= 0)
+            continue;
+
+        // spend 1 resource
+        st.remaining -= 1;
+        if (st.remaining < 0) st.remaining = 0;
+
+        // route this tick either to money or to research, using a deterministic ratio accumulator
+        const int rp = std::clamp(st.researchPercent, 0, 100);
+        st.allocAccum += rp;
+        bool toResearch = false;
+        if (st.allocAccum >= 100)
+        {
+            toResearch = true;
+            st.allocAccum -= 100;
+        }
+
+        if (toResearch)
+        {
+            st.researchCarry += 1;
+            if (st.researchCarry >= 4)
+            {
+                m_research += 1;
+                st.researchCarry -= 4;
+            }
+        }
+        else
+        {
+            m_money += 1;
+        }
+    }
+
+    // If resources page is open, update it.
+    RefreshResourcesPage();
+}
+
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
     if (m_leftBook)
@@ -2896,6 +3119,17 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
         m_leftBook->SetSelection(1);
 }
 
+
+void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
+{
+    // Ensure we display up-to-date values when the player switches to the Resources screen.
+    SaveStrategicState();
+    RefreshResourcesPage();
+
+    if (m_leftBook)
+        m_leftBook->SetSelection(2);
+}
+
 void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
 {
     // Ensure the stats page sees the latest state.
@@ -2906,7 +3140,7 @@ void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
     RefreshStatsPage();
 
     if (m_leftBook)
-        m_leftBook->SetSelection(2);
+        m_leftBook->SetSelection(3);
 }
 void StrategicLevelFrame::SelectTerritoryById(int territory_id)
 {
@@ -2998,7 +3232,10 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
         return;
     }
 
-    wxWindow* target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
+    wxWindow* target = wxDynamicCast(ev.GetEventObject(), wxWindow);
+    if (!target)
+        target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
+    const bool resourcesView = (target == m_resourcesCanvas);
     if (!target)
     {
         ev.Skip();
@@ -3103,6 +3340,15 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         return;
 
     m_selectedTerritory = m_level.territories[idx].id;
+
+    const bool resourcesView = (m_leftBook && m_leftBook->GetCurrentPage() == m_resourcesPanel);
+
+    if (resourcesView)
+    {
+        RefreshResourcesPage();
+        if (m_resourcesCanvas) m_resourcesCanvas->Refresh();
+        return;
+    }
 
     const auto& t = m_level.territories[idx];
     wxString info;
@@ -3853,7 +4099,10 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {
     m_turn += 1;
+    // TODO: Replace this placeholder income with Resources system once economy is balanced.
     m_money += 50;
+
+    ApplyResourceTickEndTurn();
 
     // Commander offers are generated on end-turn (for the *new* turn).
     // Offers do not carry over between turns.
@@ -3887,6 +4136,7 @@ static bool LoadStrategicStateFile(
     int& cmdGenCountInWindow,
     bool& gameModeEnabled,
     std::vector<int>& ownedTerritories,
+    std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
     std::string* out_level_def = nullptr,
     std::string* out_timestamp = nullptr)
 
@@ -3896,6 +4146,7 @@ static bool LoadStrategicStateFile(
     availableCommanders.clear();
     gameModeEnabled = false;
     ownedTerritories.clear();
+    territoryResources.clear();
     cmdGenWindowStartTurn = 1;
     cmdGenCountInWindow = 0;
 
@@ -3914,6 +4165,12 @@ static bool LoadStrategicStateFile(
     {
         territoryMission[t.id] = t.mission;
         territoryLaunchCount[t.id] = 0;
+    }
+
+    // default resources state
+    for (const auto& t : level.territories)
+    {
+        territoryResources[t.id] = StrategicLevelFrame::TerritoryResourceState{};
     }
 
     if (out_level_def) out_level_def->clear();
@@ -3967,6 +4224,37 @@ static bool LoadStrategicStateFile(
             int id = std::stoi((*it)[1].str());
             ownedTerritories.push_back(id);
         }
+
+    // resources (optional)
+    std::smatch mmRes;
+    std::regex res_arr_re("\\\"resources\\\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript | std::regex::icase);
+    if (std::regex_search(data, mmRes, res_arr_re) && mmRes.size() > 1)
+    {
+        const std::string arr = mmRes[1].str();
+        // match objects like {"id": 1, "total": 20, ...}
+        std::regex obj_re("\\{[^\\}]*\\}");
+        for (auto it = std::sregex_iterator(arr.begin(), arr.end(), obj_re); it != std::sregex_iterator(); ++it)
+        {
+            const std::string obj = (*it)[0].str();
+            std::smatch mo;
+            int id = -1;
+            StrategicLevelFrame::TerritoryResourceState st;
+            if (std::regex_search(obj, mo, std::regex("\\\"id\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                id = std::stoi(mo[1].str());
+            if (id <= 0) continue;
+            if (std::regex_search(obj, mo, std::regex("\\\"total\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                st.total = std::max(0, std::stoi(mo[1].str()));
+            if (std::regex_search(obj, mo, std::regex("\\\"remaining\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                st.remaining = std::max(0, std::stoi(mo[1].str()));
+            if (std::regex_search(obj, mo, std::regex("\\\"research_percent\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                st.researchPercent = std::clamp(std::stoi(mo[1].str()), 0, 100);
+            if (std::regex_search(obj, mo, std::regex("\\\"alloc_accum\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                st.allocAccum = std::clamp(std::stoi(mo[1].str()), 0, 99);
+            if (std::regex_search(obj, mo, std::regex("\\\"research_carry\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                st.researchCarry = std::clamp(std::stoi(mo[1].str()), 0, 3);
+            territoryResources[id] = st;
+        }
+    }
     }
 
     // player object optional (backward compatible)
@@ -4066,6 +4354,7 @@ static void SaveStrategicStateFile(
     int cmdGenCountInWindow,
     bool gameModeEnabled,
     const std::vector<int>& ownedTerritories,
+    const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
     const std::string& timestamp)
 {
     std::ofstream f(path);
@@ -4090,6 +4379,27 @@ static void SaveStrategicStateFile(
             f << ", ";
     }
     f << "],\n";
+
+    // Resources per-territory state (optional on load, defaults to 20/20)
+    f << "  \"resources\": [\n";
+    for (size_t i = 0; i < level.territories.size(); ++i)
+    {
+        const int tid = level.territories[i].id;
+        auto it = territoryResources.find(tid);
+        const auto st = (it != territoryResources.end()) ? it->second : StrategicLevelFrame::TerritoryResourceState{};
+        f << "    {\"id\": " << tid
+          << ", \"total\": " << st.total
+          << ", \"remaining\": " << st.remaining
+          << ", \"research_percent\": " << st.researchPercent
+          << ", \"alloc_accum\": " << st.allocAccum
+          << ", \"research_carry\": " << st.researchCarry
+          << "}";
+        if (i + 1 < level.territories.size())
+            f << ",";
+        f << "\n";
+    }
+    f << "  ],\n";
+
     f << "  \"player\": {"
         << "\"name\": \"" << EscapeJson(player.name) << "\", "
         << "\"rank\": " << player.rank << ", "
@@ -4175,10 +4485,11 @@ void StrategicLevelFrame::LoadStrategicState()
     std::string level_def, ts;
     bool gm = false;
     std::vector<int> owned;
+    std::unordered_map<int, TerritoryResourceState> terrRes;
 
     if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
         playerCmds, availCmds, windowStart, genCount,
-        gm, owned,
+        gm, owned, terrRes,
         &level_def, &ts))
     {
         // Validate that this save matches current level (compare stem)
@@ -4208,6 +4519,14 @@ void StrategicLevelFrame::LoadStrategicState()
         m_gameModeEnabled = gm;
         m_ownedTerritories = std::move(owned);
 
+        m_territoryResources = std::move(terrRes);
+        // Backfill missing territories to defaults
+        for (const auto& tt : m_level.territories)
+        {
+            if (m_territoryResources.find(tt.id) == m_territoryResources.end())
+                m_territoryResources[tt.id] = TerritoryResourceState{};
+        }
+
         // Ensure start territory when loading older saves / empty campaign state.
         if (m_gameModeEnabled && m_ownedTerritories.empty())
             m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
@@ -4229,7 +4548,7 @@ void StrategicLevelFrame::SaveStrategicState() const
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
         m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-        m_gameModeEnabled, m_ownedTerritories,
+        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         NowIsoLocal());
 }
 
@@ -4499,7 +4818,9 @@ static bool LoadFileBytesMaybeExpandLZ(const std::filesystem::path& path,
 }
 
 static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folder, int levelNum, wxBitmap& outBmp,
-    int* outW = nullptr, int* outH = nullptr, std::vector<unsigned char>* outClk = nullptr)
+    int* outW = nullptr, int* outH = nullptr, std::vector<unsigned char>* outClk = nullptr,
+    bool bakeBorders = true)
+
 {
     namespace fs = std::filesystem;
     outBmp = wxBitmap();
@@ -4615,23 +4936,29 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
             img.SetAlpha(x, y, 255);
         }
 
-    // Outline (white) where neighboring CLK values differ, limited to inside area.
-    for (int y = 0; y < H; ++y)
-        for (int x = 0; x < W; ++x)
-        {
-            const size_t i = (size_t)y * W + (size_t)x;
-            if (clkValues[i] == 0)
-                continue;
-
-            bool edge = false;
-            if (x > 0 && clkValues[i - 1] != 0 && clkValues[i] != clkValues[i - 1]) edge = true;
-            if (y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
-            if (edge)
+    // Outline (black) where neighboring CLK values differ, limited to inside area.
+    // IMPORTANT: Do NOT bake borders into the composite in game mode,
+    // because undiscovered territories must not reveal their shapes.
+    if (bakeBorders)
+    {
+        // Outline (black) where neighboring CLK values differ, limited to inside area.
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
             {
-                img.SetRGB(x, y, 20, 20, 20);
-                img.SetAlpha(x, y, 255);
+                const size_t i = (size_t)y * W + (size_t)x;
+                if (clkValues[i] == 0)
+                    continue;
+
+                bool edge = false;
+                if (x > 0 && clkValues[i - 1] != 0 && clkValues[i] != clkValues[i - 1]) edge = true;
+                if (y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
+                if (edge)
+                {
+                    img.SetRGB(x, y, 20, 20, 20);
+                    img.SetAlpha(x, y, 255);
+                }
             }
-        }
+    }
 
     outBmp = wxBitmap(img);
     if (outW) *outW = W;
@@ -4715,6 +5042,8 @@ static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath,
 
 void StrategicLevelFrame::TryLoadBackground()
 {
+    g_bakeStrategicBorders = !m_gameModeEnabled;
+
     m_hasBg = false;
     m_bgBitmap = wxBitmap();
     m_bgBitmapScaled = wxBitmap();
@@ -4780,7 +5109,8 @@ void StrategicLevelFrame::TryLoadBackground()
 
         for (const auto& folder : uniq)
         {
-            if (BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk))
+            const bool bakeBorders = !m_gameModeEnabled; // debug/editor: true, game mode: false
+            if (BuildStrategicCompositeFromFolder(folder, levelNum, bmp, &cw, &ch, &cclk, bakeBorders))
             {
                 composite_ok = true;
                 m_compositeFolder = folder.string();
@@ -4875,11 +5205,15 @@ void StrategicLevelFrame::RebuildTerritoryCentroids()
     }
 }
 
-void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
+void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
 {
-    wxWindow* target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
+    wxWindow* target = wxDynamicCast(ev.GetEventObject(), wxWindow);
+    if (!target)
+        target = m_mapCanvas ? (wxWindow*)m_mapCanvas : (wxWindow*)m_mapPanel;
     if (!target)
         return;
+
+    const bool resourcesView = (target == m_resourcesCanvas);
 
     wxAutoBufferedPaintDC dc(target);
     dc.Clear();
@@ -4921,8 +5255,73 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
         m_lastBgW = bw;
         m_lastBgH = bh;
 
+        // Resources view overlay: show only owned territories, green while remaining>0, gray when depleted.
+        if (resourcesView && m_hasClk && m_clkW > 0 && m_clkH > 0 && !m_clkValues.empty())
+        {
+            if (m_overlayDirty || !m_overlayBitmap.IsOk() || m_overlayBitmap.GetWidth() != bw || m_overlayBitmap.GetHeight() != bh)
+            {
+                wxImage ovImg(bw, bh, true);
+                ovImg.InitAlpha();
+                std::memset(ovImg.GetAlpha(), 0, (size_t)bw * (size_t)bh);
+
+                auto isOwned = [&](int tid) -> bool {
+                    return std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end();
+                };
+
+                auto decodeTid = [&](uint8_t v, bool& isBorder) -> int
+                {
+                    isBorder = false;
+                    if (v == 0) return 0;
+                    if (v >= 1 && v <= 128) return (int)v;
+                    if (v >= 129) { isBorder = true; return (int)(v - 128); }
+                    return 0;
+                };
+
+                for (int py = 0; py < bh; ++py)
+                {
+                    for (int px = 0; px < bw; ++px)
+                    {
+                        const uint8_t v = m_clkValues[(size_t)py * (size_t)bw + (size_t)px];
+                        bool isBorder = false;
+                        const int tid = decodeTid(v, isBorder);
+                        if (tid <= 0) continue;
+                        if (!isOwned(tid)) continue;
+
+                        auto it = m_territoryResources.find(tid);
+                        TerritoryResourceState st = (it != m_territoryResources.end()) ? it->second : TerritoryResourceState{};
+                        const bool depleted = (st.remaining <= 0);
+
+                        const unsigned char r = depleted ? 0x88 : 0x10;
+                        const unsigned char g = depleted ? 0x88 : 0xD0;
+                        const unsigned char b = depleted ? 0x88 : 0x10;
+                        const unsigned char a = depleted ? 120 : 140;
+
+                        ovImg.SetRGB(px, py, r, g, b);
+                        ovImg.SetAlpha(px, py, a);
+                    }
+                }
+
+                m_overlayBitmap = wxBitmap(ovImg);
+                m_overlayBitmapScaled = wxBitmap();
+                m_overlayScaledW = -1;
+                m_overlayScaledH = -1;
+                m_overlayDirty = false;
+            }
+
+            if (m_overlayBitmap.IsOk())
+            {
+                if (!m_overlayBitmapScaled.IsOk() || m_overlayScaledW != dw || m_overlayScaledH != dh)
+                {
+                    wxImage oi = m_overlayBitmap.ConvertToImage();
+                    m_overlayBitmapScaled = wxBitmap(oi.Scale(dw, dh, wxIMAGE_QUALITY_NEAREST));
+                    m_overlayScaledW = dw;
+                    m_overlayScaledH = dh;
+                }
+                dc.DrawBitmap(m_overlayBitmapScaled.IsOk() ? m_overlayBitmapScaled : m_overlayBitmap, x, y, true);
+            }
+        }
         // Game mode overlay (fog + visible neighbors + hover highlight)
-        if (m_gameModeEnabled && m_hasClk && m_clkW > 0 && m_clkH > 0 && !m_clkValues.empty())
+        else if (m_gameModeEnabled && m_hasClk && m_clkW > 0 && m_clkH > 0 && !m_clkValues.empty())
         {
             // Rebuild visibility if needed (e.g., after loading background)
             if (m_visibleTerritory.empty())
@@ -4976,9 +5375,9 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
                         const bool isHover = (m_hoverTerritory == tid);
 
                         // If this is a border pixel and it borders any UNKNOWN (non-visible) territory,
-                        // we must "erase" the baked border even if the border pixel belongs to a visible territory.
+                        // we must "block" the baked border even if the border pixel belongs to a visible territory.
                         bool borderToUnknown = false;
-                        if (m_gameModeEnabled && isBorder)
+                        if (m_gameModeEnabled && isBorder && isVis)
                         {
                             auto nt = [&](int nx, int ny) -> int
                                 {
@@ -5008,30 +5407,32 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
 
                         // Fog tone: keeps terrain visible but hides borders
                         const unsigned char fogR = 10, fogG = 20, fogB = 10;
-                        const unsigned char fogInteriorA = 90;
+                        const unsigned char fogInteriorA = 180;
                         const unsigned char fogBorderA = 160;
 
-                        if (borderToUnknown)
+                        // 1) Draw borders ONLY where both sides are visible (never towards unknown)
+                        if (isBorder && isVis && !borderToUnknown)
                         {
-                            // "Erase" baked border into unknown area
+                            r = 20; g = 20; b = 20;
+                            a = 255;
+                        }
+                        // 2) Border that touches unknown -> hide it (do nothing, or gently fog it)
+                        else if (borderToUnknown)
+                        {
+                            // Pokud už nemáš baked borders, můžeš klidně nechat a=0.
+                            // Když chceš jemně "utopit" hranu do mlhy, nech fogBorderA:
                             r = fogR; g = fogG; b = fogB;
                             a = fogBorderA;
                         }
                         else if (!isVis)
                         {
-                            // Unknown (not discovered): keep terrain visible, hide any territory border
+                            // Unknown (not discovered): keep terrain visible
                             r = fogR; g = fogG; b = fogB;
                             a = fogInteriorA;
-
-                            if (isBorder)
-                            {
-                                r = fogR; g = fogG; b = fogB;
-                                a = fogBorderA;
-                            }
                         }
                         else if (!isOwned)
                         {
-                            // visible but not owned: red tint + simple hatch
+                            // visible but not owned: red tint + simple hatch (interior only)
                             r = 200; g = 40; b = 40;
                             a = 70;
                             if (((px + py) / 6) % 2 == 0)
@@ -5040,6 +5441,7 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
                                 a = 110;
                             }
                         }
+
 
                         if (isHover)
                         {
@@ -5124,6 +5526,13 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
             // Draw all territory IDs.
             for (const auto& t : m_level.territories)
             {
+                // In game mode: hide labels for undiscovered territories
+                if (m_gameModeEnabled)
+                {
+                    if (t.id <= 0 || t.id >= (int)m_visibleTerritory.size() || m_visibleTerritory[t.id] == 0)
+                        continue;
+                }
+
                 int px = 0, py = 0;
                 if (!getPx(t, px, py))
                     continue;
@@ -5131,12 +5540,34 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent&)
                 const int tx = x + (int)std::lround((double)px * s);
                 const int ty = y + (int)std::lround((double)py * s);
 
-                wxString label = wxString::Format("T%02d", t.id);
+                wxString label;
+                if (resourcesView)
+                {
+                    // Only show owned territories in Resources view
+                    if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id) == m_ownedTerritories.end())
+                        continue;
+                    const auto itR = m_territoryResources.find(t.id);
+                    const TerritoryResourceState st = (itR != m_territoryResources.end()) ? itR->second : TerritoryResourceState{};
+                    label = wxString::Format("%d (%d)", st.total, st.remaining);
+                }
+                else
+                {
+                    label = wxString::Format("T%02d", t.id);
+                }
 
                 // Tiny shadow for readability.
                 dc.SetTextForeground(m_palette.shadow);
                 dc.DrawText(label, tx + 1, ty + 1);
-                dc.SetTextForeground(m_palette.text);
+                if (resourcesView)
+                {
+                    const auto itR2 = m_territoryResources.find(t.id);
+                    const TerritoryResourceState st2 = (itR2 != m_territoryResources.end()) ? itR2->second : TerritoryResourceState{};
+                    dc.SetTextForeground(st2.remaining <= 0 ? m_palette.inactive : m_palette.text);
+                }
+                else
+                {
+                    dc.SetTextForeground(m_palette.text);
+                }
                 dc.DrawText(label, tx, ty);
             }
 
