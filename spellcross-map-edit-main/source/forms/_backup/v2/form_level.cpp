@@ -11,8 +11,6 @@
 #include <filesystem>
 #include <fstream>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -898,6 +896,8 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     if (!seeded) { std::srand((unsigned)std::time(nullptr)); seeded = true; }
     m_money = 0;
     m_research = 0;
+    // Load research DB early so saves can restore per-topic progress.
+    LoadResearchDatabase();
     m_playerUnits = m_level.start_units;
 
     // init territory mission state from LevelData
@@ -966,33 +966,6 @@ static std::filesystem::path GetStableBaseDir() {
 }
 
 // Forward declarations (definitions are later in this file)
-
-// ------------------------------------------------------------------
-// Research persistence glue
-// We MUST NOT change SaveStrategicStateFile / LoadStrategicStateFile signatures.
-// So we pass research state via thread-local pointers set by StrategicLevelFrame::SaveStrategicState / LoadStrategicState.
-// ------------------------------------------------------------------
-struct ResearchPersistSaveView
-{
-    int activeId = -1;
-    int activeIndex = -1;
-    int allocPerTurn = 0;
-    const std::unordered_map<int, int>* progressById = nullptr;
-    const std::unordered_set<int>* completed = nullptr;
-};
-
-struct ResearchPersistLoadView
-{
-    int* activeId = nullptr;
-    int* activeIndex = nullptr;
-    int* allocPerTurn = nullptr;
-    std::unordered_map<int, int>* progressById = nullptr;
-    std::unordered_set<int>* completed = nullptr;
-};
-
-static thread_local const ResearchPersistSaveView* g_researchPersistSave = nullptr;
-static thread_local ResearchPersistLoadView* g_researchPersistLoad = nullptr;
-
 static bool LoadStrategicStateFile(
     const std::filesystem::path& path,
     const LevelData& level,
@@ -1011,8 +984,12 @@ static bool LoadStrategicStateFile(
     bool& gameModeEnabled,
     std::vector<int>& ownedTerritories,
     std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    std::vector<StrategicLevelFrame::ResearchItem>& researchDb,
+    int& researchActive,
+    int& researchAllocPerTurn,
     std::string* out_level_def,
     std::string* out_timestamp);
+
 
 static void SaveStrategicStateFile(
     const std::filesystem::path& path,
@@ -1032,7 +1009,11 @@ static void SaveStrategicStateFile(
     bool gameModeEnabled,
     const std::vector<int>& ownedTerritories,
     const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    const std::vector<StrategicLevelFrame::ResearchItem>& researchDb,
+    int researchActive,
+    int researchAllocPerTurn,
     const std::string& timestamp);
+
 
 void StrategicLevelFrame::BuildMenu()
 {
@@ -1169,6 +1150,7 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        /*research*/m_researchDb, m_researchActive, m_researchAllocPerTurn,
         /*timestamp*/NowIsoLocal());
 
     wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
@@ -1224,6 +1206,7 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        /*research*/m_researchDb, m_researchActive, m_researchAllocPerTurn,
         &loaded_level_def, &ts))
     {
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
@@ -1275,12 +1258,18 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         int windowStart2 = 1;
         int genCount2 = 0;
 
-
         bool gm2 = false;
         std::vector<int> owned2;
-                std::unordered_map<int, TerritoryResourceState> terrRes;
+        std::unordered_map<int, TerritoryResourceState> terrRes;
 
-                if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
+        std::vector<ResearchItem> researchDb2;
+        int researchActive2 = -1;
+        int researchAllocPerTurn2 = 0;
+
+        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, 
+            playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, 
+            researchDb2, researchActive2, researchAllocPerTurn2,
+            &def2, &ts2)) {
             wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
             return;
         }
@@ -1303,6 +1292,10 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
         win->m_gameModeEnabled = gm2;
         win->m_ownedTerritories = std::move(owned2);
+        win->m_territoryResources = std::move(terrRes);
+        win->m_researchDb = std::move(researchDb2);
+        win->m_researchActive = researchActive2;
+        win->m_researchAllocPerTurn = researchAllocPerTurn2;
         win->TryLoadBackground();
         win->RefreshUI();
         if (win->m_selectedTerritory >= 0)
@@ -1628,46 +1621,14 @@ void StrategicLevelFrame::BuildUI()
     BuildResourcesPage();
 
     // --- Page 3: Statistics (integrated into this frame) ---
+    // --- Page 4: Research ---
+    m_researchPanel = new wxPanel(m_leftBook);
+    m_researchPanel->SetBackgroundColour(m_palette.background);
+    BuildResearchPage();
+
     m_statsPanel = new wxPanel(m_leftBook);
     m_statsPanel->SetBackgroundColour(m_palette.background);
     BuildStatsPage();
-
-
-    // --- Page 4: Research (details + progress) ---
-    m_researchPanel = new wxPanel(m_leftBook);
-    m_researchPanel->SetBackgroundColour(m_palette.background);
-    {
-        auto* rs = new wxBoxSizer(wxVERTICAL);
-        auto* title = CreateStrategicLabel(
-            m_researchPanel,
-            { { "Research", m_palette.heading, &m_fontHeading } },
-            m_fontHeading,
-            m_palette.shadow,
-            &m_palette.background);
-        rs->Add(title, 0, wxALL, 8);
-
-        m_researchText = new wxTextCtrl(
-            m_researchPanel, wxID_ANY, "",
-            wxDefaultPosition, wxDefaultSize,
-            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
-        m_researchText->SetFont(m_fontText);
-        m_researchText->SetBackgroundColour(m_palette.background);
-        m_researchText->SetForegroundColour(m_palette.text);
-        rs->Add(m_researchText, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-        auto* gRow = new wxBoxSizer(wxHORIZONTAL);
-        m_researchGaugeLabel = new wxStaticText(m_researchPanel, wxID_ANY, "Progress: 0/0");
-        m_researchGaugeLabel->SetFont(m_fontText);
-        m_researchGaugeLabel->SetForegroundColour(m_palette.text);
-        gRow->Add(m_researchGaugeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-
-        m_researchGauge = new wxGauge(m_researchPanel, wxID_ANY, 100, wxDefaultPosition, wxDefaultSize, wxGA_HORIZONTAL);
-        m_researchGauge->SetValue(0);
-        gRow->Add(m_researchGauge, 1, wxALIGN_CENTER_VERTICAL | wxEXPAND);
-        rs->Add(gRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-        m_researchPanel->SetSizer(rs);
-    }
 
     m_leftBook->AddPage(m_mapPanel, "Strategic map", true);
     m_leftBook->AddPage(hierarchyPanel, "Hierarchy", false);
@@ -1678,29 +1639,26 @@ void StrategicLevelFrame::BuildUI()
     mainSizer->Add(m_leftBook, 4, wxEXPAND);
 
     // ============================================================
-    // MIDDLE: player units (always visible)
+    // MIDDLE: roster OR research (switchable)
     // ============================================================
-    // Book for middle area: roster vs research
     m_midBook = new wxSimplebook(root, wxID_ANY);
     m_midBook->SetBackgroundColour(m_palette.background);
 
+    // --- Page 0: normal roster ---
     m_midRosterPanel = new wxPanel(m_midBook);
-    auto* mid = m_midRosterPanel;
-    mid->SetBackgroundColour(m_palette.background);
-    auto* midSizer = new wxBoxSizer(wxVERTICAL);
+    m_midRosterPanel->SetBackgroundColour(m_palette.background);
+    auto* rosterSizer = new wxBoxSizer(wxVERTICAL);
 
-
-    // Commanders (owned) - list (max 14 commanders)
+    // Commanders (owned)
     auto* cmdTitle = CreateStrategicLabel(
-        mid,
+        m_midRosterPanel,
         { { "Commanders", m_palette.heading, &m_fontHeading } },
         m_fontHeading,
         m_palette.shadow,
         &m_palette.background);
+    rosterSizer->Add(cmdTitle, 0, wxALL, 8);
 
-    midSizer->Add(cmdTitle, 0, wxALL, 8);
-
-    m_cmdRoster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_cmdRoster = new wxListCtrl(m_midRosterPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_cmdRoster->SetFont(m_fontText);
     m_cmdRoster->SetBackgroundColour(m_palette.background);
     m_cmdRoster->SetForegroundColour(m_palette.text);
@@ -1708,88 +1666,103 @@ void StrategicLevelFrame::BuildUI()
     m_cmdRoster->InsertColumn(1, "Rank");
     m_cmdRoster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnCommanderBeginDrag, this);
     m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
-    // Keep the commanders list compact (14 rows max)
-    // NOVĚ: výška podle fontu + menší počet řádků
+    // Keep the commanders list compact
     {
-        const int rowsVisible = 8;                   // uprav dle potřeby (např. 6–8)
-        const int ch = m_cmdRoster->GetCharHeight(); // výška znaku dle aktuálního fontu
-        const int rowH = ch + 8;                     // odhad výšky řádku (font + padding)
-        const int headerH = ch + 18;                 // odhad výšky headeru
+        const int rowsVisible = 8;
+        const int ch = m_cmdRoster->GetCharHeight();
+        const int rowH = ch + 8;
+        const int headerH = ch + 18;
         m_cmdRoster->SetMinSize(wxSize(-1, headerH + rowsVisible * rowH));
-    };
-    midSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    }
+    rosterSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-    auto* midTitle = CreateStrategicLabel(
-        mid,
+    auto* unitsTitle = CreateStrategicLabel(
+        m_midRosterPanel,
         { { "Player units", m_palette.heading, &m_fontHeading } },
         m_fontHeading,
         m_palette.shadow,
         &m_palette.background);
+    rosterSizer->Add(unitsTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-    midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
-    // v BuildUI(): úprava definice sloupců m_roster
-    m_roster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_roster = new wxListCtrl(m_midRosterPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->SetFont(m_fontText);
     m_roster->SetBackgroundColour(m_palette.background);
     m_roster->SetForegroundColour(m_palette.text);
-    // PŮVODNĚ: InsertColumn(0, "Unit"); InsertColumn(1, "Count"); InsertColumn(2, "HP");
-    // NOVĚ: jen dva sloupce: Unit a HP
     m_roster->InsertColumn(0, "Unit");
     m_roster->InsertColumn(1, "HP");
-    // Units are no longer dragged into hierarchy slots; assignment is done by selecting a unit under a commander.
-    // m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
-    // m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
-    midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
+    rosterSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
-    mid->SetSizer(midSizer);
-    m_midBook->AddPage(m_midRosterPanel, "Roster", true);
+    m_midRosterPanel->SetSizer(rosterSizer);
 
-    // --- Middle Research page ---
+    // --- Page 1: research list ---
     m_midResearchPanel = new wxPanel(m_midBook);
     m_midResearchPanel->SetBackgroundColour(m_palette.background);
-    {
-        auto* rs = new wxBoxSizer(wxVERTICAL);
-        auto* rtitle = CreateStrategicLabel(
-            m_midResearchPanel,
-            { { "Research", m_palette.heading, &m_fontHeading } },
-            m_fontHeading,
-            m_palette.shadow,
-            &m_palette.background);
-        rs->Add(rtitle, 0, wxALL, 8);
+    auto* rSizer = new wxBoxSizer(wxVERTICAL);
 
-        m_researchList = new wxListBox(m_midResearchPanel, wxID_ANY);
-        m_researchList->SetFont(m_fontText);
-        m_researchList->SetBackgroundColour(m_palette.background);
-        m_researchList->SetForegroundColour(m_palette.text);
-        m_researchList->Bind(wxEVT_LISTBOX, &StrategicLevelFrame::OnResearchList, this);
-        rs->Add(m_researchList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    auto* rTitle = CreateStrategicLabel(
+        m_midResearchPanel,
+        { { "Research", m_palette.heading, &m_fontHeading } },
+        m_fontHeading,
+        m_palette.shadow,
+        &m_palette.background);
+    rSizer->Add(rTitle, 0, wxALL, 8);
 
-        auto* allocRow = new wxBoxSizer(wxHORIZONTAL);
-        m_researchAllocLabel = new wxStaticText(m_midResearchPanel, wxID_ANY, "Alloc/turn: 0");
-        m_researchAllocLabel->SetFont(m_fontText);
-        m_researchAllocLabel->SetForegroundColour(m_palette.text);
-        allocRow->Add(m_researchAllocLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_researchAllocSlider = new wxSlider(m_midResearchPanel, wxID_ANY, 0, 0, 20, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
-        m_researchAllocSlider->Bind(wxEVT_SLIDER, &StrategicLevelFrame::OnResearchAlloc, this);
-        allocRow->Add(m_researchAllocSlider, 1, wxALIGN_CENTER_VERTICAL | wxEXPAND);
-        rs->Add(allocRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    m_researchList = new wxListCtrl(m_midResearchPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_researchList->SetFont(m_fontText);
+    m_researchList->SetBackgroundColour(m_palette.background);
+    m_researchList->SetForegroundColour(m_palette.text);
+    m_researchList->InsertColumn(0, "Topic");
+    m_researchList->InsertColumn(1, "Cost");
+    m_researchList->InsertColumn(2, "Progress");
+    m_researchList->InsertColumn(3, "Done");
+    m_researchList->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent&){
+        const long idx = m_researchList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+        if (idx >= 0 && idx < (long)m_researchDb.size()) {
+            m_researchSelected = (int)idx;
+            RefreshResearchPage();
+        }
+    });
+    rSizer->Add(m_researchList, 1, wxALL | wxEXPAND, 8);
 
-        m_btnResearchStart = new wxButton(m_midResearchPanel, wxID_ANY, "Start");
-        m_btnResearchStart->SetFont(m_fontText);
-        m_btnResearchStart->SetForegroundColour(m_palette.buttonText);
-        m_btnResearchStart->SetBackgroundColour(m_palette.buttonBackground);
-        m_btnResearchStart->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnResearchStartStop, this);
-        rs->Add(m_btnResearchStart, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    // Spend slider (how many points to allocate each turn into active research)
+    auto* spendRow = new wxBoxSizer(wxHORIZONTAL);
+    auto* spendLbl = new wxStaticText(m_midResearchPanel, wxID_ANY, "Spend / turn:");
+    spendLbl->SetForegroundColour(m_palette.text);
+    spendLbl->SetFont(m_fontText);
+    spendRow->Add(spendLbl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
 
-        m_midResearchPanel->SetSizer(rs);
-    }
+    m_researchSpendSlider = new wxSlider(m_midResearchPanel, wxID_ANY, 0, 0, 20, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
+    spendRow->Add(m_researchSpendSlider, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+
+    m_researchSpendValue = new wxStaticText(m_midResearchPanel, wxID_ANY, "0");
+    m_researchSpendValue->SetForegroundColour(m_palette.text);
+    m_researchSpendValue->SetFont(m_fontText);
+    spendRow->Add(m_researchSpendValue, 0, wxALIGN_CENTER_VERTICAL);
+
+    rSizer->Add(spendRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    auto* btnRow = new wxBoxSizer(wxHORIZONTAL);
+    m_btnResearchStartStop = new wxButton(m_midResearchPanel, ID_BTN_RESEARCH_STARTSTOP, "Start");
+    btnRow->Add(m_btnResearchStartStop, 1, wxALL | wxEXPAND, 8);
+    rSizer->Add(btnRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 0);
+
+    m_midResearchPanel->SetSizer(rSizer);
+
+    m_midBook->AddPage(m_midRosterPanel, "Roster", true);
     m_midBook->AddPage(m_midResearchPanel, "Research", false);
+
+    m_researchSpendSlider->Bind(wxEVT_SLIDER, [this](wxCommandEvent&){
+        m_researchAllocPerTurn = m_researchSpendSlider->GetValue();
+        if (m_researchSpendValue)
+            m_researchSpendValue->SetLabel(wxString::Format("%d", m_researchAllocPerTurn));
+        SaveStrategicState();
+    });
+    Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnResearchStartStop, this, ID_BTN_RESEARCH_STARTSTOP);
 
     mainSizer->Add(m_midBook, 1, wxEXPAND);
 
-
-    // ============================================================
+// ============================================================
     // RIGHT: status + actions (always visible, consistent layout)
     // ============================================================
     auto* right = new wxPanel(root);
@@ -2022,7 +1995,7 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
     public:
         HierarchyCanvas(StrategicLevelFrame* owner, wxWindow* parent,
             wxColour frameCol, wxColour lineCol)
-            : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
+            : wxPanel(parent, wxID_ANY)
             , m_owner(owner)
             , m_frameCol(frameCol)
             , m_lineCol(lineCol)
@@ -2529,12 +2502,12 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
     // allow picking any roster unit. Instead, it selects ONE of the units already present in
     // the commander's subtree (4/8/16).
     {
-        auto endsWith = [](const std::string& s, const std::string& suf) {
+        auto endsWithLocal = [](const std::string& s, const std::string& suf) -> bool {
             return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
             };
-        const bool isBattalionAssign = endsWith(unitSlotId, "_commander_unit");
-        const bool isRegimentAssign = (unitSlotId.rfind("regiment_", 0) == 0) && endsWith(unitSlotId, "_unit");
-        const bool isBrigadeAssign = (unitSlotId.rfind("brigade_", 0) == 0) && endsWith(unitSlotId, "_unit");
+        const bool isBattalionAssign = endsWithLocal(unitSlotId, "_commander_unit");
+        const bool isRegimentAssign = (unitSlotId.rfind("regiment_", 0) == 0) && endsWithLocal(unitSlotId, "_unit");
+        const bool isBrigadeAssign = (unitSlotId.rfind("brigade_", 0) == 0) && endsWithLocal(unitSlotId, "_unit");
         if (isBattalionAssign || isRegimentAssign || isBrigadeAssign)
         {
             ChooseAssignedUnitForCommanderAssignmentSlot(unitSlotId);
@@ -2657,7 +2630,7 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
     if (aslot.type != "unit")
         return;
 
-    auto endsWith = [](const std::string& s, const std::string& suf) {
+    auto endsWith = [](const std::string& s, const std::string& suf) -> bool {
         return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
         };
 
@@ -2670,6 +2643,7 @@ void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std
     auto itc = m_hierarchySlotIndex.find(commanderId);
     if (itc == m_hierarchySlotIndex.end())
         return;
+
     HierarchySlot& cslot = m_hierarchySlots[itc->second];
     if (cslot.type != "commander" || !cslot.label)
         return;
@@ -2861,7 +2835,7 @@ void StrategicLevelFrame::TryAssignCommanderToUnitSlot(const std::string& unitSl
         return;
     }
 
-    // Commander is assigned to ONE of its units (4/8/16 under them). This does NOT move/remove the unit anywhere.
+    // Commander is assigned to ONE of its units (4/8/16 under them). This does not move/remove the unit anywhere.
     cs.assigned_unit_uid = us.unit_uid;
     cs.assigned_unit_display = us.unit_display;
     UpdateCommanderHierarchyLabel(commanderId);
@@ -3046,9 +3020,6 @@ void StrategicLevelFrame::RefreshUI()
         const bool haveSpace = (int)m_playerCommanders.size() < 14;
         m_btnBuyCmd->Enable(haveOffer && haveSpace);
     }
-
-    if (m_researchMode)
-        RefreshResearchUI();
 }
 
 
@@ -3221,351 +3192,370 @@ void StrategicLevelFrame::ApplyResourceTickEndTurn()
     RefreshResourcesPage();
 }
 
-// ============================================================
-// Research system (Strategic level)
-// ============================================================
 
-static wxString DecodeCp852Text(const std::string& bytes)
+// ------------------------------------------------------------
+// Research (Spellcross-like) implementation
+// ------------------------------------------------------------
+
+static std::string DecodeSpellCz(const std::vector<unsigned char>& bytes)
 {
-    wxCSConv conv("CP852");
-    // wxString ctor will stop at first NUL; research files are plain text so that's OK.
-    wxString ws(bytes.c_str(), conv);
+    // Spellcross texts are typically in a Czech DOS encoding close to CP852, with a few swapped glyphs.
+    std::string s(bytes.begin(), bytes.end());
+    // Decode as CP852 via existing helper if available? Here we do a quick wx conversion:
+    // We'll map bytes -> wchar using CP852 in wxWidgets if possible. As a fallback, keep bytes.
+    wxCSConv conv(wxFONTENCODING_CP852);
+    wxString ws(s.c_str(), conv);
 
-    // Trim trailing ~ used as end marker in some INF/BRF files
-    ws.Replace("\r\n", "\n");
-    ws.Replace("\r", "\n");
-    int tilde = ws.Find("~");
-    if (tilde != wxNOT_FOUND)
-        ws = ws.Left(tilde);
+    // Fix common Kamenický-like glyph substitutions (observed in RESEARCH/*.INF/*.BRF)
+    ws.Replace("ł", "ě");
+    ws.Replace("Ę", "š");
+    ws.Replace("Ĺ", "ž");
+    ws.Replace("ľ", "ů");
+    ws.Replace("ś", "ý");
+    ws.Replace("ç", "č");
+    ws.Replace("ę", "ř");
+    ws.Replace("×", "Ž");
 
-    ws.Trim(true).Trim(false);
-    return ws;
+    return std::string(ws.mb_str(wxConvUTF8));
 }
 
-void StrategicLevelFrame::EnsureResearchLoaded()
+static bool ReadAllBytes(const std::filesystem::path& p, std::vector<unsigned char>& out)
 {
-    if (!m_researchDb.empty())
-        return;
+    out.clear();
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return false;
+    f.seekg(0, std::ios::end);
+    const std::streamsize n = f.tellg();
+    f.seekg(0, std::ios::beg);
+    if (n <= 0) return false;
+    out.resize((size_t)n);
+    return (bool)f.read((char*)out.data(), n);
+}
 
+bool StrategicLevelFrame::LoadResearchDatabase()
+{
     namespace fs = std::filesystem;
-    std::error_code ec;
+    m_researchDb.clear();
 
+    // Prefer extracted TEM/RESEARCH folder.
     const fs::path base = GetStableBaseDir();
-    const fs::path dir = base / "temp" / "RESEARCH";
+    const std::vector<fs::path> candidates = {
+        base / "tem" / "RESEARCH",
+        base / "TEM" / "RESEARCH",
+        base / "tem" / "research",
+        base / "TEM" / "research",
+        fs::current_path() / "tem" / "RESEARCH",
+        fs::current_path() / "TEM" / "RESEARCH",
+    };
 
-    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
+    fs::path dir;
+    std::error_code ec;
+    for (const auto& c : candidates)
     {
-        // Keep empty DB; UI will show a message.
-        return;
+        if (fs::exists(c, ec) && fs::is_directory(c, ec))
+        {
+            dir = c;
+            break;
+        }
     }
+    if (dir.empty())
+        return false;
 
-    struct TempRec
-    {
-        int id = -1;
-        wxString code;
-        wxString inf;
-        wxString brf;
-    };
-
-    std::unordered_map<std::string, TempRec> byCode;
-
-    auto loadFile = [&](const fs::path& p) -> std::string
-    {
-        std::ifstream f(p, std::ios::binary);
-        if (!f) return {};
-        std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        return s;
-    };
-
-    std::regex rx(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)", std::regex_constants::icase);
-
-    for (auto it = fs::directory_iterator(dir, ec); it != fs::directory_iterator(); ++it)
+    // Collect BRF stems first (they are the "short description" used in list).
+    std::vector<fs::path> brfs;
+    for (const auto& de : fs::directory_iterator(dir, ec))
     {
         if (ec) break;
-        if (!it->is_regular_file(ec)) continue;
-
-        const std::string fn = it->path().filename().string();
-        std::smatch m;
-        if (!std::regex_match(fn, m, rx))
+        if (!de.is_regular_file(ec))
             continue;
-
-        std::string code = m[1].str();
-        std::string idStr = m[2].matched ? m[2].str() : "";
-        std::string ext = m[3].str();
-
-        // normalize code to uppercase (R000 / RACES)
-        for (auto& ch : code) ch = (char)std::toupper((unsigned char)ch);
-        for (auto& ch : ext) ch = (char)std::toupper((unsigned char)ch);
-
-        TempRec& rec = byCode[code];
-        rec.code = wxString::FromUTF8(code);
-
-        if (!idStr.empty())
-            rec.id = std::atoi(idStr.c_str());
-        else
-            rec.id = -1;
-
-        const std::string raw = loadFile(it->path());
-        if (raw.empty()) continue;
-
-        if (ext == "INF")
-            rec.inf = DecodeCp852Text(raw);
-        else if (ext == "BRF")
-            rec.brf = DecodeCp852Text(raw);
+        const auto ext = to_lower(de.path().extension().string());
+        if (ext == ".brf")
+            brfs.push_back(de.path());
     }
 
-    // Convert to m_researchDb
-    m_researchDb.clear();
-    m_researchDb.reserve(byCode.size());
-
-    for (auto& kv : byCode)
-    {
-        TempRec& r = kv.second;
-
-        ResearchItem item;
-        item.id = r.id;
-        item.code = r.code;
-
-        // Title heuristics:
-        // - If BRF exists, use first line (or first sentence) as title.
-        // - Else use code.
-        wxString title = r.brf;
-        if (!title.empty())
-        {
-            int nl = title.Find("\n");
-            if (nl != wxNOT_FOUND)
-                title = title.Left(nl);
-            int dot = title.Find(".");
-            if (dot != wxNOT_FOUND && dot > 8)
-                title = title.Left(dot);
-            title.Trim(true).Trim(false);
-        }
-        if (title.empty())
-            title = r.code;
-
-        item.title = title;
-        item.brief = r.brf;
-        item.info = r.inf;
-
-        // Placeholder cost for now (until we decode original costs)
-        item.cost = 20;
-
-        m_researchDb.push_back(std::move(item));
-    }
-
-    // Sort by numeric id first, then by code
-    std::sort(m_researchDb.begin(), m_researchDb.end(), [](const ResearchItem& a, const ResearchItem& b)
-    {
-        if (a.id >= 0 && b.id >= 0) return a.id < b.id;
-        if (a.id >= 0 && b.id < 0) return true;
-        if (a.id < 0 && b.id >= 0) return false;
-        return a.code.CmpNoCase(b.code) < 0;
+    std::sort(brfs.begin(), brfs.end(), [](const fs::path& a, const fs::path& b) {
+        return to_lower(a.stem().string()) < to_lower(b.stem().string());
     });
 
-    // If there is no active research, preselect the first item
-    if (!m_researchDb.empty() && m_researchActiveIndex < 0)
+    for (const auto& brfPath : brfs)
     {
-        m_researchActiveIndex = 0;
-        m_researchActiveId = m_researchDb[0].id;
+        ResearchItem it;
+        it.id = brfPath.stem().string();
+
+        std::vector<unsigned char> b;
+        if (ReadAllBytes(brfPath, b))
+            it.brief = DecodeSpellCz(b);
+
+        const fs::path infPath = brfPath.parent_path() / (brfPath.stem().string() + ".INF");
+        if (ReadAllBytes(infPath, b))
+            it.info = DecodeSpellCz(b);
+
+        // Name: first non-empty line from BRF, else id
+        {
+            std::istringstream iss(it.brief);
+            std::string line;
+            while (std::getline(iss, line))
+            {
+                // strip
+                while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+                if (!line.empty()) { it.name = line; break; }
+            }
+            if (it.name.empty())
+                it.name = it.id;
+        }
+
+        // Cost heuristic fallback: later you can plug real costs from original data.
+        // Keep it stable so savegames are consistent.
+        if (it.id.size() >= 2 && (it.id[0] == 'R' || it.id[0] == 'r'))
+        {
+            // R000..R999 => cost 8..20 range
+            int num = 0;
+            try { num = std::stoi(it.id.substr(1)); } catch (...) { num = 0; }
+            it.cost = 8 + (num % 13);
+        }
+        else
+        {
+            it.cost = 10;
+        }
+
+        m_researchDb.push_back(std::move(it));
+    }
+
+    return !m_researchDb.empty();
+}
+
+void StrategicLevelFrame::BuildResearchPage()
+{
+    // Left-side research details page: title + big text + progress bar
+    auto* s = new wxBoxSizer(wxVERTICAL);
+
+    m_researchSelLabel = new wxStaticText(m_researchPanel, wxID_ANY, "Select research on the right.");
+    m_researchSelLabel->SetForegroundColour(m_palette.text);
+    m_researchSelLabel->SetFont(m_fontHeading);
+    s->Add(m_researchSelLabel, 0, wxALL | wxEXPAND, 8);
+
+    m_researchInfo = new wxTextCtrl(m_researchPanel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize,
+        wxTE_MULTILINE | wxTE_READONLY | wxBORDER_SIMPLE);
+    m_researchInfo->SetFont(m_fontText);
+    m_researchInfo->SetBackgroundColour(m_palette.background);
+    m_researchInfo->SetForegroundColour(m_palette.text);
+    s->Add(m_researchInfo, 1, wxALL | wxEXPAND, 8);
+
+    m_researchGauge = new wxGauge(m_researchPanel, wxID_ANY, 100);
+    s->Add(m_researchGauge, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    m_researchPanel->SetSizer(s);
+
+    // Load DB now (best effort).
+    if (m_researchDb.empty())
+        LoadResearchDatabase();
+    RefreshResearchPage();
+}
+
+void StrategicLevelFrame::RefreshResearchPage()
+{
+    if (!m_researchPanel)
+        return;
+
+    // Refresh list in middle
+    if (m_researchList)
+    {
+        m_researchList->Freeze();
+        m_researchList->DeleteAllItems();
+        for (size_t i = 0; i < m_researchDb.size(); ++i)
+        {
+            const auto& it = m_researchDb[i];
+            m_researchList->InsertItem((long)i, wxString(it.name));
+            m_researchList->SetItem((long)i, 1, wxString::Format("%d", it.cost));
+            m_researchList->SetItem((long)i, 2, wxString::Format("%d/%d", it.progress, it.cost));
+            m_researchList->SetItem((long)i, 3, it.completed ? "Yes" : "No");
+
+            if ((int)i == m_researchActive)
+                m_researchList->SetItemBackgroundColour((long)i, wxColour(30, 60, 30));
+        }
+        // Column widths (best effort)
+        m_researchList->SetColumnWidth(0, 210);
+        m_researchList->SetColumnWidth(1, 60);
+        m_researchList->SetColumnWidth(2, 90);
+        m_researchList->SetColumnWidth(3, 55);
+        m_researchList->Thaw();
+    }
+
+    // Refresh details (left)
+    if (m_researchSelected >= 0 && m_researchSelected < (int)m_researchDb.size())
+    {
+        const auto& it = m_researchDb[(size_t)m_researchSelected];
+        wxString title = wxString::Format("%s  [%s]  (%d/%d)", it.name, it.id, it.progress, it.cost);
+        if (m_researchSelected == m_researchActive)
+            title += "  - ACTIVE";
+        if (it.completed)
+            title += "  - COMPLETED";
+        m_researchSelLabel->SetLabel(title);
+
+        // Render text similar to original: brief + blank line + info
+        wxString body;
+        body << wxString(it.brief) << "\n\n" << wxString(it.info);
+        // Original texts use '~' for page break/end
+        body.Replace("~", "\n");
+        if (m_researchInfo)
+            m_researchInfo->SetValue(body);
+
+        if (m_researchGauge)
+        {
+            const int maxv = std::max(1, it.cost);
+            m_researchGauge->SetRange(maxv);
+            m_researchGauge->SetValue(std::min(it.progress, it.cost));
+        }
+    }
+    else
+    {
+        if (m_researchSelLabel) m_researchSelLabel->SetLabel("Select research on the right.");
+        if (m_researchInfo) m_researchInfo->SetValue("");
+        if (m_researchGauge) { m_researchGauge->SetRange(100); m_researchGauge->SetValue(0); }
+    }
+
+    // Spend slider: clamp by available research points (and also by remaining cost if active)
+    int maxSpend = std::max(0, m_research);
+    if (m_researchActive >= 0 && m_researchActive < (int)m_researchDb.size())
+    {
+        const auto& it = m_researchDb[(size_t)m_researchActive];
+        maxSpend = std::min(maxSpend, std::max(0, it.cost - it.progress));
+    }
+    if (m_researchSpendSlider)
+    {
+        m_researchSpendSlider->SetRange(0, std::max(0, maxSpend));
+        if (m_researchAllocPerTurn > maxSpend) m_researchAllocPerTurn = maxSpend;
+        m_researchSpendSlider->SetValue(m_researchAllocPerTurn);
+    }
+    if (m_researchSpendValue)
+        m_researchSpendValue->SetLabel(wxString::Format("%d", m_researchAllocPerTurn));
+
+    if (m_btnResearchStartStop)
+    {
+        const bool canStart = (m_researchSelected >= 0 && m_researchSelected < (int)m_researchDb.size()
+            && !m_researchDb[(size_t)m_researchSelected].completed);
+        if (m_researchActive >= 0)
+            m_btnResearchStartStop->SetLabel("Stop");
+        else
+            m_btnResearchStartStop->SetLabel("Start");
+        m_btnResearchStartStop->Enable(canStart || m_researchActive >= 0);
     }
 }
 
-void StrategicLevelFrame::EnterResearchMode()
+void StrategicLevelFrame::OnResearchTreeSelChanged(wxTreeEvent&)
 {
-    EnsureResearchLoaded();
-    m_researchMode = true;
-
-    // Switch pages: left details + middle list
-    if (m_leftBook) m_leftBook->SetSelection(4);
-    if (m_midBook)  m_midBook->SetSelection(1);
-
-    // Update button label
-    if (m_btnResearch) m_btnResearch->SetLabel("Back");
-
-    RefreshResearchUI();
-}
-
-void StrategicLevelFrame::LeaveResearchMode()
-{
-    m_researchMode = false;
-
-    if (m_leftBook) m_leftBook->SetSelection(0);
-    if (m_midBook)  m_midBook->SetSelection(0);
-
-    if (m_btnResearch) m_btnResearch->SetLabel("Research");
-
-    RefreshUI();
-}
-
-void StrategicLevelFrame::SelectResearchIndex(int idx)
-{
-    if (idx < 0 || idx >= (int)m_researchDb.size())
-        return;
-
-    m_researchActiveIndex = idx;
-    m_researchActiveId = m_researchDb[idx].id;
-
-    RefreshResearchUI();
-}
-
-void StrategicLevelFrame::OnResearchList(wxCommandEvent& ev)
-{
-    const int sel = ev.GetInt();
-    SelectResearchIndex(sel);
-}
-
-void StrategicLevelFrame::OnResearchAlloc(wxCommandEvent&)
-{
-    if (!m_researchAllocSlider) return;
-    m_researchAllocPerTurn = m_researchAllocSlider->GetValue();
-    RefreshResearchUI();
-    SaveStrategicState();
+    // reserved for future (tree version of UI). Not used for now.
 }
 
 void StrategicLevelFrame::OnResearchStartStop(wxCommandEvent&)
 {
-    // Start/Stop == just toggles allocation between 0 and current slider (kept)
-    if (m_researchAllocPerTurn > 0)
+    if (m_researchActive >= 0)
+    {
+        // Stop current research
+        m_researchActive = -1;
         m_researchAllocPerTurn = 0;
+    }
     else
-        m_researchAllocPerTurn = m_researchAllocSlider ? m_researchAllocSlider->GetValue() : 1;
-
-    RefreshResearchUI();
+    {
+        // Start selected
+        if (m_researchSelected >= 0 && m_researchSelected < (int)m_researchDb.size())
+        {
+            if (!m_researchDb[(size_t)m_researchSelected].completed)
+                m_researchActive = m_researchSelected;
+        }
+    }
     SaveStrategicState();
-}
-
-void StrategicLevelFrame::RefreshResearchUI()
-{
-    // Middle list
-    if (m_researchList)
-    {
-        m_researchList->Clear();
-
-        if (m_researchDb.empty())
-        {
-            m_researchList->Append("No research data found (temp/RESEARCH).");
-            m_researchList->Enable(false);
-        }
-        else
-        {
-            m_researchList->Enable(true);
-            for (const auto& it : m_researchDb)
-            {
-                wxString row = it.title;
-                if (it.id >= 0 && m_researchCompleted.count(it.id))
-                    row = row + "  [DONE]";
-                m_researchList->Append(row);
-            }
-
-            if (m_researchActiveIndex >= 0 && m_researchActiveIndex < (int)m_researchDb.size())
-                m_researchList->SetSelection(m_researchActiveIndex);
-        }
-    }
-
-    // Allocation label / slider
-    if (m_researchAllocLabel)
-        m_researchAllocLabel->SetLabel(wxString::Format("Alloc/turn: %d", m_researchAllocPerTurn));
-
-    if (m_researchAllocSlider)
-    {
-        m_researchAllocSlider->SetValue(m_researchAllocPerTurn);
-        // Limit by available research pool (soft limit)
-        const int max = std::max(0, std::min(20, m_research));
-        m_researchAllocSlider->SetMax(max);
-    }
-
-    if (m_btnResearchStart)
-        m_btnResearchStart->SetLabel(m_researchAllocPerTurn > 0 ? "Stop" : "Start");
-
-    // Left detail panel
-    if (!m_researchText || !m_researchGauge || !m_researchGaugeLabel)
-        return;
-
-    if (m_researchDb.empty() || m_researchActiveIndex < 0 || m_researchActiveIndex >= (int)m_researchDb.size())
-    {
-        m_researchText->SetValue("No research selected.");
-        m_researchGauge->SetRange(100);
-        m_researchGauge->SetValue(0);
-        m_researchGaugeLabel->SetLabel("Progress: 0/0");
-        return;
-    }
-
-    const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
-    const int id = cur.id;
-
-    const int prog = (id >= 0) ? (m_researchProgressById.count(id) ? m_researchProgressById[id] : 0) : 0;
-    const int cost = std::max(1, cur.cost);
-
-    wxString text;
-    text << cur.title << "\n\n";
-    if (!cur.brief.empty())
-        text << cur.brief << "\n\n";
-    if (!cur.info.empty())
-        text << cur.info << "\n\n";
-
-    text << wxString::Format("Cost: %d\n", cost);
-    text << wxString::Format("Invested: %d\n", prog);
-    text << wxString::Format("Available research points: %d\n", m_research);
-    text << wxString::Format("Alloc per turn: %d\n", m_researchAllocPerTurn);
-
-    if (id >= 0 && m_researchCompleted.count(id))
-        text << "\nSTATUS: COMPLETED";
-    else if (m_researchAllocPerTurn > 0)
-        text << "\nSTATUS: IN PROGRESS";
-    else
-        text << "\nSTATUS: NOT ACTIVE";
-
-    m_researchText->SetValue(text);
-
-    m_researchGauge->SetRange(cost);
-    m_researchGauge->SetValue(std::min(prog, cost));
-    m_researchGaugeLabel->SetLabel(wxString::Format("Progress: %d/%d", std::min(prog, cost), cost));
+    RefreshResearchPage();
+    RefreshUI();
 }
 
 void StrategicLevelFrame::ApplyResearchTickEndTurn()
 {
-    if (m_researchAllocPerTurn <= 0)
+    if (m_researchActive < 0 || m_researchActive >= (int)m_researchDb.size())
         return;
 
-    EnsureResearchLoaded();
-    if (m_researchDb.empty() || m_researchActiveIndex < 0 || m_researchActiveIndex >= (int)m_researchDb.size())
+    auto& it = m_researchDb[(size_t)m_researchActive];
+    if (it.completed)
+    {
+        m_researchActive = -1;
+        m_researchAllocPerTurn = 0;
         return;
+    }
 
-    const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
-    if (cur.id < 0)
-        return;
-
-    if (m_researchCompleted.count(cur.id))
-        return;
-
-    const int cost = std::max(1, cur.cost);
-    int& prog = m_researchProgressById[cur.id];
-
-    const int spend = std::min(m_researchAllocPerTurn, std::max(0, m_research));
+    // Spend up to allocation, limited by current research points and remaining cost
+    const int remain = std::max(0, it.cost - it.progress);
+    const int spend = std::min(std::min(m_researchAllocPerTurn, m_research), remain);
     if (spend <= 0)
         return;
 
     m_research -= spend;
-    prog += spend;
+    it.progress += spend;
 
-    if (prog >= cost)
+    if (it.progress >= it.cost)
     {
-        prog = cost;
-        m_researchCompleted.insert(cur.id);
-        m_researchAllocPerTurn = 0; // auto stop
+        it.progress = it.cost;
+        it.completed = true;
+        m_researchActive = -1;
+        m_researchAllocPerTurn = 0;
     }
+
+    RefreshResearchPage();
+}
+
+void StrategicLevelFrame::EnterResearchMode(bool enable)
+{
+    m_researchMode = enable;
+
+    if (enable)
+    {
+        // Ensure DB loaded
+        if (m_researchDb.empty())
+            LoadResearchDatabase();
+
+        // Default selection if none
+        if (m_researchSelected < 0 && !m_researchDb.empty())
+            m_researchSelected = 0;
+
+        // Switch pages
+        if (m_leftBook && m_researchPanel)
+        {
+            const int idx = m_leftBook->FindPage(m_researchPanel);
+            if (idx != wxNOT_FOUND)
+                m_leftBook->ChangeSelection(idx);
+        }
+        if (m_midBook)
+            m_midBook->ChangeSelection(1);
+
+        RefreshResearchPage();
+    }
+    else
+    {
+        // Back to strategic map + roster
+        if (m_leftBook && m_mapPanel)
+        {
+            const int idx = m_leftBook->FindPage(m_mapPanel);
+            if (idx != wxNOT_FOUND)
+                m_leftBook->ChangeSelection(idx);
+        }
+        if (m_midBook)
+            m_midBook->ChangeSelection(0);
+    }
+
+    RefreshUI();
 }
 
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
-    if (m_researchMode) LeaveResearchMode();
+    EnterResearchMode(false);
+
     if (m_leftBook)
         m_leftBook->SetSelection(0);
 }
 
 void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 {
-    if (m_researchMode) LeaveResearchMode();
+    EnterResearchMode(false);
+
     if (m_leftBook)
         m_leftBook->SetSelection(1);
 }
@@ -3573,7 +3563,8 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 
 void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 {
-    if (m_researchMode) LeaveResearchMode();
+    EnterResearchMode(false);
+
     // Ensure we display up-to-date values when the player switches to the Resources screen.
     SaveStrategicState();
     RefreshResourcesPage();
@@ -3584,7 +3575,8 @@ void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 
 void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
 {
-    if (m_researchMode) LeaveResearchMode();
+    EnterResearchMode(false);
+
     // Ensure the stats page sees the latest state.
     SaveStrategicState();
     LoadRanksTable();
@@ -3662,7 +3654,7 @@ void StrategicLevelFrame::OnMapMouseMove(wxMouseEvent& ev)
 
             if (tid > 0)
             {
-                // In game mode, only hover visible territories
+                // In game mode: only hover visible territories
                 if (!m_gameModeEnabled || (tid < (int)m_visibleTerritory.size() && m_visibleTerritory[tid]))
                     newHover = tid;
             }
@@ -3700,10 +3692,7 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     const int bw = m_bgBitmap.GetWidth();
     const int bh = m_bgBitmap.GetHeight();
     if (pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
-    {
-        ev.Skip();
         return;
-    }
 
     const double sx = (double)pw / (double)bw;
     const double sy = (double)ph / (double)bh;
@@ -3746,7 +3735,7 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     {
         if (!m_gameModeEnabled)
             return true;
-        if (tid2 <= 0 || tid2 >= (int)m_visibleTerritory.size())
+        if (tid2 <= 0 || tid2 >= (int)m_visibleTerritory.size() || m_visibleTerritory[tid2] == 0)
             return false;
         return m_visibleTerritory[tid2] != 0;
     };
@@ -3896,10 +3885,8 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
 void StrategicLevelFrame::OnResearch(wxCommandEvent&)
 {
-    if (!m_researchMode)
-        EnterResearchMode();
-    else
-        LeaveResearchMode();
+    // Toggle research screen.
+    EnterResearchMode(!m_researchMode);
 }
 
 
@@ -3919,7 +3906,7 @@ static std::filesystem::path FindCommanderNamesDefPath()
 
     for (const auto& p : candidates)
     {
-        if (!p.empty() && fs::exists(p, ec))
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec))
             return p;
     }
     return {};
@@ -4174,12 +4161,12 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     int sel = list->GetSelection();
     if (sel == wxNOT_FOUND || sel >= (int)unit_ids.size())
     {
-        wxMessageBox("No unit selected.", "Buy units", wxOK | wxICON_WARNING, this);
+        wxMessageBox("No unit selected.", "Sell units", wxOK | wxICON_WARNING, this);
         return;
     }
     if (sel >= (int)unit_costs.size() || unit_costs[sel] <= 0)
     {
-        wxMessageBox("Selected unit has no price defined.", "Buy units", wxOK | wxICON_WARNING, this);
+        wxMessageBox("Selected unit has no price defined.", "Sell units", wxOK | wxICON_WARNING, this);
         return;
     }
 
@@ -4189,7 +4176,7 @@ void StrategicLevelFrame::OnBuyUnits(wxCommandEvent&)
     if (m_money < totalCost)
     {
         wxMessageBox(wxString::Format("Not enough money. Need %d, you have %d.", totalCost, m_money),
-            "Buy units", wxOK | wxICON_WARNING, this);
+            "Sell units", wxOK | wxICON_WARNING, this);
         return;
     }
 
@@ -4298,19 +4285,6 @@ void StrategicLevelFrame::OnSellUnits(wxCommandEvent&)
     countSizer->Add(spinCount, 0);
     rootSizer->Add(countSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
 
-    auto updateSpinRange = [&]()
-        {
-            int sel = list->GetSelection();
-            if (sel == wxNOT_FOUND || sel >= (int)entries.size())
-                return;
-            int maxCount = std::max(1, entries[sel].count);
-            spinCount->SetRange(1, maxCount);
-            if (spinCount->GetValue() > maxCount)
-                spinCount->SetValue(maxCount);
-        };
-    updateSpinRange();
-    list->Bind(wxEVT_LISTBOX, [&](wxCommandEvent&) { updateSpinRange(); });
-
     auto* btnSizer = new wxBoxSizer(wxHORIZONTAL);
     auto* btnSell = new wxButton(&dlg, wxID_OK, "Sell");
     auto* btnCancel = new wxButton(&dlg, wxID_CANCEL, "Cancel");
@@ -4369,7 +4343,7 @@ const LevelMission* StrategicLevelFrame::FindMissionByNameUpper(const std::strin
 {
     for (const auto& m : m_level.missions)
     {
-        if (to_upper(m.name) == name_upper)
+        if (to_upper(m.name) == to_upper(name_upper))
             return &m;
     }
     return nullptr;
@@ -4551,9 +4525,8 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
     m_money += 50;
 
     ApplyResourceTickEndTurn();
-
-
     ApplyResearchTickEndTurn();
+
     // Commander offers are generated on end-turn (for the *new* turn).
     // Offers do not carry over between turns.
     // Store offer of commanders only for the current turn.
@@ -4587,10 +4560,14 @@ static bool LoadStrategicStateFile(
     bool& gameModeEnabled,
     std::vector<int>& ownedTerritories,
     std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    std::vector<StrategicLevelFrame::ResearchItem>& researchDb,
+    int& researchActive,
+    int& researchAllocPerTurn,
     std::string* out_level_def = nullptr,
     std::string* out_timestamp = nullptr)
 
 {
+
     units.clear();
     playerCommanders.clear();
     availableCommanders.clear();
@@ -4605,6 +4582,9 @@ static bool LoadStrategicStateFile(
     money = 0;
     research = 0;
     selected_territory = -1;
+    researchDb.clear();
+    researchActive = -1;
+    researchAllocPerTurn = 0;
     player = StrategicLevelFrame::PlayerProgress{};
     gameModeEnabled = false;
     ownedTerritories.clear();
@@ -4654,6 +4634,49 @@ static bool LoadStrategicStateFile(
     if (std::regex_search(data, m, std::regex("\"research\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         research = std::stoi(m[1].str());
 
+    // research_state (optional)
+    // active id
+    if (std::regex_search(data, m, std::regex("\"research_state\"\\s*:\\s*\\{[\\s\\S]*?\"active\"\\s*:\\s*\"([^\"]*)\"")) && m.size() > 1)
+    {
+        const std::string active = m[1].str();
+        // selection resolved later after DB is loaded
+        researchActive = -1;
+        for (size_t i = 0; i < researchDb.size(); ++i)
+            if (to_lower(researchDb[i].id) == to_lower(active)) { researchActive = (int)i; break; }
+    }
+    if (std::regex_search(data, m, std::regex("\"research_state\"\\s*:\\s*\\{[\\s\\S]*?\"alloc_per_turn\"\\s*:\\s*(\\d+)")) && m.size() > 1)
+        researchAllocPerTurn = std::stoi(m[1].str());
+
+    // progress object
+    if (std::regex_search(data, m, std::regex("\"progress\"\\s*:\\s*\\{([^}]*)\\}")) && m.size() > 1)
+    {
+        const std::string blob = m[1].str();
+        std::regex kv("\\\"([^\\\"]+)\\\"\\s*:\\s*(\\d+)");
+        auto it = std::sregex_iterator(blob.begin(), blob.end(), kv);
+        auto end = std::sregex_iterator();
+        for (; it != end; ++it)
+        {
+            const std::string id = (*it)[1].str();
+            const int prog = std::stoi((*it)[2].str());
+            for (auto& r : researchDb)
+                if (to_lower(r.id) == to_lower(id)) { r.progress = prog; break; }
+        }
+    }
+    // completed array
+    if (std::regex_search(data, m, std::regex("\"completed\"\\s*:\\s*\\[([^\\]]*)\\]")) && m.size() > 1)
+    {
+        const std::string blob = m[1].str();
+        std::regex idre("\\\"([^\\\"]+)\\\"");
+        auto it = std::sregex_iterator(blob.begin(), blob.end(), idre);
+        auto end = std::sregex_iterator();
+        for (; it != end; ++it)
+        {
+            const std::string id = (*it)[1].str();
+            for (auto& r : researchDb)
+                if (to_lower(r.id) == to_lower(id)) { r.completed = true; r.progress = std::max(r.progress, r.cost); break; }
+        }
+    }
+
     if (std::regex_search(data, m, std::regex("\"selected_territory\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         selected_territory = std::stoi(m[1].str());
 
@@ -4675,65 +4698,9 @@ static bool LoadStrategicStateFile(
             ownedTerritories.push_back(id);
         }
 
-    
-    // research_state (optional)
-    if (g_researchPersistLoad && g_researchPersistLoad->progressById && g_researchPersistLoad->completed)
-    {
-        // defaults
-        if (g_researchPersistLoad->activeId) *g_researchPersistLoad->activeId = -1;
-        if (g_researchPersistLoad->activeIndex) *g_researchPersistLoad->activeIndex = -1;
-        if (g_researchPersistLoad->allocPerTurn) *g_researchPersistLoad->allocPerTurn = 0;
-        g_researchPersistLoad->progressById->clear();
-        g_researchPersistLoad->completed->clear();
-
-        // capture "research_state": { ... }  (or null)
-        std::smatch mmRS;
-                std::regex rs_re(R"("research_state"\s*:\s*(null|\{.*?\}))", std::regex_constants::ECMAScript | std::regex_constants::icase);
-        if (std::regex_search(data, mmRS, rs_re) && mmRS.size() > 1)
-        {
-            const std::string rsVal = mmRS[1].str();
-            if (!rsVal.empty() && rsVal[0] == '{')
-            {
-                (void)ParseJsonIntField(rsVal, "active_id", *g_researchPersistLoad->activeId);
-                (void)ParseJsonIntField(rsVal, "active_index", *g_researchPersistLoad->activeIndex);
-                (void)ParseJsonIntField(rsVal, "alloc_per_turn", *g_researchPersistLoad->allocPerTurn);
-
-                // progress object
-                std::smatch mmProg;
-                                std::regex prog_re(R"("progress"\s*:\s*\{(.*?)\})", std::regex_constants::ECMAScript | std::regex_constants::icase);
-                if (std::regex_search(rsVal, mmProg, prog_re) && mmProg.size() > 1)
-                {
-                    const std::string pobj = mmProg[1].str();
-                    // match pairs like "12": 3
-                    std::regex pair_re("\\\\\"(\\\\d+)\\\\\"\\\\s*:\\\\s*(-?\\\\d+)");
-                    for (auto it = std::sregex_iterator(pobj.begin(), pobj.end(), pair_re); it != std::sregex_iterator(); ++it)
-                    {
-                        const int id = std::atoi((*it)[1].str().c_str());
-                        const int val = std::atoi((*it)[2].str().c_str());
-                        (*g_researchPersistLoad->progressById)[id] = val;
-                    }
-                }
-
-                // completed array
-                std::smatch mmComp;
-                                std::regex comp_re(R"("completed"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
-                if (std::regex_search(rsVal, mmComp, comp_re) && mmComp.size() > 1)
-                {
-                    const std::string carr = mmComp[1].str();
-                    std::regex num_re("(-?\\\\d+)");
-                    for (auto it = std::sregex_iterator(carr.begin(), carr.end(), num_re); it != std::sregex_iterator(); ++it)
-                    {
-                        const int id = std::atoi((*it)[1].str().c_str());
-                        g_researchPersistLoad->completed->insert(id);
-                    }
-                }
-            }
-        }
-    }
-
-// resources (optional)
+    // resources (optional)
     std::smatch mmRes;
-        std::regex res_arr_re(R"("resources"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
+    std::regex res_arr_re("\\\"resources\\\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript | std::regex::icase);
     if (std::regex_search(data, mmRes, res_arr_re) && mmRes.size() > 1)
     {
         const std::string arr = mmRes[1].str();
@@ -4741,7 +4708,7 @@ static bool LoadStrategicStateFile(
         std::regex obj_re("\\{[^\\}]*\\}");
         for (auto it = std::sregex_iterator(arr.begin(), arr.end(), obj_re); it != std::sregex_iterator(); ++it)
         {
-            const std::string obj = (*it)[0].str();
+            const std::string obj = (*it)[1].str();
             std::smatch mo;
             int id = -1;
             StrategicLevelFrame::TerritoryResourceState st;
@@ -4820,7 +4787,7 @@ static bool LoadStrategicStateFile(
         {
             out.clear();
             std::smatch mm;
-            std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex_constants::ECMAScript);
+            std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript);
             if (!std::regex_search(data, mm, arr_re) || mm.size() < 2)
                 return;
 
@@ -4861,8 +4828,13 @@ static void SaveStrategicStateFile(
     bool gameModeEnabled,
     const std::vector<int>& ownedTerritories,
     const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    const std::vector<StrategicLevelFrame::ResearchItem>& researchDb,
+    int researchActive,
+    int researchAllocPerTurn,
     const std::string& timestamp)
+
 {
+
     std::ofstream f(path);
     if (!f)
         return;
@@ -4874,6 +4846,33 @@ static void SaveStrategicStateFile(
     f << "  \"turn\": " << turn << ",\n";
     f << "  \"money\": " << money << ",\n";
     f << "  \"research\": " << research << ",\n";
+
+    // Research state (active topic + per-topic progress). Kept separate from pool 'research' points.
+    f << "  \"research_state\": {\n";
+    std::string activeId;
+    if (researchActive >= 0 && researchActive < (int)researchDb.size())
+        activeId = researchDb[(size_t)researchActive].id;
+    f << "    \"active\": \"" << EscapeJson(activeId) << "\",\n";
+    f << "    \"alloc_per_turn\": " << researchAllocPerTurn << ",\n";
+    f << "    \"progress\": {";
+    for (size_t i = 0; i < researchDb.size(); ++i)
+    {
+        const auto& it = researchDb[i];
+        f << (i == 0 ? "" : ", ");
+        f << "\"" << EscapeJson(it.id) << "\": " << it.progress;
+    }
+    f << "},\n";
+    f << "    \"completed\": [";
+    bool firstC = true;
+    for (const auto& it : researchDb)
+    {
+        if (!it.completed) continue;
+        if (!firstC) f << ", ";
+        firstC = false;
+        f << "\"" << EscapeJson(it.id) << "\"";
+    }
+    f << "]\n";
+    f << "  },\n";
     f << "  \"selected_territory\": " << selected_territory << ",\n";
     f << "  \"game_mode\": " << (gameModeEnabled ? "true" : "false") << ",\n";
 
@@ -4886,50 +4885,13 @@ static void SaveStrategicStateFile(
     }
     f << "],\n";
 
-    
-    // Research (optional; driven by g_researchPersistSave)
-    if (g_researchPersistSave && g_researchPersistSave->progressById && g_researchPersistSave->completed)
-    {
-        f << "  \"research_state\": {\n";
-        f << "    \"active_id\": " << g_researchPersistSave->activeId << ",\n";
-        f << "    \"active_index\": " << g_researchPersistSave->activeIndex << ",\n";
-        f << "    \"alloc_per_turn\": " << g_researchPersistSave->allocPerTurn << ",\n";
-
-        // progress object: { "0": 12, "1": 3, ... }
-        f << "    \"progress\": {";
-        bool first = true;
-        for (const auto& kv : *g_researchPersistSave->progressById)
-        {
-            if (!first) f << ", ";
-            first = false;
-            f << "\\\"" << kv.first << "\\\": " << kv.second;
-        }
-        f << "},\n";
-
-        // completed array
-        f << "    \"completed\": [";
-        bool firstC = true;
-        for (const auto& id : *g_researchPersistSave->completed)
-        {
-            if (!firstC) f << ", ";
-            firstC = false;
-            f << id;
-        }
-        f << "]\n";
-        f << "  },\n";
-    }
-    else
-    {
-        f << "  \"research_state\": null,\n";
-    }
-
-// Resources per-territory state (optional on load, defaults to 20/20)
+    // Resources per-territory state (optional on load, defaults to 20/20)
     f << "  \"resources\": [\n";
     for (size_t i = 0; i < level.territories.size(); ++i)
     {
         const int tid = level.territories[i].id;
         auto it = territoryResources.find(tid);
-        const auto st = (it != territoryResources.end()) ? it->second : StrategicLevelFrame::TerritoryResourceState{};
+        const StrategicLevelFrame::TerritoryResourceState st = (it != territoryResources.end()) ? it->second : StrategicLevelFrame::TerritoryResourceState{};
         f << "    {\"id\": " << tid
           << ", \"total\": " << st.total
           << ", \"remaining\": " << st.remaining
@@ -5030,23 +4992,11 @@ void StrategicLevelFrame::LoadStrategicState()
     std::vector<int> owned;
     std::unordered_map<int, TerritoryResourceState> terrRes;
 
-    // Hook research persistence
-    ResearchPersistLoadView rlv;
-    rlv.activeId = &m_researchActiveId;
-    rlv.activeIndex = &m_researchActiveIndex;
-    rlv.allocPerTurn = &m_researchAllocPerTurn;
-    rlv.progressById = &m_researchProgressById;
-    rlv.completed = &m_researchCompleted;
-    ResearchPersistLoadView* prevR = g_researchPersistLoad;
-    g_researchPersistLoad = &rlv;
-
-    const bool ok = LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
+    if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
         playerCmds, availCmds, windowStart, genCount,
-        gm, owned, terrRes,
-        &level_def, &ts);
-    g_researchPersistLoad = prevR;
-
-    if (ok)
+        gm, owned, terrRes, 
+        m_researchDb, m_researchActive, m_researchAllocPerTurn,
+        &level_def, &ts))
     {
         // Validate that this save matches current level (compare stem)
         const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
@@ -5101,24 +5051,12 @@ void StrategicLevelFrame::LoadStrategicState()
 void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
-    ResearchPersistSaveView rsv;
-    rsv.activeId = m_researchActiveId;
-    rsv.activeIndex = m_researchActiveIndex;
-    rsv.allocPerTurn = m_researchAllocPerTurn;
-    rsv.progressById = &m_researchProgressById;
-    rsv.completed = &m_researchCompleted;
-
-    const ResearchPersistSaveView* prev = g_researchPersistSave;
-    g_researchPersistSave = &rsv;
-
-    SaveStrategicStateFile(
-        path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
+    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
         m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        m_researchDb, m_researchActive, m_researchAllocPerTurn,
         NowIsoLocal());
-
-    g_researchPersistSave = prev;
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
@@ -5263,7 +5201,7 @@ static bool DecodeCLK(const std::vector<unsigned char>& clkBytes, int& outW, int
     for (unsigned y = 0; y < H; ++y)
         offsets.push_back(rd16(offsets_off + (size_t)y * 2));
 
-    values.assign((size_t)W * H, 0);
+    values.assign((size_t)W * (size_t)H, 0);
 
     for (unsigned y = 0; y < H; ++y)
     {
@@ -5335,7 +5273,7 @@ static bool NormalizeIndexedBuffer(const std::vector<unsigned char>& src, size_t
     return false;
 }
 
-static bool MaybeDecompressSpellLZ(const std::vector<unsigned char>& in, std::vector<unsigned char>& out)
+static bool DecodeSpellLZW(const std::vector<unsigned char>& in, std::vector<unsigned char>& out)
 {
     out.clear();
     if (in.empty()) return false;
@@ -5350,40 +5288,55 @@ static bool MaybeDecompressSpellLZ(const std::vector<unsigned char>& in, std::ve
     return true;
 }
 
-static void StripWHHeaderIfMatches(std::vector<unsigned char>& buf, int W, int H)
+static constexpr double fog_darken = 0.6;
+
+static bool MaybeDecompressSpellLZ(const std::vector<unsigned char>& in, std::vector<unsigned char>& out)
 {
-    if (buf.size() < 4) return;
-    const unsigned w = (unsigned)buf[0] | ((unsigned)buf[1] << 8);
-    const unsigned h = (unsigned)buf[2] | ((unsigned)buf[3] << 8);
-    if ((int)w == W && (int)h == H)
-        buf.erase(buf.begin(), buf.begin() + 4);
+    return DecodeSpellLZW(in, out);
 }
 
-static bool LoadFileBytesMaybeExpandLZ(const std::filesystem::path& path,
-    size_t need,
-    std::vector<unsigned char>& out)
+static void StripWHHeaderIfMatches(std::vector<unsigned char>& data, int W, int H)
+{
+    // If data starts with 4-byte W,H header matching the expected size, strip it.
+    if (data.size() < 4) return;
+    unsigned w = (unsigned)data[0] | ((unsigned)data[1] << 8);
+    unsigned h = (unsigned)data[2] | ((unsigned)data[3] << 8);
+    if ((int)w == W && (int)h == H && data.size() >= 4 + (size_t)W * (size_t)H)
+        data.erase(data.begin(), data.begin() + 4);
+}
+
+static bool LoadFileBytesMaybeExpandLZ(const std::filesystem::path& p, size_t expectedSize, std::vector<unsigned char>& out)
 {
     out.clear();
-    if (!LoadFileBytes(path, out))
+    std::vector<unsigned char> raw;
+    if (!LoadFileBytes(p, raw))
         return false;
 
-    // Když už to je dost velké, necháme být (raw .bin typicky need nebo need+1).
-    if (out.size() >= need)
+    // If raw size matches expected, assume uncompressed.
+    if (raw.size() == expectedSize || raw.size() == expectedSize + 4)
+    {
+        out = std::move(raw);
         return true;
+    }
 
-    // Pokud je to menší než need, velmi pravděpodobně je to LZ stream -> zkus expand.
-    LZWexpand delz((int)std::max<size_t>(1024 * 1024, need + 64));
-    std::vector<uint8_t> decoded = delz.Decode((uint8_t*)out.data(), (uint8_t*)out.data() + out.size());
+    // Try LZ decompression.
+    std::vector<unsigned char> dec;
+    if (DecodeSpellLZW(raw, dec) && !dec.empty())
+    {
+        out = std::move(dec);
+        return true;
+    }
 
-    if (decoded.empty())
-        return false;
-
-    // Po dekompresi čekáme aspoň need (nebo need+něco – header/extra byte).
-    if (decoded.size() < need)
-        return false;
-
-    out.assign(decoded.begin(), decoded.end());
+    // Fallback: use raw data anyway.
+    out = std::move(raw);
     return true;
+}
+
+static int decodeTid(uint8_t v)
+{
+    if (v >= 1 && v <= 128) return (int)v;
+    if (v >= 129) return (int)v - 128;
+    return 0;
 }
 
 static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folder, int levelNum, wxBitmap& outBmp,
@@ -5476,10 +5429,6 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     if (!ExpandPaletteTo256(palBytes, pal256))
         return false;
 
-    // Compose like python tool:
-    //  out = fog (darkened), then LEVEL where (clk==0), plus optional region outline.
-    const float fog_darken = 0.82f;
-
     wxImage img(W, H, true);
     img.InitAlpha();
 
@@ -5505,30 +5454,20 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
             img.SetAlpha(x, y, 255);
         }
 
-    // Outline (black) where neighboring CLK values differ, limited to inside area.
-    // IMPORTANT: Do NOT bake borders into the composite in game mode,
-    // because undiscovered territories must not reveal their shapes.
-    if (bakeBorders)
-    {
-        // Outline (black) where neighboring CLK values differ, limited to inside area.
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < W; ++x)
-            {
-                const size_t i = (size_t)y * W + (size_t)x;
-                if (clkValues[i] == 0)
-                    continue;
-
-                bool edge = false;
-                if (x > 0 && clkValues[i - 1] != 0 && clkValues[i] != clkValues[i - 1]) edge = true;
-                if (y > 0 && clkValues[i - (size_t)W] != 0 && clkValues[i] != clkValues[i - (size_t)W]) edge = true;
-                if (edge)
-                {
-                    img.SetRGB(x, y, 20, 20, 20);
-                    img.SetAlpha(x, y, 255);
-                }
-            }
-    }
-
+    // Optional: slight darken to match original game (no gamma correction in wx?)
+    //img = img.ConvertToImage();
+    //const double darken = 0.925;
+    //for (int y = 0; y < (int)h; ++y)
+    //    for (int x = 0; x < (int)w; ++x)
+    //    {
+    //        const unsigned char r = img.GetRed(x, y);
+    //        const unsigned char g = img.GetGreen(x, y);
+    //        const unsigned char b = img.GetBlue(x, y);
+    //        img.SetRGB(x, y, std::max(0, (int)std::lround((double)r * darken)),
+    //                        std::max(0, (int)std::lround((double)g * darken)),
+    //                        std::max(0, (int)std::lround((double)b * darken)));
+    //    }
+    //outBmp = wxBitmap(img);
     outBmp = wxBitmap(img);
     if (outW) *outW = W;
     if (outH) *outH = H;
@@ -5541,8 +5480,7 @@ static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath,
     namespace fs = std::filesystem;
     outBmp = wxBitmap();
 
-    fs::path base = defPath;
-    base.replace_extension();
+    fs::path base = defPath.parent_path();
 
     fs::path lz = base;  lz.replace_extension(".LZ");
     fs::path pal = base; pal.replace_extension(".PAL");
@@ -5605,6 +5543,20 @@ static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath,
             img.SetAlpha((int)x, (int)y, 255);
         }
 
+    // Optional: slight darken to match original game (no gamma correction in wx?)
+    //img = img.ConvertToImage();
+    //const double darken = 0.925;
+    //for (int y = 0; y < (int)h; ++y)
+    //    for (int x = 0; x < (int)w; ++x)
+    //    {
+    //        const unsigned char r = img.GetRed(x, y);
+    //        const unsigned char g = img.GetGreen(x, y);
+    //        const unsigned char b = img.GetBlue(x, y);
+    //        img.SetRGB(x, y, std::max(0, (int)std::lround((double)r * darken)),
+    //                        std::max(0, (int)std::lround((double)g * darken)),
+    //                        std::max(0, (int)std::lround((double)b * darken)));
+    //    }
+    //outBmp = wxBitmap(img);
     outBmp = wxBitmap(img);
     return outBmp.IsOk();
 }
@@ -5632,7 +5584,7 @@ void StrategicLevelFrame::TryLoadBackground()
     int levelNum = -1;
     {
         std::smatch m;
-        std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex_constants::icase);
+        std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex::icase);
         if (std::regex_search(fnU, m, re) && m.size() >= 2)
             levelNum = std::stoi(m[1].str());
     }
@@ -5752,9 +5704,8 @@ void StrategicLevelFrame::RebuildTerritoryCentroids()
         const unsigned char* row = &m_clkValues[(size_t)y * (size_t)m_clkW];
         for (int x = 0; x < m_clkW; ++x)
         {
-            const int tid = (int)row[x];
-            if (tid == 0)
-                continue;
+            const int tid = decodeTid(row[x]);
+            if (tid <= 0) continue;
 
             auto& a = acc[tid];
             a.sx += x;
@@ -5803,6 +5754,8 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
         const double s = std::min(sx, sy);
         const int dw = std::max(1, (int)std::lround((double)bw * s));
         const int dh = std::max(1, (int)std::lround((double)bh * s));
+        const int x = (pw - dw) / 2;
+        const int y = (ph - dh) / 2;
 
         // Cache the scaled bitmap so we don't rescale on every paint.
         if (!m_bgBitmapScaled.IsOk() || m_bgScaledW != dw || m_bgScaledH != dh)
@@ -5813,8 +5766,6 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
             m_bgScaledH = dh;
         }
 
-        const int x = (pw - dw) / 2;
-        const int y = (ph - dh) / 2;
         dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
 
         // Store transform for hit-testing / hover.
@@ -5837,14 +5788,12 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                     return std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end();
                 };
 
-                auto decodeTid = [&](uint8_t v, bool& isBorder) -> int
-                {
-                    isBorder = false;
-                    if (v == 0) return 0;
-                    if (v >= 1 && v <= 128) return (int)v;
-                    if (v >= 129) { isBorder = true; return (int)(v - 128); }
-                    return 0;
-                };
+                auto decodeTid = [&](uint8_t v) -> int
+                    {
+                        if (v >= 1 && v <= 128) return (int)v;
+                        if (v >= 129 && v <= 128 + 128) return (int)v - 128;
+                        return 0;
+                    };
 
                 for (int py = 0; py < bh; ++py)
                 {
@@ -5852,7 +5801,7 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                     {
                         const uint8_t v = m_clkValues[(size_t)py * (size_t)bw + (size_t)px];
                         bool isBorder = false;
-                        const int tid = decodeTid(v, isBorder);
+                        const int tid = decodeTid(v);
                         if (tid <= 0) continue;
                         if (!isOwned(tid)) continue;
 
@@ -6108,35 +6057,12 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
 
                 const int tx = x + (int)std::lround((double)px * s);
                 const int ty = y + (int)std::lround((double)py * s);
-
-                wxString label;
-                if (resourcesView)
-                {
-                    // Only show owned territories in Resources view
-                    if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id) == m_ownedTerritories.end())
-                        continue;
-                    const auto itR = m_territoryResources.find(t.id);
-                    const TerritoryResourceState st = (itR != m_territoryResources.end()) ? itR->second : TerritoryResourceState{};
-                    label = wxString::Format("%d (%d)", st.total, st.remaining);
-                }
-                else
-                {
-                    label = wxString::Format("T%02d", t.id);
-                }
+                wxString label = wxString::Format("T%02d", t.id);
 
                 // Tiny shadow for readability.
                 dc.SetTextForeground(m_palette.shadow);
                 dc.DrawText(label, tx + 1, ty + 1);
-                if (resourcesView)
-                {
-                    const auto itR2 = m_territoryResources.find(t.id);
-                    const TerritoryResourceState st2 = (itR2 != m_territoryResources.end()) ? itR2->second : TerritoryResourceState{};
-                    dc.SetTextForeground(st2.remaining <= 0 ? m_palette.inactive : m_palette.text);
-                }
-                else
-                {
-                    dc.SetTextForeground(m_palette.text);
-                }
+                dc.SetTextForeground(m_palette.text);
                 dc.DrawText(label, tx, ty);
             }
 
@@ -6161,7 +6087,7 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                     dc.DrawCircle(tx, ty, r);
                 }
             }
-        };
+        }
     }
 }
 
@@ -6428,7 +6354,7 @@ void StrategicLevelFrame::LoadMissionStatsIfPresent()
     //   "level": {"alliance":{...}, "enemy":{...}}
     // }
     wxString p = FindStrategicStatsPath();
-    std::ifstream f(p.ToStdString());
+    std::ifstream f(p.ToStdString(wxConvUTF8));
     if (!f)
         return;
 
@@ -6513,3 +6439,4 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
     default: return wxString::Format("Rank %d", rank);
     }
 }
+

@@ -1249,11 +1249,9 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
         bool gm2 = false;
         std::vector<int> owned2;
-        // Add this declaration with the other local variables (around line with other declarations):
-        std::unordered_map<int, TerritoryResourceState> terrRes;
+                std::unordered_map<int, TerritoryResourceState> terrRes;
 
-        // Then update the function call to include terrRes:
-        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
+                if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
             wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
             return;
         }
@@ -2935,6 +2933,13 @@ void StrategicLevelFrame::RefreshUI()
 }
 
 
+
+
+// Territory id 0 is reserved for global resources settings (meta).
+static const int kResourcesMetaTerritoryId = 0;
+
+static int ClampGlobalResearch(int r) { return std::clamp(r, 0, 5); }
+
 // ============================================================
 // Resources page + mechanics
 // ============================================================
@@ -2965,23 +2970,21 @@ void StrategicLevelFrame::BuildResourcesPage()
     m_resourcesSelectedLabel->SetForegroundColour(m_palette.heading);
     us->Add(m_resourcesSelectedLabel, 0, wxLEFT | wxRIGHT | wxTOP, 8);
 
-    m_resourcesRatioLabel = new wxStaticText(under, wxID_ANY, "Allocation: 100% Money / 0% Research");
+    m_resourcesRatioLabel = new wxStaticText(under, wxID_ANY, "Allocation: Money 20 / Research 0");
     m_resourcesRatioLabel->SetFont(m_fontText);
     m_resourcesRatioLabel->SetForegroundColour(m_palette.text);
     us->Add(m_resourcesRatioLabel, 0, wxLEFT | wxRIGHT | wxTOP, 8);
 
     // Slider: 0..100 = percent routed to Research
-    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 5, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
     m_resourcesSlider->SetMinSize(wxSize(-1, 40));
     us->Add(m_resourcesSlider, 0, wxALL | wxEXPAND, 8);
 
     m_resourcesSlider->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
         {
-            const int tid = m_selectedTerritory;
-            if (tid <= 0)
-                return;
-            auto& st = m_territoryResources[tid];
-            st.researchPercent = m_resourcesSlider->GetValue();
+            m_resourcesGlobalResearch = ClampGlobalResearch(m_resourcesSlider->GetValue());
+            // persist global setting inside meta territory entry
+            m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
             SaveStrategicState();
             RefreshResourcesPage();
         });
@@ -3002,6 +3005,7 @@ void StrategicLevelFrame::BuildResourcesPage()
     RefreshResourcesPage();
 }
 
+
 void StrategicLevelFrame::RefreshResourcesPage()
 {
     // Ensure all territories have a state entry
@@ -3011,51 +3015,40 @@ void StrategicLevelFrame::RefreshResourcesPage()
             m_territoryResources[t.id] = TerritoryResourceState{};
     }
 
+    // Load global allocation from meta entry if present (keeps compatibility with older saves)
+    auto itMeta = m_territoryResources.find(kResourcesMetaTerritoryId);
+    if (itMeta != m_territoryResources.end())
+        m_resourcesGlobalResearch = ClampGlobalResearch(itMeta->second.researchCarry);
+    else
+        m_territoryResources[kResourcesMetaTerritoryId].researchCarry = ClampGlobalResearch(m_resourcesGlobalResearch);
+
+    const int R = ClampGlobalResearch(m_resourcesGlobalResearch);
+    const int M = 20 - 4 * R;
+
     if (m_resourcesSelectedLabel)
     {
         if (m_selectedTerritory > 0)
         {
             const auto& st = m_territoryResources[m_selectedTerritory];
-            m_resourcesSelectedLabel->SetLabel(wxString::Format("Territory T%02d  —  Resources: %d (%d)",
+            m_resourcesSelectedLabel->SetLabel(wxString::Format("Territory T%02d - Resources: %d (%d)",
                 m_selectedTerritory, st.total, st.remaining));
         }
         else
         {
-            m_resourcesSelectedLabel->SetLabel("Select a territory on the map");
+            m_resourcesSelectedLabel->SetLabel("Resources");
         }
     }
 
     if (m_resourcesSlider)
     {
-        if (m_selectedTerritory > 0)
-        {
-            const auto& st = m_territoryResources[m_selectedTerritory];
-            m_resourcesSlider->SetValue(std::clamp(st.researchPercent, 0, 100));
-            m_resourcesSlider->Enable(true);
-        }
-        else
-        {
-            m_resourcesSlider->SetValue(0);
-            m_resourcesSlider->Enable(false);
-        }
+        m_resourcesSlider->SetValue(R);
+        m_resourcesSlider->Enable(true);
     }
 
     if (m_resourcesRatioLabel)
     {
-        if (m_selectedTerritory > 0)
-        {
-            const auto& st = m_territoryResources[m_selectedTerritory];
-            const int rp = std::clamp(st.researchPercent, 0, 100);
-            m_resourcesRatioLabel->SetLabel(wxString::Format("Allocation: %d%% Money / %d%% Research", 100 - rp, rp));
-        }
-        else
-        {
-            m_resourcesRatioLabel->SetLabel("Allocation: 100% Money / 0% Research");
-        }
+        m_resourcesRatioLabel->SetLabel(wxString::Format("Allocation: Money %d / Research %d", M, R));
     }
-
-    // Force overlay rebuild (depletion / ownership colors can change).
-    m_overlayDirty = true;
 
     if (m_resourcesCanvas)
         m_resourcesCanvas->Refresh();
@@ -3078,14 +3071,16 @@ void StrategicLevelFrame::ApplyResourceTickEndTurn()
         st.remaining -= 1;
         if (st.remaining < 0) st.remaining = 0;
 
-        // route this tick either to money or to research, using a deterministic ratio accumulator
-        const int rp = std::clamp(st.researchPercent, 0, 100);
-        st.allocAccum += rp;
+        // route this tick either to money or to research using a deterministic 20-step distribution:
+        // Research points per territory: R (0..5) => 4*R ticks go to research, the rest to money.
+        const int R = ClampGlobalResearch(m_resourcesGlobalResearch);
+        const int researchTicksPer20 = 4 * R; // 0..20
+        st.allocAccum += researchTicksPer20;
         bool toResearch = false;
-        if (st.allocAccum >= 100)
+        if (st.allocAccum >= 20)
         {
             toResearch = true;
-            st.allocAccum -= 100;
+            st.allocAccum -= 20;
         }
 
         if (toResearch)

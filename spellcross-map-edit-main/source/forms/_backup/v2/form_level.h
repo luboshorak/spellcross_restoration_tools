@@ -14,6 +14,9 @@
 #include <wx/slider.h>
 #include <wx/dnd.h>
 #include <wx/scrolwin.h>
+#include <wx/treectrl.h>
+#include <wx/gauge.h>
+#include <wx/textctrl.h>
 
 #include "level.h"
 
@@ -31,6 +34,13 @@ public:
     void BuildResourcesPage();
     void RefreshResourcesPage();
     void ApplyResourceTickEndTurn();
+
+    // --- Research (Spellcross-like) ---
+    void BuildResearchPage();
+    void RefreshResearchPage();
+    bool LoadResearchDatabase();
+    void ApplyResearchTickEndTurn();
+    void EnterResearchMode(bool enable);
 
     // background (LEVEL_XX.LZ + LEVEL_XX.PAL) - best effort
     void TryLoadBackground();
@@ -53,6 +63,8 @@ public:
     void OnShowHierarchy(wxCommandEvent& ev);
     void OnShowStats(wxCommandEvent& ev);
     void OnShowResources(wxCommandEvent& ev);
+    void OnResearchTreeSelChanged(wxTreeEvent& ev);
+    void OnResearchStartStop(wxCommandEvent& ev);
 
 
 // menu (Strategic Level saves)
@@ -343,6 +355,25 @@ bool m_commanderNamesLoaded = false;
     wxStaticBitmap* m_lblPlayerMaxUnits = nullptr;
     wxStaticBitmap* m_lblPlayerMaxCmds = nullptr;
 
+
+    // --- Research DB/state ---
+    struct ResearchItem
+    {
+        std::string id;       // file stem, e.g. "R006"
+        std::string name;     // display name (derived from BRF or id)
+        std::string brief;    // short text (BRF)
+        std::string info;     // long text (INF)
+        int cost = 10;        // required research points (fallback default)
+        int progress = 0;     // accumulated points
+        bool completed = false;
+    };
+
+    std::vector<ResearchItem> m_researchDb;
+    int m_researchSelected = -1;
+    int m_researchActive = -1;
+    int m_researchAllocPerTurn = 0;
+    bool m_researchMode = false;
+
     // widgets
     wxStaticText* m_lblMoneyCaption = nullptr;
     wxStaticText* m_lblMoneyValue = nullptr;
@@ -361,6 +392,22 @@ bool m_commanderNamesLoaded = false;
     wxStaticText* m_resourcesSelectedLabel = nullptr;
     wxSlider* m_resourcesSlider = nullptr;
     wxStaticText* m_resourcesRatioLabel = nullptr;
+
+    // --- Research page (left) ---
+    wxPanel* m_researchPanel = nullptr;
+    wxStaticText* m_researchSelLabel = nullptr;
+    wxTextCtrl* m_researchInfo = nullptr;
+    wxGauge* m_researchGauge = nullptr;
+
+    // --- Research page (middle) ---
+    wxSimplebook* m_midBook = nullptr;
+    wxPanel* m_midRosterPanel = nullptr;
+    wxPanel* m_midResearchPanel = nullptr;
+    wxListCtrl* m_researchList = nullptr;
+    wxSlider* m_researchSpendSlider = nullptr;
+    wxStaticText* m_researchSpendValue = nullptr;
+    wxButton* m_btnResearchStartStop = nullptr;
+
 
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_cmdRoster = nullptr;
@@ -390,6 +437,7 @@ bool m_commanderNamesLoaded = false;
     enum : int {
         ID_TERRITORY_BASE = 20000,
         ID_BTN_RESEARCH,
+        ID_BTN_RESEARCH_STARTSTOP,
         ID_BTN_BUY,
         ID_BTN_BUY_CMD,
         ID_BTN_SELL,
