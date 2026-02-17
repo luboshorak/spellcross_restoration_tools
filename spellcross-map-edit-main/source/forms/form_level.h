@@ -242,10 +242,15 @@ public:
     {
         int id = -1;            // numeric id from R000..R999, or -1 for non-numeric entries
         wxString code;          // e.g. "R004" / "RACES"
-        wxString title;         // shown in list
-        wxString brief;         // short text (BRF)
-        wxString info;          // long text (INF)
-        int cost = 20;          // research points required (placeholder; can be refined once we decode costs)
+        wxString title;         // shown in list (from RESEARCH.CZ / .ENG)
+        wxString brief;         // short flavour text (BRF) – shown in top box when active
+        wxString info;          // long detail text (INF) – shown in bottom box when browsing
+        int cost = 20;          // research duration (Time() from RESEARCH.DEF)
+        // parsed from RESEARCH.DEF
+        wxString group;         // "Races" / "Technologies" / "Upgrades" / "Global"
+        int level = 0;          // minimum campaign level to unlock
+        std::vector<int> prerequisites; // OR-connected prerequisite ids
+        wxString flags;         // "UnitType" / "NewUnit" / "Info" / "UpgradeItem" / "Special"
     };
 
     void EnsureResearchLoaded();
@@ -401,7 +406,8 @@ bool m_commanderNamesLoaded = false;
     wxPanel* m_midResearchPanel = nullptr;
     wxPanel* m_researchPanel = nullptr; // left-side page (details + progress)
 
-    wxListBox* m_researchList = nullptr;
+    wxListCtrl* m_researchList = nullptr;
+    wxTextCtrl* m_researchActiveText = nullptr; // top box: BRF of currently active research
     wxTextCtrl* m_researchText = nullptr;
     wxGauge* m_researchGauge = nullptr;
     wxStaticText* m_researchGaugeLabel = nullptr;
@@ -411,6 +417,7 @@ bool m_commanderNamesLoaded = false;
 
     // Research state
     bool m_researchMode = false;
+    bool m_researchRefreshing = false;  // re-entrancy guard for RefreshResearchUI
     std::vector<ResearchItem> m_researchDb;
     int m_researchActiveId = -1;      // id of active research (matches ResearchItem.id for numeric, or -1 otherwise)
     int m_researchActiveIndex = -1;   // index in m_researchDb

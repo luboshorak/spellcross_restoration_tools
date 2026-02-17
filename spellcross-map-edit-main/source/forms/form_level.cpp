@@ -1633,19 +1633,49 @@ void StrategicLevelFrame::BuildUI()
     BuildStatsPage();
 
 
-    // --- Page 4: Research (details + progress) ---
+    // --- Page 4: Research – left side (active research + browser detail) ---
     m_researchPanel = new wxPanel(m_leftBook);
     m_researchPanel->SetBackgroundColour(m_palette.background);
+    // Must NOT contribute a large minimum size – wxSimplebook propagates minimums
+    // from ALL pages, not just the visible one, which would push the right panel off screen.
+    m_researchPanel->SetMinSize(wxSize(1, 1));
     {
         auto* rs = new wxBoxSizer(wxVERTICAL);
-        auto* title = CreateStrategicLabel(
-            m_researchPanel,
-            { { "Research", m_palette.heading, &m_fontHeading } },
-            m_fontHeading,
-            m_palette.shadow,
-            &m_palette.background);
-        rs->Add(title, 0, wxALL, 8);
 
+        // ── Top box: BRF text of the currently active research ──
+        m_researchActiveText = new wxTextCtrl(
+            m_researchPanel, wxID_ANY, "",
+            wxDefaultPosition, wxDefaultSize,
+            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+        m_researchActiveText->SetFont(m_fontText);
+        m_researchActiveText->SetBackgroundColour(m_palette.background);
+        m_researchActiveText->SetForegroundColour(m_palette.text);
+        m_researchActiveText->SetMinSize(wxSize(1, 1));
+        rs->Add(m_researchActiveText, 2, wxALL | wxEXPAND, 8);
+
+        // ── Progress bar + STOP/START button ──
+        auto* gRow = new wxBoxSizer(wxHORIZONTAL);
+
+        m_researchGauge = new wxGauge(m_researchPanel, wxID_ANY, 100,
+            wxDefaultPosition, wxSize(-1, 18), wxGA_HORIZONTAL);
+        m_researchGauge->SetValue(0);
+        gRow->Add(m_researchGauge, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+
+        m_researchGaugeLabel = new wxStaticText(m_researchPanel, wxID_ANY, "0/0");
+        m_researchGaugeLabel->SetFont(m_fontText);
+        m_researchGaugeLabel->SetForegroundColour(m_palette.text);
+        gRow->Add(m_researchGaugeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+
+        m_btnResearchStart = new wxButton(m_researchPanel, wxID_ANY, "Start");
+        m_btnResearchStart->SetFont(m_fontText);
+        m_btnResearchStart->SetForegroundColour(m_palette.buttonText);
+        m_btnResearchStart->SetBackgroundColour(m_palette.buttonBackground);
+        m_btnResearchStart->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnResearchStartStop, this);
+        gRow->Add(m_btnResearchStart, 0, wxALIGN_CENTER_VERTICAL);
+
+        rs->Add(gRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+        // ── Bottom box: INF text of the selected/browsed research item ──
         m_researchText = new wxTextCtrl(
             m_researchPanel, wxID_ANY, "",
             wxDefaultPosition, wxDefaultSize,
@@ -1653,18 +1683,8 @@ void StrategicLevelFrame::BuildUI()
         m_researchText->SetFont(m_fontText);
         m_researchText->SetBackgroundColour(m_palette.background);
         m_researchText->SetForegroundColour(m_palette.text);
-        rs->Add(m_researchText, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-        auto* gRow = new wxBoxSizer(wxHORIZONTAL);
-        m_researchGaugeLabel = new wxStaticText(m_researchPanel, wxID_ANY, "Progress: 0/0");
-        m_researchGaugeLabel->SetFont(m_fontText);
-        m_researchGaugeLabel->SetForegroundColour(m_palette.text);
-        gRow->Add(m_researchGaugeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-
-        m_researchGauge = new wxGauge(m_researchPanel, wxID_ANY, 100, wxDefaultPosition, wxDefaultSize, wxGA_HORIZONTAL);
-        m_researchGauge->SetValue(0);
-        gRow->Add(m_researchGauge, 1, wxALIGN_CENTER_VERTICAL | wxEXPAND);
-        rs->Add(gRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+        m_researchText->SetMinSize(wxSize(1, 1));
+        rs->Add(m_researchText, 3, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
         m_researchPanel->SetSizer(rs);
     }
@@ -1745,9 +1765,10 @@ void StrategicLevelFrame::BuildUI()
     mid->SetSizer(midSizer);
     m_midBook->AddPage(m_midRosterPanel, "Roster", true);
 
-    // --- Middle Research page ---
+    // --- Middle Research page – categorized list with yellow group headers ---
     m_midResearchPanel = new wxPanel(m_midBook);
     m_midResearchPanel->SetBackgroundColour(m_palette.background);
+    m_midResearchPanel->SetMinSize(wxSize(1, 1));
     {
         auto* rs = new wxBoxSizer(wxVERTICAL);
         auto* rtitle = CreateStrategicLabel(
@@ -1758,29 +1779,32 @@ void StrategicLevelFrame::BuildUI()
             &m_palette.background);
         rs->Add(rtitle, 0, wxALL, 8);
 
-        m_researchList = new wxListBox(m_midResearchPanel, wxID_ANY);
+        // wxListCtrl (single column, no header) – supports SetItemTextColour per row
+        m_researchList = new wxListCtrl(
+            m_midResearchPanel, wxID_ANY,
+            wxDefaultPosition, wxDefaultSize,
+            wxLC_REPORT | wxLC_NO_HEADER | wxLC_SINGLE_SEL);
         m_researchList->SetFont(m_fontText);
         m_researchList->SetBackgroundColour(m_palette.background);
         m_researchList->SetForegroundColour(m_palette.text);
-        m_researchList->Bind(wxEVT_LISTBOX, &StrategicLevelFrame::OnResearchList, this);
+        m_researchList->SetMinSize(wxSize(1, 1));
+        m_researchList->InsertColumn(0, "", wxLIST_FORMAT_LEFT, -1);
+        m_researchList->Bind(wxEVT_LIST_ITEM_SELECTED,
+            [this](wxListEvent& ev) {
+                if (m_researchRefreshing) return;  // ignore events during repopulation
+                const long row = ev.GetIndex();
+                if (!m_researchList || row < 0) return;
+                // Check for group header row (sentinel = max wxUIntPtr value)
+                const wxUIntPtr data = m_researchList->GetItemData(row);
+                if (data == static_cast<wxUIntPtr>(-1))
+                {
+                    // Header clicked – deselect and do nothing
+                    m_researchList->SetItemState(row, 0, wxLIST_STATE_SELECTED);
+                    return;
+                }
+                SelectResearchIndex(static_cast<int>(data));
+            });
         rs->Add(m_researchList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-        auto* allocRow = new wxBoxSizer(wxHORIZONTAL);
-        m_researchAllocLabel = new wxStaticText(m_midResearchPanel, wxID_ANY, "Alloc/turn: 0");
-        m_researchAllocLabel->SetFont(m_fontText);
-        m_researchAllocLabel->SetForegroundColour(m_palette.text);
-        allocRow->Add(m_researchAllocLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        m_researchAllocSlider = new wxSlider(m_midResearchPanel, wxID_ANY, 0, 0, 20, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
-        m_researchAllocSlider->Bind(wxEVT_SLIDER, &StrategicLevelFrame::OnResearchAlloc, this);
-        allocRow->Add(m_researchAllocSlider, 1, wxALIGN_CENTER_VERTICAL | wxEXPAND);
-        rs->Add(allocRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-        m_btnResearchStart = new wxButton(m_midResearchPanel, wxID_ANY, "Start");
-        m_btnResearchStart->SetFont(m_fontText);
-        m_btnResearchStart->SetForegroundColour(m_palette.buttonText);
-        m_btnResearchStart->SetBackgroundColour(m_palette.buttonBackground);
-        m_btnResearchStart->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnResearchStartStop, this);
-        rs->Add(m_btnResearchStart, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
         m_midResearchPanel->SetSizer(rs);
     }
@@ -3225,21 +3249,68 @@ void StrategicLevelFrame::ApplyResourceTickEndTurn()
 // Research system (Strategic level)
 // ============================================================
 
-static wxString DecodeCp852Text(const std::string& bytes)
-{
-    wxCSConv conv("CP852");
-    // wxString ctor will stop at first NUL; research files are plain text so that's OK.
-    wxString ws(bytes.c_str(), conv);
+// CP895 (Kamenický / Czech DOS encoding) → Unicode codepoint table.
+// Verified against test data from RESEARCH.CZ and sample BRF/INF files.
+static const uint16_t kCp895ToUnicode[256] = {
+    // 0x00-0x7F: identical to ASCII
+    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
+    0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F,
+    0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
+    0x0018, 0x0019, 0x001A, 0x001B, 0x001C, 0x001D, 0x001E, 0x001F,
+    0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027,
+    0x0028, 0x0029, 0x002A, 0x002B, 0x002C, 0x002D, 0x002E, 0x002F,
+    0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
+    0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
+    0x0040, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
+    0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
+    0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
+    0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x005F,
+    0x0060, 0x0061, 0x0062, 0x0063, 0x0064, 0x0065, 0x0066, 0x0067,
+    0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D, 0x006E, 0x006F,
+    0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,
+    0x0078, 0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F,
+    // 0x80-0xFF: CP895 Kamenický Czech/Slovak characters + box drawing + symbols
+    0x010C, 0x00FC, 0x00E9, 0x010F, 0x00E4, 0x010E, 0x0164, 0x010D,  // 80-87: Č ü é ď ä Ď Ť č
+    0x011B, 0x011A, 0x0139, 0x00CD, 0x00EE, 0x013D, 0x00C4, 0x00C1,  // 88-8F: ě Ě Ĺ Í î Ľ Ä Á
+    0x00C9, 0x017E, 0x017D, 0x00F4, 0x00F6, 0x00D3, 0x016F, 0x00DA,  // 90-97: É ž Ž ô ö Ó ů Ú
+    0x00FD, 0x00D6, 0x00DC, 0x0160, 0x013A, 0x0165, 0x0159, 0x0158,  // 98-9F: ý Ö Ü Š ĺ ť ř Ř
+    0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x0148, 0x0147, 0x016E, 0x00D4,  // A0-A7: á í ó ú ň Ň Ů Ô
+    0x0161, 0x0159, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,  // A8-AF: š ř ¬ ½ ¼ ¡ « »
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,  // B0-B7: box drawing
+    0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,  // B8-BF
+    0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,  // C0-C7
+    0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,  // C8-CF
+    0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,  // D0-D7
+    0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,  // D8-DF
+    0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,  // E0-E7: α ß Γ π Σ σ μ τ
+    0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,  // E8-EF
+    0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,  // F0-F7
+    0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,  // F8-FF
+};
 
-    // Trim trailing ~ used as end marker in some INF/BRF files
+static wxString DecodeCp895Text(const std::string& bytes)
+{
+    wxString ws;
+    ws.reserve(bytes.size());
+    for (unsigned char b : bytes)
+        ws += static_cast<wxChar>(kCp895ToUnicode[b]);
+
     ws.Replace("\r\n", "\n");
     ws.Replace("\r", "\n");
-    int tilde = ws.Find("~");
+
+    // Strip trailing ~ sentinel used in some INF/BRF files
+    int tilde = ws.Find('~');
     if (tilde != wxNOT_FOUND)
         ws = ws.Left(tilde);
 
     ws.Trim(true).Trim(false);
     return ws;
+}
+
+// Keep old name as alias for any remaining call sites
+static wxString DecodeCp852Text(const std::string& bytes)
+{
+    return DecodeCp895Text(bytes);
 }
 
 void StrategicLevelFrame::EnsureResearchLoaded()
@@ -3251,118 +3322,216 @@ void StrategicLevelFrame::EnsureResearchLoaded()
     std::error_code ec;
 
     const fs::path base = GetStableBaseDir();
-    const fs::path dir = base / "temp" / "RESEARCH";
+    const fs::path researchDir = base / "temp" / "RESEARCH";
+    const fs::path commonDir   = base / "temp" / "COMMON";
 
-    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
-    {
-        // Keep empty DB; UI will show a message.
-        return;
-    }
-
-    struct TempRec
-    {
-        int id = -1;
-        wxString code;
-        wxString inf;
-        wxString brf;
-    };
-
-    std::unordered_map<std::string, TempRec> byCode;
-
-    auto loadFile = [&](const fs::path& p) -> std::string
+    auto loadFileBin = [&](const fs::path& p) -> std::string
     {
         std::ifstream f(p, std::ios::binary);
         if (!f) return {};
-        std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        return s;
+        return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     };
 
-    std::regex rx(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)", std::regex_constants::icase);
-
-    for (auto it = fs::directory_iterator(dir, ec); it != fs::directory_iterator(); ++it)
+    // ----------------------------------------------------------------
+    // 1.  Parse RESEARCH.DEF → group, level, cost (Time), flags, prereqs per item
+    // ----------------------------------------------------------------
+    struct DefRec
     {
-        if (ec) break;
-        if (!it->is_regular_file(ec)) continue;
+        wxString group;
+        int level = 0;
+        int time  = 0;
+        wxString flags;
+        std::vector<int> prereqs;
+    };
+    std::unordered_map<int, DefRec> defById;
 
-        const std::string fn = it->path().filename().string();
-        std::smatch m;
-        if (!std::regex_match(fn, m, rx))
-            continue;
+    {
+        const std::string raw = loadFileBin(commonDir / "RESEARCH.DEF");
+        if (!raw.empty())
+        {
+            DefRec cur;
+            int curId = -1;
+            bool inside = false;
+            std::istringstream ss(raw);
+            std::string line;
+            while (std::getline(ss, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                size_t s = line.find_first_not_of(" \t");
+                if (s == std::string::npos) continue;
+                line = line.substr(s);
+                if (line[0] == ';') continue;
 
-        std::string code = m[1].str();
-        std::string idStr = m[2].matched ? m[2].str() : "";
-        std::string ext = m[3].str();
+                // Item(N) {
+                static const std::regex rxItem(R"(Item\((\d+)\)\s*\{)");
+                std::smatch m;
+                if (std::regex_search(line, m, rxItem))
+                {
+                    cur = DefRec{};
+                    curId = std::stoi(m[1].str());
+                    inside = true;
+                    continue;
+                }
+                if (!inside) continue;
+                if (line == "}") {
+                    if (curId >= 0) defById[curId] = std::move(cur);
+                    inside = false; curId = -1;
+                    continue;
+                }
 
-        // normalize code to uppercase (R000 / RACES)
-        for (auto& ch : code) ch = (char)std::toupper((unsigned char)ch);
-        for (auto& ch : ext) ch = (char)std::toupper((unsigned char)ch);
+                static const std::regex rxGroup(R"(Group\((\w+)\))");
+                static const std::regex rxFlags(R"(Flags\((\w+)\))");
+                static const std::regex rxLevel(R"(Level\((\d+)\))");
+                static const std::regex rxTime (R"(Time\((\d+)\))");
+                static const std::regex rxOr   (R"(ORconnections\(([^)]+)\))");
 
-        TempRec& rec = byCode[code];
-        rec.code = wxString::FromUTF8(code);
-
-        if (!idStr.empty())
-            rec.id = std::atoi(idStr.c_str());
-        else
-            rec.id = -1;
-
-        const std::string raw = loadFile(it->path());
-        if (raw.empty()) continue;
-
-        if (ext == "INF")
-            rec.inf = DecodeCp852Text(raw);
-        else if (ext == "BRF")
-            rec.brf = DecodeCp852Text(raw);
+                if (std::regex_search(line, m, rxGroup)) cur.group = wxString::FromUTF8(m[1].str());
+                if (std::regex_search(line, m, rxFlags)) cur.flags = wxString::FromUTF8(m[1].str());
+                if (std::regex_search(line, m, rxLevel)) cur.level = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxTime))  cur.time  = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxOr))
+                {
+                    std::istringstream argss(m[1].str());
+                    std::string tok;
+                    while (std::getline(argss, tok, ','))
+                    {
+                        size_t ts = tok.find_first_not_of(" \t");
+                        if (ts != std::string::npos)
+                            cur.prereqs.push_back(std::stoi(tok.substr(ts)));
+                    }
+                }
+            }
+        }
     }
 
-    // Convert to m_researchDb
-    m_researchDb.clear();
-    m_researchDb.reserve(byCode.size());
-
-    for (auto& kv : byCode)
+    // ----------------------------------------------------------------
+    // 2.  Title list from RESEARCH.CZ / fallback .ENG
+    //     Line N (0-based) = title for Item(N)
+    // ----------------------------------------------------------------
+    std::vector<wxString> titleByIndex;
     {
-        TempRec& r = kv.second;
+        std::string raw;
+        for (const char* name : {"RESEARCH.CZ", "RESEARCH.ENG"})
+        {
+            raw = loadFileBin(commonDir / name);
+            if (!raw.empty()) break;
+        }
+        if (!raw.empty())
+        {
+            std::istringstream ss(raw);
+            std::string line;
+            while (std::getline(ss, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                // Strip trailing control chars (0x1A etc.)
+                while (!line.empty() && (unsigned char)line.back() < 0x20)
+                    line.pop_back();
+                titleByIndex.push_back(DecodeCp895Text(line));
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 3.  BRF / INF texts from temp/RESEARCH/
+    // ----------------------------------------------------------------
+    struct TextRec { wxString inf, brf; };
+    std::unordered_map<int, TextRec> textById;
+
+    if (fs::exists(researchDir, ec) && fs::is_directory(researchDir, ec))
+    {
+        static const std::regex rxFile(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)",
+                                       std::regex_constants::icase);
+        for (auto it = fs::directory_iterator(researchDir, ec);
+             it != fs::directory_iterator(); ++it)
+        {
+            if (ec) break;
+            if (!it->is_regular_file(ec)) continue;
+            const std::string fn = it->path().filename().string();
+            std::smatch m;
+            if (!std::regex_match(fn, m, rxFile)) continue;
+
+            std::string idStr = m[2].matched ? m[2].str() : "";
+            std::string ext   = m[3].str();
+            for (auto& ch : ext) ch = (char)std::toupper((unsigned char)ch);
+
+            if (idStr.empty()) continue; // skip RACES.* for now
+
+            const std::string raw = loadFileBin(it->path());
+            if (raw.empty()) continue;
+            wxString decoded = DecodeCp895Text(raw);
+
+            int id = std::atoi(idStr.c_str());
+            if (ext == "INF") textById[id].inf = decoded;
+            else               textById[id].brf = decoded;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 4.  Build m_researchDb
+    // ----------------------------------------------------------------
+    m_researchDb.clear();
+
+    // All IDs from DEF (source of truth) + any with text but missing from DEF
+    std::unordered_set<int> allIds;
+    for (auto& kv : defById)  allIds.insert(kv.first);
+    for (auto& kv : textById) allIds.insert(kv.first);
+
+    for (int id : allIds)
+    {
+        const DefRec*  def  = defById.count(id)  ? &defById[id]  : nullptr;
+        const TextRec* text = textById.count(id)  ? &textById[id] : nullptr;
+
+        // Special items are internal game triggers, not player-researchable
+        if (def && def->flags == "Special")
+            continue;
+
+        // Items with Time(0) are already available by default (base unit types etc.)
+        // – they do not appear in the research screen.
+        if (def && def->time == 0)
+            continue;
 
         ResearchItem item;
-        item.id = r.id;
-        item.code = r.code;
+        item.id    = id;
+        item.code  = wxString::Format("R%03d", id);
+        item.title = (id >= 0 && id < (int)titleByIndex.size() && !titleByIndex[id].empty())
+                     ? titleByIndex[id] : item.code;
 
-        // Title heuristics:
-        // - If BRF exists, use first line (or first sentence) as title.
-        // - Else use code.
-        wxString title = r.brf;
-        if (!title.empty())
+        if (text) { item.brief = text->brf; item.info = text->inf; }
+
+        if (def)
         {
-            int nl = title.Find("\n");
-            if (nl != wxNOT_FOUND)
-                title = title.Left(nl);
-            int dot = title.Find(".");
-            if (dot != wxNOT_FOUND && dot > 8)
-                title = title.Left(dot);
-            title.Trim(true).Trim(false);
+            item.group        = def->group;
+            item.level        = def->level;
+            item.cost         = std::max(1, def->time);
+            item.flags        = def->flags;
+            item.prerequisites = def->prereqs;
         }
-        if (title.empty())
-            title = r.code;
-
-        item.title = title;
-        item.brief = r.brf;
-        item.info = r.inf;
-
-        // Placeholder cost for now (until we decode original costs)
-        item.cost = 20;
+        else
+        {
+            item.cost = 20;
+        }
 
         m_researchDb.push_back(std::move(item));
     }
 
-    // Sort by numeric id first, then by code
-    std::sort(m_researchDb.begin(), m_researchDb.end(), [](const ResearchItem& a, const ResearchItem& b)
-    {
-        if (a.id >= 0 && b.id >= 0) return a.id < b.id;
-        if (a.id >= 0 && b.id < 0) return true;
-        if (a.id < 0 && b.id >= 0) return false;
-        return a.code.CmpNoCase(b.code) < 0;
-    });
+    // Sort: group order → level → id
+    auto groupOrder = [](const wxString& g) -> int {
+        if (g == "Global")       return 0;
+        if (g == "Technologies") return 1;
+        if (g == "Upgrades")     return 2;
+        if (g == "Races")        return 3;
+        return 4;
+    };
+    std::sort(m_researchDb.begin(), m_researchDb.end(),
+        [&](const ResearchItem& a, const ResearchItem& b)
+        {
+            int ga = groupOrder(a.group), gb = groupOrder(b.group);
+            if (ga != gb) return ga < gb;
+            if (a.level != b.level) return a.level < b.level;
+            return a.id < b.id;
+        });
 
-    // If there is no active research, preselect the first item
+    // Preselect first item if nothing active yet
     if (!m_researchDb.empty() && m_researchActiveIndex < 0)
     {
         m_researchActiveIndex = 0;
@@ -3410,149 +3579,230 @@ void StrategicLevelFrame::SelectResearchIndex(int idx)
 
 void StrategicLevelFrame::OnResearchList(wxCommandEvent& ev)
 {
-    const int sel = ev.GetInt();
-    SelectResearchIndex(sel);
+    // Selection handling is done via wxEVT_LIST_ITEM_SELECTED lambda bound in BuildUI.
+    // This stub remains for EVT_TABLE compatibility if needed.
+    (void)ev;
 }
 
 void StrategicLevelFrame::OnResearchAlloc(wxCommandEvent&)
 {
-    if (!m_researchAllocSlider) return;
-    m_researchAllocPerTurn = m_researchAllocSlider->GetValue();
-    RefreshResearchUI();
-    SaveStrategicState();
+    // Allocation slider removed – research uses all available points automatically.
 }
 
 void StrategicLevelFrame::OnResearchStartStop(wxCommandEvent&)
 {
-    // Start/Stop == just toggles allocation between 0 and current slider (kept)
-    if (m_researchAllocPerTurn > 0)
-        m_researchAllocPerTurn = 0;
-    else
-        m_researchAllocPerTurn = m_researchAllocSlider ? m_researchAllocSlider->GetValue() : 1;
-
+    m_researchAllocPerTurn = (m_researchAllocPerTurn > 0) ? 0 : 1;
     RefreshResearchUI();
     SaveStrategicState();
 }
 
 void StrategicLevelFrame::RefreshResearchUI()
 {
-    // Middle list
+    if (!m_researchList && !m_researchText && !m_researchActiveText)
+        return;
+
+    // Re-entrancy guard: SetItemState fires wxEVT_LIST_ITEM_SELECTED which
+    // calls SelectResearchIndex -> RefreshResearchUI -> DeleteAllItems -> crash.
+    if (m_researchRefreshing)
+        return;
+    m_researchRefreshing = true;
+    struct RGuard { bool& f; ~RGuard(){ f = false; } } _rg{m_researchRefreshing};
+
+    EnsureResearchLoaded();
+
+    const int campaignLevel = m_gameModeEnabled
+        ? std::max(1, (m_turn / 8) + 1) : 999;
+
+    auto isUnlocked = [&](const ResearchItem& it) -> bool {
+        if (it.prerequisites.empty()) return true;
+        for (int pre : it.prerequisites)
+            if (m_researchCompleted.count(pre)) return true;
+        return false;
+    };
+
+    // ----------------------------------------------------------------
+    // Categorized list (wxListCtrl)
+    // ItemData: (wxUIntPtr)-1 = group header row (not selectable)
+    //           other values  = index into m_researchDb
+    // ----------------------------------------------------------------
+    static constexpr wxUIntPtr kHdrSentinel = static_cast<wxUIntPtr>(-1);
+
     if (m_researchList)
     {
-        m_researchList->Clear();
+        m_researchList->Freeze();
+        m_researchList->DeleteAllItems();
 
-        if (m_researchDb.empty())
+        const wxColour clrHeader = m_palette.heading;
+        const wxColour clrNormal = m_palette.text;
+        const wxColour clrDone  (0x4A, 0x7A, 0x4A);
+        const wxColour clrLocked(0x60, 0x60, 0x60);
+
+        wxString lastGroup;
+        long row = 0, selRow = -1;
+
+        for (int i = 0; i < (int)m_researchDb.size(); ++i)
         {
-            m_researchList->Append("No research data found (temp/RESEARCH).");
-            m_researchList->Enable(false);
-        }
-        else
-        {
-            m_researchList->Enable(true);
-            for (const auto& it : m_researchDb)
+            const ResearchItem& it = m_researchDb[i];
+            if (m_gameModeEnabled && it.level > campaignLevel)
+                continue;
+
+            // Group header
+            if (it.group != lastGroup)
             {
-                wxString row = it.title;
-                if (it.id >= 0 && m_researchCompleted.count(it.id))
-                    row = row + "  [DONE]";
-                m_researchList->Append(row);
+                lastGroup = it.group;
+                if (!lastGroup.empty())
+                {
+                    m_researchList->InsertItem(row, lastGroup);
+                    m_researchList->SetItemData(row, kHdrSentinel);
+                    m_researchList->SetItemTextColour(row, clrHeader);
+                    ++row;
+                }
             }
 
-            if (m_researchActiveIndex >= 0 && m_researchActiveIndex < (int)m_researchDb.size())
-                m_researchList->SetSelection(m_researchActiveIndex);
+            const bool done   = (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
+            const bool locked = !isUnlocked(it);
+            const bool active = (it.id == m_researchActiveId && m_researchAllocPerTurn > 0);
+
+            wxString label = wxString("  ") + it.title;
+            if (done)        label += " [+]";
+            else if (locked) label += " [?]";
+            else if (active) label += " >";
+
+            m_researchList->InsertItem(row, label);
+            m_researchList->SetItemData(row, static_cast<wxUIntPtr>(i));
+
+            if (done)         m_researchList->SetItemTextColour(row, clrDone);
+            else if (locked)  m_researchList->SetItemTextColour(row, clrLocked);
+            else              m_researchList->SetItemTextColour(row, clrNormal);
+
+            if (i == m_researchActiveIndex)
+                selRow = row;
+            ++row;
         }
+
+        // Auto-fit column
+        if (row > 0)
+        {
+            m_researchList->SetColumnWidth(0, wxLIST_AUTOSIZE);
+            const int lw = m_researchList->GetClientSize().GetWidth();
+            if (m_researchList->GetColumnWidth(0) < lw)
+                m_researchList->SetColumnWidth(0, lw);
+        }
+
+        // Select active item (guard prevents re-entrant call here)
+        if (selRow >= 0)
+        {
+            m_researchList->SetItemState(selRow,
+                wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED,
+                wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
+            m_researchList->EnsureVisible(selRow);
+        }
+        m_researchList->Thaw();
     }
 
-    // Allocation label / slider
-    if (m_researchAllocLabel)
-        m_researchAllocLabel->SetLabel(wxString::Format("Alloc/turn: %d", m_researchAllocPerTurn));
-
-    if (m_researchAllocSlider)
-    {
-        m_researchAllocSlider->SetValue(m_researchAllocPerTurn);
-        // Limit by available research pool (soft limit)
-        const int max = std::max(0, std::min(20, m_research));
-        m_researchAllocSlider->SetMax(max);
-    }
-
+    // Start/Stop button
     if (m_btnResearchStart)
         m_btnResearchStart->SetLabel(m_researchAllocPerTurn > 0 ? "Stop" : "Start");
 
-    // Left detail panel
-    if (!m_researchText || !m_researchGauge || !m_researchGaugeLabel)
-        return;
-
-    if (m_researchDb.empty() || m_researchActiveIndex < 0 || m_researchActiveIndex >= (int)m_researchDb.size())
+    // ----------------------------------------------------------------
+    // Top box: BRF of the item currently being researched
+    // ----------------------------------------------------------------
+    if (m_researchActiveText)
     {
-        m_researchText->SetValue("No research selected.");
-        m_researchGauge->SetRange(100);
-        m_researchGauge->SetValue(0);
-        m_researchGaugeLabel->SetLabel("Progress: 0/0");
-        return;
+        if (m_researchActiveIndex >= 0
+            && m_researchActiveIndex < (int)m_researchDb.size()
+            && m_researchAllocPerTurn > 0)
+        {
+            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            m_researchActiveText->SetValue(cur.brief.empty() ? cur.info : cur.brief);
+        }
+        else
+            m_researchActiveText->SetValue(wxEmptyString);
     }
 
-    const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
-    const int id = cur.id;
+    // ----------------------------------------------------------------
+    // Progress gauge
+    // ----------------------------------------------------------------
+    if (m_researchGauge && m_researchGaugeLabel)
+    {
+        if (m_researchActiveIndex >= 0
+            && m_researchActiveIndex < (int)m_researchDb.size()
+            && m_researchAllocPerTurn > 0)
+        {
+            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            const int cost = std::max(1, cur.cost);
+            const int prog = m_researchProgressById.count(cur.id)
+                             ? m_researchProgressById.at(cur.id) : 0;
+            m_researchGauge->SetRange(cost);
+            m_researchGauge->SetValue(std::min(prog, cost));
+            m_researchGaugeLabel->SetLabel(
+                wxString::Format("%d/%d", std::min(prog, cost), cost));
+        }
+        else
+        {
+            m_researchGauge->SetRange(100);
+            m_researchGauge->SetValue(0);
+            m_researchGaugeLabel->SetLabel("0/0");
+        }
+    }
 
-    const int prog = (id >= 0) ? (m_researchProgressById.count(id) ? m_researchProgressById[id] : 0) : 0;
-    const int cost = std::max(1, cur.cost);
-
-    wxString text;
-    text << cur.title << "\n\n";
-    if (!cur.brief.empty())
-        text << cur.brief << "\n\n";
-    if (!cur.info.empty())
-        text << cur.info << "\n\n";
-
-    text << wxString::Format("Cost: %d\n", cost);
-    text << wxString::Format("Invested: %d\n", prog);
-    text << wxString::Format("Available research points: %d\n", m_research);
-    text << wxString::Format("Alloc per turn: %d\n", m_researchAllocPerTurn);
-
-    if (id >= 0 && m_researchCompleted.count(id))
-        text << "\nSTATUS: COMPLETED";
-    else if (m_researchAllocPerTurn > 0)
-        text << "\nSTATUS: IN PROGRESS";
-    else
-        text << "\nSTATUS: NOT ACTIVE";
-
-    m_researchText->SetValue(text);
-
-    m_researchGauge->SetRange(cost);
-    m_researchGauge->SetValue(std::min(prog, cost));
-    m_researchGaugeLabel->SetLabel(wxString::Format("Progress: %d/%d", std::min(prog, cost), cost));
+    // ----------------------------------------------------------------
+    // Bottom box: INF of the item selected for browsing
+    // ----------------------------------------------------------------
+    if (m_researchText)
+    {
+        if (m_researchActiveIndex >= 0
+            && m_researchActiveIndex < (int)m_researchDb.size())
+        {
+            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            wxString txt = cur.info.empty() ? cur.brief : cur.info;
+            if (cur.id >= 0 && m_researchCompleted.count(cur.id))
+                txt << "\n\n[COMPLETED]";
+            else if (!isUnlocked(cur))
+                txt << "\n\n[LOCKED - prerequisite required]";
+            m_researchText->SetValue(txt);
+        }
+        else
+            m_researchText->SetValue("Select an item from the list.");
+    }
 }
+
 
 void StrategicLevelFrame::ApplyResearchTickEndTurn()
 {
+    // Research allocation is automatic: when research is active (m_researchAllocPerTurn > 0),
+    // ALL accumulated research points from resources are spent on the active item.
     if (m_researchAllocPerTurn <= 0)
         return;
 
     EnsureResearchLoaded();
-    if (m_researchDb.empty() || m_researchActiveIndex < 0 || m_researchActiveIndex >= (int)m_researchDb.size())
+    if (m_researchDb.empty() || m_researchActiveIndex < 0
+        || m_researchActiveIndex >= (int)m_researchDb.size())
         return;
 
     const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
-    if (cur.id < 0)
+    if (cur.id < 0 || m_researchCompleted.count(cur.id))
         return;
 
-    if (m_researchCompleted.count(cur.id))
+    if (m_research <= 0)
         return;
 
     const int cost = std::max(1, cur.cost);
     int& prog = m_researchProgressById[cur.id];
 
-    const int spend = std::min(m_researchAllocPerTurn, std::max(0, m_research));
-    if (spend <= 0)
-        return;
-
-    m_research -= spend;
+    // Spend all available points this turn
+    const int spend = m_research;
+    m_research = 0;
     prog += spend;
 
     if (prog >= cost)
     {
         prog = cost;
         m_researchCompleted.insert(cur.id);
-        m_researchAllocPerTurn = 0; // auto stop
+        m_researchAllocPerTurn = 0; // auto-stop when done
+        wxMessageBox(
+            wxString::Format("Research complete: %s", cur.title),
+            "Research", wxOK | wxICON_INFORMATION, this);
     }
 }
 
