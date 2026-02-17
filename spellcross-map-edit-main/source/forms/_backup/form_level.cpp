@@ -1327,8 +1327,15 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 void StrategicLevelFrame::MarkOverlayDirty()
 {
     m_overlayDirty = true;
-    if (m_mapCanvas) m_mapCanvas->Refresh();
-    else if (m_mapPanel) m_mapPanel->Refresh();
+    if (m_leftBook && m_leftBook->GetCurrentPage() == m_resourcesPanel)
+    {
+        if (m_resourcesCanvas) m_resourcesCanvas->Refresh();
+    }
+    else
+    {
+        if (m_mapCanvas) m_mapCanvas->Refresh();
+        else if (m_mapPanel) m_mapPanel->Refresh();
+    }
 }
 
 static int PickStartTerritoryIdForGameMode(const LevelData& level)
@@ -3092,60 +3099,104 @@ void StrategicLevelFrame::BuildResourcesPage()
     if (!m_resourcesPanel)
         return;
 
+    m_resourcesPanel->SetMinSize(wxSize(1, 1));
     auto* s = new wxBoxSizer(wxVERTICAL);
 
-    // Paint surface (same background as strategic map)
+    // ── Map canvas (same paint handler as strategic map) ──
     m_resourcesCanvas = new wxPanel(m_resourcesPanel);
     m_resourcesCanvas->SetBackgroundColour(m_palette.background);
     m_resourcesCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_resourcesCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
-    m_resourcesCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
-    m_resourcesCanvas->Bind(wxEVT_MOTION, &StrategicLevelFrame::OnMapMouseMove, this);
+    m_resourcesCanvas->SetMinSize(wxSize(1, 1));
+    m_resourcesCanvas->Bind(wxEVT_PAINT,     &StrategicLevelFrame::OnMapPaint,     this);
+    m_resourcesCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown,  this);
+    m_resourcesCanvas->Bind(wxEVT_MOTION,    &StrategicLevelFrame::OnMapMouseMove, this);
+    // When canvas first gets a real size, mark overlay dirty and repaint
+    m_resourcesCanvas->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev)
+    {
+        ev.Skip();
+        m_overlayDirty = true;
+        if (m_resourcesCanvas) m_resourcesCanvas->Refresh();
+    });
     s->Add(m_resourcesCanvas, 3, wxALL | wxEXPAND, 8);
 
-    // Under-map controls (allocation)
+    // ── Bottom controls ──
     auto* under = new wxPanel(m_resourcesPanel);
     under->SetBackgroundColour(m_palette.background);
     auto* us = new wxBoxSizer(wxVERTICAL);
 
-    m_resourcesSelectedLabel = new wxStaticText(under, wxID_ANY, "Select a territory on the map");
+    // Header label (shows selected territory or global summary)
+    m_resourcesSelectedLabel = new wxStaticText(under, wxID_ANY, "Resources");
     m_resourcesSelectedLabel->SetFont(m_fontHeading);
     m_resourcesSelectedLabel->SetForegroundColour(m_palette.heading);
     us->Add(m_resourcesSelectedLabel, 0, wxLEFT | wxRIGHT | wxTOP, 8);
 
-    m_resourcesRatioLabel = new wxStaticText(under, wxID_ANY, "Allocation: Money 20 / Research 0");
-    m_resourcesRatioLabel->SetFont(m_fontText);
-    m_resourcesRatioLabel->SetForegroundColour(m_palette.text);
-    us->Add(m_resourcesRatioLabel, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+    // Global allocation row
+    auto* allocRow = new wxBoxSizer(wxHORIZONTAL);
 
-    // Slider: 0..100 = percent routed to Research
-    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 5, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+    auto* allocCaption = new wxStaticText(under, wxID_ANY, "Research allocation:");
+    allocCaption->SetFont(m_fontText);
+    allocCaption->SetForegroundColour(m_palette.text);
+    allocRow->Add(allocCaption, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+
+    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 5,
+        wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
     m_resourcesSlider->SetMinSize(wxSize(-1, 40));
-    us->Add(m_resourcesSlider, 0, wxALL | wxEXPAND, 8);
+    allocRow->Add(m_resourcesSlider, 1, wxALIGN_CENTER_VERTICAL | wxEXPAND);
 
-    m_resourcesSlider->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
-        {
-            m_resourcesGlobalResearch = ClampGlobalResearch(m_resourcesSlider->GetValue());
-            // persist global setting inside meta territory entry
-            m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
-            SaveStrategicState();
-            RefreshResourcesPage();
-        });
+    m_resourcesRatioLabel = new wxStaticText(under, wxID_ANY, "Money: 20  Research: 0");
+    m_resourcesRatioLabel->SetFont(m_fontText);
+    m_resourcesRatioLabel->SetForegroundColour(m_palette.statusHeading);
+    allocRow->Add(m_resourcesRatioLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 12);
+    us->Add(allocRow, 0, wxALL | wxEXPAND, 8);
 
-    auto* hint = new wxStaticText(under, wxID_ANY,
-        "Rule: 1 Research = 4 Money.\n"
-        "Each turn: owned territory spends 1 resource until depleted (20 total).\n"
-        "Money yields: up to 20 per territory. Research yields: up to 5 per territory.");
-    hint->SetFont(m_fontText);
-    hint->SetForegroundColour(m_palette.inactive);
-    us->Add(hint, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    // ── Per-territory resource table ──
+    m_resourcesTable = new wxListCtrl(under, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_HRULES | wxLC_NO_SORT_HEADER);
+    m_resourcesTable->SetFont(m_fontText);
+    m_resourcesTable->SetBackgroundColour(m_palette.background);
+    m_resourcesTable->SetForegroundColour(m_palette.text);
+    m_resourcesTable->SetMinSize(wxSize(1, 1));
+    m_resourcesTable->InsertColumn(0, "Territory",  wxLIST_FORMAT_LEFT,   -1);
+    m_resourcesTable->InsertColumn(1, "Resources",  wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(2, "Money/turn", wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(3, "Res./turn",  wxLIST_FORMAT_CENTER, -1);
+    // Stretch columns after first layout
+    m_resourcesTable->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev)
+    {
+        ev.Skip();
+        if (!m_resourcesTable) return;
+        const int w = m_resourcesTable->GetClientSize().GetWidth();
+        if (w <= 0) return;
+        m_resourcesTable->SetColumnWidth(0, w * 25 / 100);
+        m_resourcesTable->SetColumnWidth(1, w * 30 / 100);
+        m_resourcesTable->SetColumnWidth(2, w * 25 / 100);
+        m_resourcesTable->SetColumnWidth(3, w * 20 / 100);
+    });
+    // Click in table also selects territory
+    m_resourcesTable->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev)
+    {
+        const long row = ev.GetIndex();
+        if (!m_resourcesTable || row < 0) return;
+        const long tid = m_resourcesTable->GetItemData(row);
+        if (tid <= 0) return;
+        m_selectedTerritory = (int)tid;
+        RefreshResourcesPage();
+    });
+    us->Add(m_resourcesTable, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    m_resourcesSlider->Bind(wxEVT_SLIDER, [this](wxCommandEvent&)
+    {
+        if (!m_resourcesSlider) return;
+        m_resourcesGlobalResearch = ClampGlobalResearch(m_resourcesSlider->GetValue());
+        m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
+        SaveStrategicState();
+        RefreshResourcesPage();
+    });
 
     under->SetSizer(us);
     s->Add(under, 2, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     m_resourcesPanel->SetSizer(s);
-
-    RefreshResourcesPage();
 }
 
 
@@ -3158,41 +3209,83 @@ void StrategicLevelFrame::RefreshResourcesPage()
             m_territoryResources[t.id] = TerritoryResourceState{};
     }
 
-    // Load global allocation from meta entry if present (keeps compatibility with older saves)
+    // Load global allocation from meta entry
     auto itMeta = m_territoryResources.find(kResourcesMetaTerritoryId);
     if (itMeta != m_territoryResources.end())
         m_resourcesGlobalResearch = ClampGlobalResearch(itMeta->second.researchCarry);
     else
-        m_territoryResources[kResourcesMetaTerritoryId].researchCarry = ClampGlobalResearch(m_resourcesGlobalResearch);
+        m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
 
     const int R = ClampGlobalResearch(m_resourcesGlobalResearch);
     const int M = 20 - 4 * R;
 
+    // ── Header label ──
     if (m_resourcesSelectedLabel)
     {
-        if (m_selectedTerritory > 0)
+        const bool ownedSel = (m_selectedTerritory > 0 &&
+            std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(),
+                      m_selectedTerritory) != m_ownedTerritories.end());
+        if (ownedSel)
         {
             const auto& st = m_territoryResources[m_selectedTerritory];
-            m_resourcesSelectedLabel->SetLabel(wxString::Format("Territory T%02d - Resources: %d (%d)",
-                m_selectedTerritory, st.total, st.remaining));
+            m_resourcesSelectedLabel->SetLabel(
+                wxString::Format("Territory T%02d  -  Resources: %d / %d",
+                    m_selectedTerritory, st.remaining, st.total));
         }
         else
         {
-            m_resourcesSelectedLabel->SetLabel("Resources");
+            m_resourcesSelectedLabel->SetLabel(
+                wxString::Format("Owned territories: %d", (int)m_ownedTerritories.size()));
         }
     }
 
+    // ── Slider + ratio label ──
     if (m_resourcesSlider)
-    {
         m_resourcesSlider->SetValue(R);
-        m_resourcesSlider->Enable(true);
-    }
-
     if (m_resourcesRatioLabel)
+        m_resourcesRatioLabel->SetLabel(
+            wxString::Format("Money: %d  Research: %d", M, R));
+
+    // ── Per-territory table ──
+    if (m_resourcesTable)
     {
-        m_resourcesRatioLabel->SetLabel(wxString::Format("Allocation: Money %d / Research %d", M, R));
+        m_resourcesTable->Freeze();
+        m_resourcesTable->DeleteAllItems();
+
+        const wxColour clrOwned   = m_palette.text;
+        const wxColour clrDepleted(0x88, 0x44, 0x44);
+        const wxColour clrSelected = m_palette.heading;
+
+        for (int tid : m_ownedTerritories)
+        {
+            if (tid <= 0) continue;
+            const auto& st = m_territoryResources.count(tid)
+                             ? m_territoryResources.at(tid) : TerritoryResourceState{};
+
+            const wxString resStr  = wxString::Format("%d / %d", st.remaining, st.total);
+            const wxString monStr  = wxString::Format("%.1f", (double)M / 20.0);
+            const wxString resRStr = (R > 0)
+                ? wxString::Format("1/%d", 20 / R)
+                : wxString("-");
+
+            long row = m_resourcesTable->InsertItem(
+                m_resourcesTable->GetItemCount(), wxString::Format("T%02d", tid));
+            m_resourcesTable->SetItem(row, 1, resStr);
+            m_resourcesTable->SetItem(row, 2, monStr);
+            m_resourcesTable->SetItem(row, 3, resRStr);
+            m_resourcesTable->SetItemData(row, (long)tid);  // store tid for click handler
+
+            const bool depleted = (st.remaining <= 0);
+            const bool selected = (tid == m_selectedTerritory);
+            m_resourcesTable->SetItemTextColour(row,
+                selected ? clrSelected : (depleted ? clrDepleted : clrOwned));
+        }
+        m_resourcesTable->Thaw();
     }
 
+    // ── Map overlay + canvas refresh ──
+    // Always rebuild overlay - selected territory highlight may have changed
+    MarkOverlayDirty();
     if (m_resourcesCanvas)
         m_resourcesCanvas->Refresh();
 }
@@ -3537,6 +3630,8 @@ void StrategicLevelFrame::EnsureResearchLoaded()
         m_researchActiveIndex = 0;
         m_researchActiveId = m_researchDb[0].id;
     }
+    if (!m_researchDb.empty() && m_researchBrowseIndex < 0)
+        m_researchBrowseIndex = 0;
 }
 
 void StrategicLevelFrame::EnterResearchMode()
@@ -3571,8 +3666,9 @@ void StrategicLevelFrame::SelectResearchIndex(int idx)
     if (idx < 0 || idx >= (int)m_researchDb.size())
         return;
 
-    m_researchActiveIndex = idx;
-    m_researchActiveId = m_researchDb[idx].id;
+    // Clicking in the list only updates the browse selection (bottom info box).
+    // The active research item (top box) only changes when Start is pressed.
+    m_researchBrowseIndex = idx;
 
     RefreshResearchUI();
 }
@@ -3591,7 +3687,22 @@ void StrategicLevelFrame::OnResearchAlloc(wxCommandEvent&)
 
 void StrategicLevelFrame::OnResearchStartStop(wxCommandEvent&)
 {
-    m_researchAllocPerTurn = (m_researchAllocPerTurn > 0) ? 0 : 1;
+    if (m_researchAllocPerTurn > 0)
+    {
+        // Stop
+        m_researchAllocPerTurn = 0;
+    }
+    else
+    {
+        // Start – commit browsed item as the active research target
+        if (m_researchBrowseIndex >= 0 && m_researchBrowseIndex < (int)m_researchDb.size())
+        {
+            m_researchActiveIndex = m_researchBrowseIndex;
+            m_researchActiveId    = m_researchDb[m_researchActiveIndex].id;
+        }
+        if (m_researchActiveIndex >= 0)
+            m_researchAllocPerTurn = 1;
+    }
     RefreshResearchUI();
     SaveStrategicState();
 }
@@ -3675,7 +3786,7 @@ void StrategicLevelFrame::RefreshResearchUI()
             else if (locked)  m_researchList->SetItemTextColour(row, clrLocked);
             else              m_researchList->SetItemTextColour(row, clrNormal);
 
-            if (i == m_researchActiveIndex)
+            if (i == m_researchBrowseIndex)
                 selRow = row;
             ++row;
         }
@@ -3751,10 +3862,10 @@ void StrategicLevelFrame::RefreshResearchUI()
     // ----------------------------------------------------------------
     if (m_researchText)
     {
-        if (m_researchActiveIndex >= 0
-            && m_researchActiveIndex < (int)m_researchDb.size())
+        const int bi = (m_researchBrowseIndex >= 0) ? m_researchBrowseIndex : m_researchActiveIndex;
+        if (bi >= 0 && bi < (int)m_researchDb.size())
         {
-            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            const ResearchItem& cur = m_researchDb[bi];
             wxString txt = cur.info.empty() ? cur.brief : cur.info;
             if (cur.id >= 0 && m_researchCompleted.count(cur.id))
                 txt << "\n\n[COMPLETED]";
@@ -3824,12 +3935,14 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 {
     if (m_researchMode) LeaveResearchMode();
-    // Ensure we display up-to-date values when the player switches to the Resources screen.
     SaveStrategicState();
-    RefreshResourcesPage();
 
+    // Switch page FIRST so canvas has correct size when Refresh triggers paint
     if (m_leftBook)
         m_leftBook->SetSelection(2);
+
+    m_overlayDirty = true;
+    RefreshResourcesPage();   // fills table + triggers canvas Refresh internally
 }
 
 void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
@@ -3914,7 +4027,15 @@ void StrategicLevelFrame::OnMapMouseMove(wxMouseEvent& ev)
             {
                 // In game mode, only hover visible territories
                 if (!m_gameModeEnabled || (tid < (int)m_visibleTerritory.size() && m_visibleTerritory[tid]))
-                    newHover = tid;
+                {
+                    // In resources view, only highlight owned territories
+                    const bool resourcesView = (m_leftBook && m_leftBook->GetCurrentPage() == m_resourcesPanel);
+                    if (!resourcesView ||
+                        std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end())
+                    {
+                        newHover = tid;
+                    }
+                }
             }
         }
     }
@@ -4016,6 +4137,12 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     {
         if (!isVisible(chosenTerritoryId))
             return;
+        // In resources view, only select owned territories
+        if (resourcesView)
+        {
+            const bool owned = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), chosenTerritoryId) != m_ownedTerritories.end();
+            if (!owned) return;
+        }
         SelectTerritoryById(chosenTerritoryId);
         return;
     }
@@ -6081,7 +6208,9 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
             {
                 wxImage ovImg(bw, bh, true);
                 ovImg.InitAlpha();
-                std::memset(ovImg.GetAlpha(), 0, (size_t)bw * (size_t)bh);
+                // Start fully black – covers background AND areas outside all territories
+                std::memset(ovImg.GetData(),  0,    (size_t)bw * (size_t)bh * 3);
+                std::memset(ovImg.GetAlpha(), 255,  (size_t)bw * (size_t)bh);
 
                 auto isOwned = [&](int tid) -> bool {
                     return std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end();
@@ -6104,16 +6233,27 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                         bool isBorder = false;
                         const int tid = decodeTid(v, isBorder);
                         if (tid <= 0) continue;
-                        if (!isOwned(tid)) continue;
 
-                        auto it = m_territoryResources.find(tid);
-                        TerritoryResourceState st = (it != m_territoryResources.end()) ? it->second : TerritoryResourceState{};
-                        const bool depleted = (st.remaining <= 0);
+                        unsigned char r, g, b, a;
+                        if (!isOwned(tid))
+                        {
+                            // Already black from initial fill – no change needed
+                            continue;
+                        }
+                        else
+                        {
+                            auto it = m_territoryResources.find(tid);
+                            TerritoryResourceState st = (it != m_territoryResources.end()) ? it->second : TerritoryResourceState{};
+                            const bool depleted = (st.remaining <= 0);
+                            const bool selected = (tid == m_selectedTerritory);
 
-                        const unsigned char r = depleted ? 0x88 : 0x10;
-                        const unsigned char g = depleted ? 0x88 : 0xD0;
-                        const unsigned char b = depleted ? 0x88 : 0x10;
-                        const unsigned char a = depleted ? 120 : 140;
+                            if (selected)
+                            { r = 0xFF; g = 0xF6; b = 0x04; a = 130; }  // yellow highlight
+                            else if (depleted)
+                            { r = 0x88; g = 0x44; b = 0x44; a = 160; }  // red-grey
+                            else
+                            { r = 0x10; g = 0xD0; b = 0x10; a = 120; }  // green
+                        }
 
                         ovImg.SetRGB(px, py, r, g, b);
                         ovImg.SetAlpha(px, py, a);

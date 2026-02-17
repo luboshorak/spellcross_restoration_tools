@@ -393,6 +393,7 @@ bool m_commanderNamesLoaded = false;
     wxStaticText* m_resourcesSelectedLabel = nullptr;
     wxSlider* m_resourcesSlider = nullptr;
     wxStaticText* m_resourcesRatioLabel = nullptr;
+    wxListCtrl* m_resourcesTable = nullptr;
 
     wxBoxSizer* m_mapSizer = nullptr;
     wxListCtrl* m_cmdRoster = nullptr;
@@ -420,7 +421,8 @@ bool m_commanderNamesLoaded = false;
     bool m_researchRefreshing = false;  // re-entrancy guard for RefreshResearchUI
     std::vector<ResearchItem> m_researchDb;
     int m_researchActiveId = -1;      // id of active research (matches ResearchItem.id for numeric, or -1 otherwise)
-    int m_researchActiveIndex = -1;   // index in m_researchDb
+    int m_researchActiveIndex = -1;   // index in m_researchDb of the item currently being researched
+    int m_researchBrowseIndex = -1;   // index in m_researchDb of the item selected in list (bottom box)
     int m_researchAllocPerTurn = 0;   // how many points to spend per turn from m_research pool
     std::unordered_map<int, int> m_researchProgressById; // id -> points invested
     std::unordered_set<int> m_researchCompleted;         // completed ids
