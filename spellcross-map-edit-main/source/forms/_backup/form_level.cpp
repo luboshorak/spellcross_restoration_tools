@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <fstream>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -964,6 +966,33 @@ static std::filesystem::path GetStableBaseDir() {
 }
 
 // Forward declarations (definitions are later in this file)
+
+// ------------------------------------------------------------------
+// Research persistence glue
+// We MUST NOT change SaveStrategicStateFile / LoadStrategicStateFile signatures.
+// So we pass research state via thread-local pointers set by StrategicLevelFrame::SaveStrategicState / LoadStrategicState.
+// ------------------------------------------------------------------
+struct ResearchPersistSaveView
+{
+    int activeId = -1;
+    int activeIndex = -1;
+    int allocPerTurn = 0;
+    const std::unordered_map<int, int>* progressById = nullptr;
+    const std::unordered_set<int>* completed = nullptr;
+};
+
+struct ResearchPersistLoadView
+{
+    int* activeId = nullptr;
+    int* activeIndex = nullptr;
+    int* allocPerTurn = nullptr;
+    std::unordered_map<int, int>* progressById = nullptr;
+    std::unordered_set<int>* completed = nullptr;
+};
+
+static thread_local const ResearchPersistSaveView* g_researchPersistSave = nullptr;
+static thread_local ResearchPersistLoadView* g_researchPersistLoad = nullptr;
+
 static bool LoadStrategicStateFile(
     const std::filesystem::path& path,
     const LevelData& level,
@@ -1603,17 +1632,80 @@ void StrategicLevelFrame::BuildUI()
     m_statsPanel->SetBackgroundColour(m_palette.background);
     BuildStatsPage();
 
+
+    // --- Page 4: Research – left side (active research + browser detail) ---
+    m_researchPanel = new wxPanel(m_leftBook);
+    m_researchPanel->SetBackgroundColour(m_palette.background);
+    // Must NOT contribute a large minimum size – wxSimplebook propagates minimums
+    // from ALL pages, not just the visible one, which would push the right panel off screen.
+    m_researchPanel->SetMinSize(wxSize(1, 1));
+    {
+        auto* rs = new wxBoxSizer(wxVERTICAL);
+
+        // ── Top box: BRF text of the currently active research ──
+        m_researchActiveText = new wxTextCtrl(
+            m_researchPanel, wxID_ANY, "",
+            wxDefaultPosition, wxDefaultSize,
+            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+        m_researchActiveText->SetFont(m_fontText);
+        m_researchActiveText->SetBackgroundColour(m_palette.background);
+        m_researchActiveText->SetForegroundColour(m_palette.text);
+        m_researchActiveText->SetMinSize(wxSize(1, 1));
+        rs->Add(m_researchActiveText, 2, wxALL | wxEXPAND, 8);
+
+        // ── Progress bar + STOP/START button ──
+        auto* gRow = new wxBoxSizer(wxHORIZONTAL);
+
+        m_researchGauge = new wxGauge(m_researchPanel, wxID_ANY, 100,
+            wxDefaultPosition, wxSize(-1, 18), wxGA_HORIZONTAL);
+        m_researchGauge->SetValue(0);
+        gRow->Add(m_researchGauge, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+
+        m_researchGaugeLabel = new wxStaticText(m_researchPanel, wxID_ANY, "0/0");
+        m_researchGaugeLabel->SetFont(m_fontText);
+        m_researchGaugeLabel->SetForegroundColour(m_palette.text);
+        gRow->Add(m_researchGaugeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+
+        m_btnResearchStart = new wxButton(m_researchPanel, wxID_ANY, "Start");
+        m_btnResearchStart->SetFont(m_fontText);
+        m_btnResearchStart->SetForegroundColour(m_palette.buttonText);
+        m_btnResearchStart->SetBackgroundColour(m_palette.buttonBackground);
+        m_btnResearchStart->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnResearchStartStop, this);
+        gRow->Add(m_btnResearchStart, 0, wxALIGN_CENTER_VERTICAL);
+
+        rs->Add(gRow, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+        // ── Bottom box: INF text of the selected/browsed research item ──
+        m_researchText = new wxTextCtrl(
+            m_researchPanel, wxID_ANY, "",
+            wxDefaultPosition, wxDefaultSize,
+            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+        m_researchText->SetFont(m_fontText);
+        m_researchText->SetBackgroundColour(m_palette.background);
+        m_researchText->SetForegroundColour(m_palette.text);
+        m_researchText->SetMinSize(wxSize(1, 1));
+        rs->Add(m_researchText, 3, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+        m_researchPanel->SetSizer(rs);
+    }
+
     m_leftBook->AddPage(m_mapPanel, "Strategic map", true);
     m_leftBook->AddPage(hierarchyPanel, "Hierarchy", false);
     m_leftBook->AddPage(m_resourcesPanel, "Resources", false);
     m_leftBook->AddPage(m_statsPanel, "Statistics", false);
+    m_leftBook->AddPage(m_researchPanel, "Research", false);
 
     mainSizer->Add(m_leftBook, 4, wxEXPAND);
 
     // ============================================================
     // MIDDLE: player units (always visible)
     // ============================================================
-    auto* mid = new wxPanel(root);
+    // Book for middle area: roster vs research
+    m_midBook = new wxSimplebook(root, wxID_ANY);
+    m_midBook->SetBackgroundColour(m_palette.background);
+
+    m_midRosterPanel = new wxPanel(m_midBook);
+    auto* mid = m_midRosterPanel;
     mid->SetBackgroundColour(m_palette.background);
     auto* midSizer = new wxBoxSizer(wxVERTICAL);
 
@@ -1671,7 +1763,55 @@ void StrategicLevelFrame::BuildUI()
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
-    mainSizer->Add(mid, 1, wxEXPAND);
+    m_midBook->AddPage(m_midRosterPanel, "Roster", true);
+
+    // --- Middle Research page – categorized list with yellow group headers ---
+    m_midResearchPanel = new wxPanel(m_midBook);
+    m_midResearchPanel->SetBackgroundColour(m_palette.background);
+    m_midResearchPanel->SetMinSize(wxSize(1, 1));
+    {
+        auto* rs = new wxBoxSizer(wxVERTICAL);
+        auto* rtitle = CreateStrategicLabel(
+            m_midResearchPanel,
+            { { "Research", m_palette.heading, &m_fontHeading } },
+            m_fontHeading,
+            m_palette.shadow,
+            &m_palette.background);
+        rs->Add(rtitle, 0, wxALL, 8);
+
+        // wxListCtrl (single column, no header) – supports SetItemTextColour per row
+        m_researchList = new wxListCtrl(
+            m_midResearchPanel, wxID_ANY,
+            wxDefaultPosition, wxDefaultSize,
+            wxLC_REPORT | wxLC_NO_HEADER | wxLC_SINGLE_SEL);
+        m_researchList->SetFont(m_fontText);
+        m_researchList->SetBackgroundColour(m_palette.background);
+        m_researchList->SetForegroundColour(m_palette.text);
+        m_researchList->SetMinSize(wxSize(1, 1));
+        m_researchList->InsertColumn(0, "", wxLIST_FORMAT_LEFT, -1);
+        m_researchList->Bind(wxEVT_LIST_ITEM_SELECTED,
+            [this](wxListEvent& ev) {
+                if (m_researchRefreshing) return;  // ignore events during repopulation
+                const long row = ev.GetIndex();
+                if (!m_researchList || row < 0) return;
+                // Check for group header row (sentinel = max wxUIntPtr value)
+                const wxUIntPtr data = m_researchList->GetItemData(row);
+                if (data == static_cast<wxUIntPtr>(-1))
+                {
+                    // Header clicked – deselect and do nothing
+                    m_researchList->SetItemState(row, 0, wxLIST_STATE_SELECTED);
+                    return;
+                }
+                SelectResearchIndex(static_cast<int>(data));
+            });
+        rs->Add(m_researchList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+        m_midResearchPanel->SetSizer(rs);
+    }
+    m_midBook->AddPage(m_midResearchPanel, "Research", false);
+
+    mainSizer->Add(m_midBook, 1, wxEXPAND);
+
 
     // ============================================================
     // RIGHT: status + actions (always visible, consistent layout)
@@ -2930,6 +3070,9 @@ void StrategicLevelFrame::RefreshUI()
         const bool haveSpace = (int)m_playerCommanders.size() < 14;
         m_btnBuyCmd->Enable(haveOffer && haveSpace);
     }
+
+    if (m_researchMode)
+        RefreshResearchUI();
 }
 
 
@@ -3102,14 +3245,577 @@ void StrategicLevelFrame::ApplyResourceTickEndTurn()
     RefreshResourcesPage();
 }
 
+// ============================================================
+// Research system (Strategic level)
+// ============================================================
+
+// CP895 (Kamenický / Czech DOS encoding) → Unicode codepoint table.
+// Verified against test data from RESEARCH.CZ and sample BRF/INF files.
+static const uint16_t kCp895ToUnicode[256] = {
+    // 0x00-0x7F: identical to ASCII
+    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
+    0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F,
+    0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
+    0x0018, 0x0019, 0x001A, 0x001B, 0x001C, 0x001D, 0x001E, 0x001F,
+    0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027,
+    0x0028, 0x0029, 0x002A, 0x002B, 0x002C, 0x002D, 0x002E, 0x002F,
+    0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
+    0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
+    0x0040, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
+    0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
+    0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
+    0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x005F,
+    0x0060, 0x0061, 0x0062, 0x0063, 0x0064, 0x0065, 0x0066, 0x0067,
+    0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D, 0x006E, 0x006F,
+    0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,
+    0x0078, 0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F,
+    // 0x80-0xFF: CP895 Kamenický Czech/Slovak characters + box drawing + symbols
+    0x010C, 0x00FC, 0x00E9, 0x010F, 0x00E4, 0x010E, 0x0164, 0x010D,  // 80-87: Č ü é ď ä Ď Ť č
+    0x011B, 0x011A, 0x0139, 0x00CD, 0x00EE, 0x013D, 0x00C4, 0x00C1,  // 88-8F: ě Ě Ĺ Í î Ľ Ä Á
+    0x00C9, 0x017E, 0x017D, 0x00F4, 0x00F6, 0x00D3, 0x016F, 0x00DA,  // 90-97: É ž Ž ô ö Ó ů Ú
+    0x00FD, 0x00D6, 0x00DC, 0x0160, 0x013A, 0x0165, 0x0159, 0x0158,  // 98-9F: ý Ö Ü Š ĺ ť ř Ř
+    0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x0148, 0x0147, 0x016E, 0x00D4,  // A0-A7: á í ó ú ň Ň Ů Ô
+    0x0161, 0x0159, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,  // A8-AF: š ř ¬ ½ ¼ ¡ « »
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,  // B0-B7: box drawing
+    0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,  // B8-BF
+    0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,  // C0-C7
+    0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,  // C8-CF
+    0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,  // D0-D7
+    0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,  // D8-DF
+    0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,  // E0-E7: α ß Γ π Σ σ μ τ
+    0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,  // E8-EF
+    0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,  // F0-F7
+    0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,  // F8-FF
+};
+
+static wxString DecodeCp895Text(const std::string& bytes)
+{
+    wxString ws;
+    ws.reserve(bytes.size());
+    for (unsigned char b : bytes)
+        ws += static_cast<wxChar>(kCp895ToUnicode[b]);
+
+    ws.Replace("\r\n", "\n");
+    ws.Replace("\r", "\n");
+
+    // Strip trailing ~ sentinel used in some INF/BRF files
+    int tilde = ws.Find('~');
+    if (tilde != wxNOT_FOUND)
+        ws = ws.Left(tilde);
+
+    ws.Trim(true).Trim(false);
+    return ws;
+}
+
+// Keep old name as alias for any remaining call sites
+static wxString DecodeCp852Text(const std::string& bytes)
+{
+    return DecodeCp895Text(bytes);
+}
+
+void StrategicLevelFrame::EnsureResearchLoaded()
+{
+    if (!m_researchDb.empty())
+        return;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const fs::path base = GetStableBaseDir();
+    const fs::path researchDir = base / "temp" / "RESEARCH";
+    const fs::path commonDir   = base / "temp" / "COMMON";
+
+    auto loadFileBin = [&](const fs::path& p) -> std::string
+    {
+        std::ifstream f(p, std::ios::binary);
+        if (!f) return {};
+        return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    };
+
+    // ----------------------------------------------------------------
+    // 1.  Parse RESEARCH.DEF → group, level, cost (Time), flags, prereqs per item
+    // ----------------------------------------------------------------
+    struct DefRec
+    {
+        wxString group;
+        int level = 0;
+        int time  = 0;
+        wxString flags;
+        std::vector<int> prereqs;
+    };
+    std::unordered_map<int, DefRec> defById;
+
+    {
+        const std::string raw = loadFileBin(commonDir / "RESEARCH.DEF");
+        if (!raw.empty())
+        {
+            DefRec cur;
+            int curId = -1;
+            bool inside = false;
+            std::istringstream ss(raw);
+            std::string line;
+            while (std::getline(ss, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                size_t s = line.find_first_not_of(" \t");
+                if (s == std::string::npos) continue;
+                line = line.substr(s);
+                if (line[0] == ';') continue;
+
+                // Item(N) {
+                static const std::regex rxItem(R"(Item\((\d+)\)\s*\{)");
+                std::smatch m;
+                if (std::regex_search(line, m, rxItem))
+                {
+                    cur = DefRec{};
+                    curId = std::stoi(m[1].str());
+                    inside = true;
+                    continue;
+                }
+                if (!inside) continue;
+                if (line == "}") {
+                    if (curId >= 0) defById[curId] = std::move(cur);
+                    inside = false; curId = -1;
+                    continue;
+                }
+
+                static const std::regex rxGroup(R"(Group\((\w+)\))");
+                static const std::regex rxFlags(R"(Flags\((\w+)\))");
+                static const std::regex rxLevel(R"(Level\((\d+)\))");
+                static const std::regex rxTime (R"(Time\((\d+)\))");
+                static const std::regex rxOr   (R"(ORconnections\(([^)]+)\))");
+
+                if (std::regex_search(line, m, rxGroup)) cur.group = wxString::FromUTF8(m[1].str());
+                if (std::regex_search(line, m, rxFlags)) cur.flags = wxString::FromUTF8(m[1].str());
+                if (std::regex_search(line, m, rxLevel)) cur.level = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxTime))  cur.time  = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxOr))
+                {
+                    std::istringstream argss(m[1].str());
+                    std::string tok;
+                    while (std::getline(argss, tok, ','))
+                    {
+                        size_t ts = tok.find_first_not_of(" \t");
+                        if (ts != std::string::npos)
+                            cur.prereqs.push_back(std::stoi(tok.substr(ts)));
+                    }
+                }
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 2.  Title list from RESEARCH.CZ / fallback .ENG
+    //     Line N (0-based) = title for Item(N)
+    // ----------------------------------------------------------------
+    std::vector<wxString> titleByIndex;
+    {
+        std::string raw;
+        for (const char* name : {"RESEARCH.CZ", "RESEARCH.ENG"})
+        {
+            raw = loadFileBin(commonDir / name);
+            if (!raw.empty()) break;
+        }
+        if (!raw.empty())
+        {
+            std::istringstream ss(raw);
+            std::string line;
+            while (std::getline(ss, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                // Strip trailing control chars (0x1A etc.)
+                while (!line.empty() && (unsigned char)line.back() < 0x20)
+                    line.pop_back();
+                titleByIndex.push_back(DecodeCp895Text(line));
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 3.  BRF / INF texts from temp/RESEARCH/
+    // ----------------------------------------------------------------
+    struct TextRec { wxString inf, brf; };
+    std::unordered_map<int, TextRec> textById;
+
+    if (fs::exists(researchDir, ec) && fs::is_directory(researchDir, ec))
+    {
+        static const std::regex rxFile(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)",
+                                       std::regex_constants::icase);
+        for (auto it = fs::directory_iterator(researchDir, ec);
+             it != fs::directory_iterator(); ++it)
+        {
+            if (ec) break;
+            if (!it->is_regular_file(ec)) continue;
+            const std::string fn = it->path().filename().string();
+            std::smatch m;
+            if (!std::regex_match(fn, m, rxFile)) continue;
+
+            std::string idStr = m[2].matched ? m[2].str() : "";
+            std::string ext   = m[3].str();
+            for (auto& ch : ext) ch = (char)std::toupper((unsigned char)ch);
+
+            if (idStr.empty()) continue; // skip RACES.* for now
+
+            const std::string raw = loadFileBin(it->path());
+            if (raw.empty()) continue;
+            wxString decoded = DecodeCp895Text(raw);
+
+            int id = std::atoi(idStr.c_str());
+            if (ext == "INF") textById[id].inf = decoded;
+            else               textById[id].brf = decoded;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 4.  Build m_researchDb
+    // ----------------------------------------------------------------
+    m_researchDb.clear();
+
+    // All IDs from DEF (source of truth) + any with text but missing from DEF
+    std::unordered_set<int> allIds;
+    for (auto& kv : defById)  allIds.insert(kv.first);
+    for (auto& kv : textById) allIds.insert(kv.first);
+
+    for (int id : allIds)
+    {
+        const DefRec*  def  = defById.count(id)  ? &defById[id]  : nullptr;
+        const TextRec* text = textById.count(id)  ? &textById[id] : nullptr;
+
+        // Special items are internal game triggers, not player-researchable
+        if (def && def->flags == "Special")
+            continue;
+
+        // Items with Time(0) are already available by default (base unit types etc.)
+        // – they do not appear in the research screen.
+        if (def && def->time == 0)
+            continue;
+
+        ResearchItem item;
+        item.id    = id;
+        item.code  = wxString::Format("R%03d", id);
+        item.title = (id >= 0 && id < (int)titleByIndex.size() && !titleByIndex[id].empty())
+                     ? titleByIndex[id] : item.code;
+
+        if (text) { item.brief = text->brf; item.info = text->inf; }
+
+        if (def)
+        {
+            item.group        = def->group;
+            item.level        = def->level;
+            item.cost         = std::max(1, def->time);
+            item.flags        = def->flags;
+            item.prerequisites = def->prereqs;
+        }
+        else
+        {
+            item.cost = 20;
+        }
+
+        m_researchDb.push_back(std::move(item));
+    }
+
+    // Sort: group order → level → id
+    auto groupOrder = [](const wxString& g) -> int {
+        if (g == "Global")       return 0;
+        if (g == "Technologies") return 1;
+        if (g == "Upgrades")     return 2;
+        if (g == "Races")        return 3;
+        return 4;
+    };
+    std::sort(m_researchDb.begin(), m_researchDb.end(),
+        [&](const ResearchItem& a, const ResearchItem& b)
+        {
+            int ga = groupOrder(a.group), gb = groupOrder(b.group);
+            if (ga != gb) return ga < gb;
+            if (a.level != b.level) return a.level < b.level;
+            return a.id < b.id;
+        });
+
+    // Preselect first item if nothing active yet
+    if (!m_researchDb.empty() && m_researchActiveIndex < 0)
+    {
+        m_researchActiveIndex = 0;
+        m_researchActiveId = m_researchDb[0].id;
+    }
+}
+
+void StrategicLevelFrame::EnterResearchMode()
+{
+    EnsureResearchLoaded();
+    m_researchMode = true;
+
+    // Switch pages: left details + middle list
+    if (m_leftBook) m_leftBook->SetSelection(4);
+    if (m_midBook)  m_midBook->SetSelection(1);
+
+    // Update button label
+    if (m_btnResearch) m_btnResearch->SetLabel("Back");
+
+    RefreshResearchUI();
+}
+
+void StrategicLevelFrame::LeaveResearchMode()
+{
+    m_researchMode = false;
+
+    if (m_leftBook) m_leftBook->SetSelection(0);
+    if (m_midBook)  m_midBook->SetSelection(0);
+
+    if (m_btnResearch) m_btnResearch->SetLabel("Research");
+
+    RefreshUI();
+}
+
+void StrategicLevelFrame::SelectResearchIndex(int idx)
+{
+    if (idx < 0 || idx >= (int)m_researchDb.size())
+        return;
+
+    m_researchActiveIndex = idx;
+    m_researchActiveId = m_researchDb[idx].id;
+
+    RefreshResearchUI();
+}
+
+void StrategicLevelFrame::OnResearchList(wxCommandEvent& ev)
+{
+    // Selection handling is done via wxEVT_LIST_ITEM_SELECTED lambda bound in BuildUI.
+    // This stub remains for EVT_TABLE compatibility if needed.
+    (void)ev;
+}
+
+void StrategicLevelFrame::OnResearchAlloc(wxCommandEvent&)
+{
+    // Allocation slider removed – research uses all available points automatically.
+}
+
+void StrategicLevelFrame::OnResearchStartStop(wxCommandEvent&)
+{
+    m_researchAllocPerTurn = (m_researchAllocPerTurn > 0) ? 0 : 1;
+    RefreshResearchUI();
+    SaveStrategicState();
+}
+
+void StrategicLevelFrame::RefreshResearchUI()
+{
+    if (!m_researchList && !m_researchText && !m_researchActiveText)
+        return;
+
+    // Re-entrancy guard: SetItemState fires wxEVT_LIST_ITEM_SELECTED which
+    // calls SelectResearchIndex -> RefreshResearchUI -> DeleteAllItems -> crash.
+    if (m_researchRefreshing)
+        return;
+    m_researchRefreshing = true;
+    struct RGuard { bool& f; ~RGuard(){ f = false; } } _rg{m_researchRefreshing};
+
+    EnsureResearchLoaded();
+
+    const int campaignLevel = m_gameModeEnabled
+        ? std::max(1, (m_turn / 8) + 1) : 999;
+
+    auto isUnlocked = [&](const ResearchItem& it) -> bool {
+        if (it.prerequisites.empty()) return true;
+        for (int pre : it.prerequisites)
+            if (m_researchCompleted.count(pre)) return true;
+        return false;
+    };
+
+    // ----------------------------------------------------------------
+    // Categorized list (wxListCtrl)
+    // ItemData: (wxUIntPtr)-1 = group header row (not selectable)
+    //           other values  = index into m_researchDb
+    // ----------------------------------------------------------------
+    static constexpr wxUIntPtr kHdrSentinel = static_cast<wxUIntPtr>(-1);
+
+    if (m_researchList)
+    {
+        m_researchList->Freeze();
+        m_researchList->DeleteAllItems();
+
+        const wxColour clrHeader = m_palette.heading;
+        const wxColour clrNormal = m_palette.text;
+        const wxColour clrDone  (0x4A, 0x7A, 0x4A);
+        const wxColour clrLocked(0x60, 0x60, 0x60);
+
+        wxString lastGroup;
+        long row = 0, selRow = -1;
+
+        for (int i = 0; i < (int)m_researchDb.size(); ++i)
+        {
+            const ResearchItem& it = m_researchDb[i];
+            if (m_gameModeEnabled && it.level > campaignLevel)
+                continue;
+
+            // Group header
+            if (it.group != lastGroup)
+            {
+                lastGroup = it.group;
+                if (!lastGroup.empty())
+                {
+                    m_researchList->InsertItem(row, lastGroup);
+                    m_researchList->SetItemData(row, kHdrSentinel);
+                    m_researchList->SetItemTextColour(row, clrHeader);
+                    ++row;
+                }
+            }
+
+            const bool done   = (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
+            const bool locked = !isUnlocked(it);
+            const bool active = (it.id == m_researchActiveId && m_researchAllocPerTurn > 0);
+
+            wxString label = wxString("  ") + it.title;
+            if (done)        label += " [+]";
+            else if (locked) label += " [?]";
+            else if (active) label += " >";
+
+            m_researchList->InsertItem(row, label);
+            m_researchList->SetItemData(row, static_cast<wxUIntPtr>(i));
+
+            if (done)         m_researchList->SetItemTextColour(row, clrDone);
+            else if (locked)  m_researchList->SetItemTextColour(row, clrLocked);
+            else              m_researchList->SetItemTextColour(row, clrNormal);
+
+            if (i == m_researchActiveIndex)
+                selRow = row;
+            ++row;
+        }
+
+        // Auto-fit column
+        if (row > 0)
+        {
+            m_researchList->SetColumnWidth(0, wxLIST_AUTOSIZE);
+            const int lw = m_researchList->GetClientSize().GetWidth();
+            if (m_researchList->GetColumnWidth(0) < lw)
+                m_researchList->SetColumnWidth(0, lw);
+        }
+
+        // Select active item (guard prevents re-entrant call here)
+        if (selRow >= 0)
+        {
+            m_researchList->SetItemState(selRow,
+                wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED,
+                wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
+            m_researchList->EnsureVisible(selRow);
+        }
+        m_researchList->Thaw();
+    }
+
+    // Start/Stop button
+    if (m_btnResearchStart)
+        m_btnResearchStart->SetLabel(m_researchAllocPerTurn > 0 ? "Stop" : "Start");
+
+    // ----------------------------------------------------------------
+    // Top box: BRF of the item currently being researched
+    // ----------------------------------------------------------------
+    if (m_researchActiveText)
+    {
+        if (m_researchActiveIndex >= 0
+            && m_researchActiveIndex < (int)m_researchDb.size()
+            && m_researchAllocPerTurn > 0)
+        {
+            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            m_researchActiveText->SetValue(cur.brief.empty() ? cur.info : cur.brief);
+        }
+        else
+            m_researchActiveText->SetValue(wxEmptyString);
+    }
+
+    // ----------------------------------------------------------------
+    // Progress gauge
+    // ----------------------------------------------------------------
+    if (m_researchGauge && m_researchGaugeLabel)
+    {
+        if (m_researchActiveIndex >= 0
+            && m_researchActiveIndex < (int)m_researchDb.size()
+            && m_researchAllocPerTurn > 0)
+        {
+            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            const int cost = std::max(1, cur.cost);
+            const int prog = m_researchProgressById.count(cur.id)
+                             ? m_researchProgressById.at(cur.id) : 0;
+            m_researchGauge->SetRange(cost);
+            m_researchGauge->SetValue(std::min(prog, cost));
+            m_researchGaugeLabel->SetLabel(
+                wxString::Format("%d/%d", std::min(prog, cost), cost));
+        }
+        else
+        {
+            m_researchGauge->SetRange(100);
+            m_researchGauge->SetValue(0);
+            m_researchGaugeLabel->SetLabel("0/0");
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Bottom box: INF of the item selected for browsing
+    // ----------------------------------------------------------------
+    if (m_researchText)
+    {
+        if (m_researchActiveIndex >= 0
+            && m_researchActiveIndex < (int)m_researchDb.size())
+        {
+            const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+            wxString txt = cur.info.empty() ? cur.brief : cur.info;
+            if (cur.id >= 0 && m_researchCompleted.count(cur.id))
+                txt << "\n\n[COMPLETED]";
+            else if (!isUnlocked(cur))
+                txt << "\n\n[LOCKED - prerequisite required]";
+            m_researchText->SetValue(txt);
+        }
+        else
+            m_researchText->SetValue("Select an item from the list.");
+    }
+}
+
+
+void StrategicLevelFrame::ApplyResearchTickEndTurn()
+{
+    // Research allocation is automatic: when research is active (m_researchAllocPerTurn > 0),
+    // ALL accumulated research points from resources are spent on the active item.
+    if (m_researchAllocPerTurn <= 0)
+        return;
+
+    EnsureResearchLoaded();
+    if (m_researchDb.empty() || m_researchActiveIndex < 0
+        || m_researchActiveIndex >= (int)m_researchDb.size())
+        return;
+
+    const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
+    if (cur.id < 0 || m_researchCompleted.count(cur.id))
+        return;
+
+    if (m_research <= 0)
+        return;
+
+    const int cost = std::max(1, cur.cost);
+    int& prog = m_researchProgressById[cur.id];
+
+    // Spend all available points this turn
+    const int spend = m_research;
+    m_research = 0;
+    prog += spend;
+
+    if (prog >= cost)
+    {
+        prog = cost;
+        m_researchCompleted.insert(cur.id);
+        m_researchAllocPerTurn = 0; // auto-stop when done
+        wxMessageBox(
+            wxString::Format("Research complete: %s", cur.title),
+            "Research", wxOK | wxICON_INFORMATION, this);
+    }
+}
+
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
+    if (m_researchMode) LeaveResearchMode();
     if (m_leftBook)
         m_leftBook->SetSelection(0);
 }
 
 void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 {
+    if (m_researchMode) LeaveResearchMode();
     if (m_leftBook)
         m_leftBook->SetSelection(1);
 }
@@ -3117,6 +3823,7 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 
 void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 {
+    if (m_researchMode) LeaveResearchMode();
     // Ensure we display up-to-date values when the player switches to the Resources screen.
     SaveStrategicState();
     RefreshResourcesPage();
@@ -3127,6 +3834,7 @@ void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 
 void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
 {
+    if (m_researchMode) LeaveResearchMode();
     // Ensure the stats page sees the latest state.
     SaveStrategicState();
     LoadRanksTable();
@@ -3438,15 +4146,10 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
 void StrategicLevelFrame::OnResearch(wxCommandEvent&)
 {
-    if (m_money >= 100) {
-        m_money -= 100;
-        m_research += 1;
-    }
-    else {
-        wxMessageBox("Not enough money for research (demo cost 100).", "Research", wxOK | wxICON_WARNING, this);
-    }
-    SaveStrategicState();
-    RefreshUI();
+    if (!m_researchMode)
+        EnterResearchMode();
+    else
+        LeaveResearchMode();
 }
 
 
@@ -4099,6 +4802,8 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 
     ApplyResourceTickEndTurn();
 
+
+    ApplyResearchTickEndTurn();
     // Commander offers are generated on end-turn (for the *new* turn).
     // Offers do not carry over between turns.
     // Store offer of commanders only for the current turn.
@@ -4220,9 +4925,65 @@ static bool LoadStrategicStateFile(
             ownedTerritories.push_back(id);
         }
 
-    // resources (optional)
+    
+    // research_state (optional)
+    if (g_researchPersistLoad && g_researchPersistLoad->progressById && g_researchPersistLoad->completed)
+    {
+        // defaults
+        if (g_researchPersistLoad->activeId) *g_researchPersistLoad->activeId = -1;
+        if (g_researchPersistLoad->activeIndex) *g_researchPersistLoad->activeIndex = -1;
+        if (g_researchPersistLoad->allocPerTurn) *g_researchPersistLoad->allocPerTurn = 0;
+        g_researchPersistLoad->progressById->clear();
+        g_researchPersistLoad->completed->clear();
+
+        // capture "research_state": { ... }  (or null)
+        std::smatch mmRS;
+                std::regex rs_re(R"("research_state"\s*:\s*(null|\{.*?\}))", std::regex_constants::ECMAScript | std::regex_constants::icase);
+        if (std::regex_search(data, mmRS, rs_re) && mmRS.size() > 1)
+        {
+            const std::string rsVal = mmRS[1].str();
+            if (!rsVal.empty() && rsVal[0] == '{')
+            {
+                (void)ParseJsonIntField(rsVal, "active_id", *g_researchPersistLoad->activeId);
+                (void)ParseJsonIntField(rsVal, "active_index", *g_researchPersistLoad->activeIndex);
+                (void)ParseJsonIntField(rsVal, "alloc_per_turn", *g_researchPersistLoad->allocPerTurn);
+
+                // progress object
+                std::smatch mmProg;
+                                std::regex prog_re(R"("progress"\s*:\s*\{(.*?)\})", std::regex_constants::ECMAScript | std::regex_constants::icase);
+                if (std::regex_search(rsVal, mmProg, prog_re) && mmProg.size() > 1)
+                {
+                    const std::string pobj = mmProg[1].str();
+                    // match pairs like "12": 3
+                    std::regex pair_re("\\\\\"(\\\\d+)\\\\\"\\\\s*:\\\\s*(-?\\\\d+)");
+                    for (auto it = std::sregex_iterator(pobj.begin(), pobj.end(), pair_re); it != std::sregex_iterator(); ++it)
+                    {
+                        const int id = std::atoi((*it)[1].str().c_str());
+                        const int val = std::atoi((*it)[2].str().c_str());
+                        (*g_researchPersistLoad->progressById)[id] = val;
+                    }
+                }
+
+                // completed array
+                std::smatch mmComp;
+                                std::regex comp_re(R"("completed"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
+                if (std::regex_search(rsVal, mmComp, comp_re) && mmComp.size() > 1)
+                {
+                    const std::string carr = mmComp[1].str();
+                    std::regex num_re("(-?\\\\d+)");
+                    for (auto it = std::sregex_iterator(carr.begin(), carr.end(), num_re); it != std::sregex_iterator(); ++it)
+                    {
+                        const int id = std::atoi((*it)[1].str().c_str());
+                        g_researchPersistLoad->completed->insert(id);
+                    }
+                }
+            }
+        }
+    }
+
+// resources (optional)
     std::smatch mmRes;
-    std::regex res_arr_re("\\\"resources\\\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript | std::regex::icase);
+        std::regex res_arr_re(R"("resources"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
     if (std::regex_search(data, mmRes, res_arr_re) && mmRes.size() > 1)
     {
         const std::string arr = mmRes[1].str();
@@ -4309,7 +5070,7 @@ static bool LoadStrategicStateFile(
         {
             out.clear();
             std::smatch mm;
-            std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex::ECMAScript);
+            std::regex arr_re(std::string("\"") + key + "\"\\s*:\\s*\\[(.*?)\\]", std::regex_constants::ECMAScript);
             if (!std::regex_search(data, mm, arr_re) || mm.size() < 2)
                 return;
 
@@ -4375,7 +5136,44 @@ static void SaveStrategicStateFile(
     }
     f << "],\n";
 
-    // Resources per-territory state (optional on load, defaults to 20/20)
+    
+    // Research (optional; driven by g_researchPersistSave)
+    if (g_researchPersistSave && g_researchPersistSave->progressById && g_researchPersistSave->completed)
+    {
+        f << "  \"research_state\": {\n";
+        f << "    \"active_id\": " << g_researchPersistSave->activeId << ",\n";
+        f << "    \"active_index\": " << g_researchPersistSave->activeIndex << ",\n";
+        f << "    \"alloc_per_turn\": " << g_researchPersistSave->allocPerTurn << ",\n";
+
+        // progress object: { "0": 12, "1": 3, ... }
+        f << "    \"progress\": {";
+        bool first = true;
+        for (const auto& kv : *g_researchPersistSave->progressById)
+        {
+            if (!first) f << ", ";
+            first = false;
+            f << "\\\"" << kv.first << "\\\": " << kv.second;
+        }
+        f << "},\n";
+
+        // completed array
+        f << "    \"completed\": [";
+        bool firstC = true;
+        for (const auto& id : *g_researchPersistSave->completed)
+        {
+            if (!firstC) f << ", ";
+            firstC = false;
+            f << id;
+        }
+        f << "]\n";
+        f << "  },\n";
+    }
+    else
+    {
+        f << "  \"research_state\": null,\n";
+    }
+
+// Resources per-territory state (optional on load, defaults to 20/20)
     f << "  \"resources\": [\n";
     for (size_t i = 0; i < level.territories.size(); ++i)
     {
@@ -4482,10 +5280,23 @@ void StrategicLevelFrame::LoadStrategicState()
     std::vector<int> owned;
     std::unordered_map<int, TerritoryResourceState> terrRes;
 
-    if (LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
+    // Hook research persistence
+    ResearchPersistLoadView rlv;
+    rlv.activeId = &m_researchActiveId;
+    rlv.activeIndex = &m_researchActiveIndex;
+    rlv.allocPerTurn = &m_researchAllocPerTurn;
+    rlv.progressById = &m_researchProgressById;
+    rlv.completed = &m_researchCompleted;
+    ResearchPersistLoadView* prevR = g_researchPersistLoad;
+    g_researchPersistLoad = &rlv;
+
+    const bool ok = LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
         playerCmds, availCmds, windowStart, genCount,
         gm, owned, terrRes,
-        &level_def, &ts))
+        &level_def, &ts);
+    g_researchPersistLoad = prevR;
+
+    if (ok)
     {
         // Validate that this save matches current level (compare stem)
         const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
@@ -4540,11 +5351,24 @@ void StrategicLevelFrame::LoadStrategicState()
 void StrategicLevelFrame::SaveStrategicState() const
 {
     const auto path = GetStrategicStatePath(m_level);
-    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
+    ResearchPersistSaveView rsv;
+    rsv.activeId = m_researchActiveId;
+    rsv.activeIndex = m_researchActiveIndex;
+    rsv.allocPerTurn = m_researchAllocPerTurn;
+    rsv.progressById = &m_researchProgressById;
+    rsv.completed = &m_researchCompleted;
+
+    const ResearchPersistSaveView* prev = g_researchPersistSave;
+    g_researchPersistSave = &rsv;
+
+    SaveStrategicStateFile(
+        path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
         m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         NowIsoLocal());
+
+    g_researchPersistSave = prev;
 }
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
@@ -5058,7 +5882,7 @@ void StrategicLevelFrame::TryLoadBackground()
     int levelNum = -1;
     {
         std::smatch m;
-        std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex::icase);
+        std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex_constants::icase);
         if (std::regex_search(fnU, m, re) && m.size() >= 2)
             levelNum = std::stoi(m[1].str());
     }
@@ -5939,4 +6763,3 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
     default: return wxString::Format("Rank %d", rank);
     }
 }
-

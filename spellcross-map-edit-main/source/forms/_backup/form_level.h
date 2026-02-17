@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -12,6 +13,7 @@
 #include <wx/bmpbuttn.h>
 #include <wx/simplebook.h>
 #include <wx/slider.h>
+#include <wx/gauge.h>
 #include <wx/dnd.h>
 #include <wx/scrolwin.h>
 
@@ -233,6 +235,36 @@ public:
         int researchCarry = 0;
     };
 
+    // ============================================================
+    // Research (Strategic level)
+    // ============================================================
+    struct ResearchItem
+    {
+        int id = -1;            // numeric id from R000..R999, or -1 for non-numeric entries
+        wxString code;          // e.g. "R004" / "RACES"
+        wxString title;         // shown in list (from RESEARCH.CZ / .ENG)
+        wxString brief;         // short flavour text (BRF) – shown in top box when active
+        wxString info;          // long detail text (INF) – shown in bottom box when browsing
+        int cost = 20;          // research duration (Time() from RESEARCH.DEF)
+        // parsed from RESEARCH.DEF
+        wxString group;         // "Races" / "Technologies" / "Upgrades" / "Global"
+        int level = 0;          // minimum campaign level to unlock
+        std::vector<int> prerequisites; // OR-connected prerequisite ids
+        wxString flags;         // "UnitType" / "NewUnit" / "Info" / "UpgradeItem" / "Special"
+    };
+
+    void EnsureResearchLoaded();
+    void EnterResearchMode();
+    void LeaveResearchMode();
+    void RefreshResearchUI();
+    void ApplyResearchTickEndTurn();
+    void SelectResearchIndex(int idx);
+
+    void OnResearchList(wxCommandEvent& ev);
+    void OnResearchStartStop(wxCommandEvent& ev);
+    void OnResearchAlloc(wxCommandEvent& ev);
+
+
     std::unordered_map<int, TerritoryResourceState> m_territoryResources;
 
     // Global allocation for all territories: research points per territory (0..5). Money per territory = 20 - 4*R.
@@ -367,6 +399,31 @@ bool m_commanderNamesLoaded = false;
     wxListCtrl* m_roster = nullptr;
     wxSimplebook* m_leftBook = nullptr;
     wxSimplebook* m_hierarchyBook = nullptr;
+
+    // Research UI books/panels
+    wxSimplebook* m_midBook = nullptr;
+    wxPanel* m_midRosterPanel = nullptr;
+    wxPanel* m_midResearchPanel = nullptr;
+    wxPanel* m_researchPanel = nullptr; // left-side page (details + progress)
+
+    wxListCtrl* m_researchList = nullptr;
+    wxTextCtrl* m_researchActiveText = nullptr; // top box: BRF of currently active research
+    wxTextCtrl* m_researchText = nullptr;
+    wxGauge* m_researchGauge = nullptr;
+    wxStaticText* m_researchGaugeLabel = nullptr;
+    wxSlider* m_researchAllocSlider = nullptr;
+    wxStaticText* m_researchAllocLabel = nullptr;
+    wxButton* m_btnResearchStart = nullptr;
+
+    // Research state
+    bool m_researchMode = false;
+    bool m_researchRefreshing = false;  // re-entrancy guard for RefreshResearchUI
+    std::vector<ResearchItem> m_researchDb;
+    int m_researchActiveId = -1;      // id of active research (matches ResearchItem.id for numeric, or -1 otherwise)
+    int m_researchActiveIndex = -1;   // index in m_researchDb
+    int m_researchAllocPerTurn = 0;   // how many points to spend per turn from m_research pool
+    std::unordered_map<int, int> m_researchProgressById; // id -> points invested
+    std::unordered_set<int> m_researchCompleted;         // completed ids
     wxButton* m_btnHierarchyPageToggle = nullptr;
     std::vector<HierarchySlot> m_hierarchySlots;
     std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
