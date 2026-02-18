@@ -1919,8 +1919,12 @@ void StrategicLevelFrame::BuildUI()
     // ============================================================
     // RIGHT: status + actions (always visible, consistent layout)
     // ============================================================
+    // Keep the right sidebar width consistent across all pages.
+    // If added with a proportional grow factor, buttons become excessively wide on larger resolutions.
+    const int kRightSidebarW = 240;
     auto* right = new wxPanel(m_normalLayoutPanel);
     right->SetBackgroundColour(m_palette.background);
+    right->SetMinSize(wxSize(kRightSidebarW, -1));
     auto* rightSizer = new wxBoxSizer(wxVERTICAL);
 
     // Status box (Money / Research / Turn)
@@ -2000,7 +2004,8 @@ void StrategicLevelFrame::BuildUI()
     rightSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     right->SetSizer(rightSizer);
 
-    mainSizer->Add(right, 1, wxEXPAND);
+    // Fixed-width sidebar (like original UI).
+    mainSizer->Add(right, 0, wxEXPAND);
     m_normalLayoutPanel->SetSizer(mainSizer);
 
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
@@ -2030,6 +2035,9 @@ void StrategicLevelFrame::BuildBuyPage()
     if (!m_buyMainPanel) return;
 
     // 3-column layout: left rosters + middle shop/info + right sidebar (status + all buttons)
+    // Keep the right sidebar width consistent with the rest of Strategic UI.
+    // If the sidebar is proportional, buttons become excessively wide on larger resolutions.
+    const int kSidebarW = 240;
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     // ---------------------------------------------------------------------
@@ -2082,7 +2090,8 @@ void StrategicLevelFrame::BuildBuyPage()
     }
 
     leftPanel->SetSizer(leftSizer);
-    mainSizer->Add(leftPanel, 2, wxEXPAND);
+    // Left / Middle should split 50/50 (like other pages).
+    mainSizer->Add(leftPanel, 1, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // MIDDLE: Shop + info + buy/sell action
@@ -2174,13 +2183,15 @@ void StrategicLevelFrame::BuildBuyPage()
     midSizer->Add(m_btnBuyAction, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     midPanel->SetSizer(midSizer);
-    mainSizer->Add(midPanel, 2, wxEXPAND);
+    // Left / Middle 50/50
+    mainSizer->Add(midPanel, 1, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // RIGHT: Sidebar (status + all buttons) – no duplicates
     // ---------------------------------------------------------------------
     auto* sidePanel = new wxPanel(m_buyMainPanel);
     sidePanel->SetBackgroundColour(m_palette.background);
+    sidePanel->SetMinSize(wxSize(kSidebarW, -1));
     auto* sideSizer = new wxBoxSizer(wxVERTICAL);
 
     // Status box (Money / Research / Turn)
@@ -2254,6 +2265,8 @@ void StrategicLevelFrame::BuildBuyPage()
 
     auto* btnLaunch = makeBtn("Launch mission");
     btnLaunch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnLaunch(ev); });
+    // Launch mission must only be enabled on the Strategic map page.
+    btnLaunch->Enable(false);
 
     auto* btnEndTurn = makeBtn("End turn");
     btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnEndTurn(ev); });
@@ -2270,7 +2283,8 @@ void StrategicLevelFrame::BuildBuyPage()
     sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     sidePanel->SetSizer(sideSizer);
-    mainSizer->Add(sidePanel, 1, wxEXPAND);
+    // Fixed-width sidebar (like the normal right panel).
+    mainSizer->Add(sidePanel, 0, wxEXPAND);
 
     m_buyMainPanel->SetSizer(mainSizer);
 }
@@ -3814,7 +3828,10 @@ void StrategicLevelFrame::RefreshUI()
     m_roster->SetColumnWidth(1, hpWidth);
     m_roster->SetColumnWidth(0, unitWidth);
 
-    m_btnLaunch->Enable(m_selectedTerritory >= 0);
+    // Launch mission is only available on the Strategic map page (left book page 0)
+    // and never while Buy/Sell overlay is active.
+    const bool onStrategicMap = (m_leftBook && m_leftBook->GetSelection() == 0 && !m_buyModeActive);
+    m_btnLaunch->Enable(onStrategicMap && m_selectedTerritory >= 0);
     if (m_btnBuyShop)
         m_btnBuyShop->Enable(true);
 
