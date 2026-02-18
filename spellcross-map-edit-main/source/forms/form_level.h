@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -49,6 +50,16 @@ public:
     void OnBuyUnits(wxCommandEvent& ev);
     void OnBuyCommander(wxCommandEvent& ev);
     void OnSellUnits(wxCommandEvent& ev);
+    void BuildBuyPage();
+    void RefreshBuyShopList();
+    void RefreshBuyRosters();
+    void RefreshBuyInfo(long data);
+    void ShowBuyPanel(bool show);
+    void PostFixBuyLayout();
+    void EnterBuyMode();
+    void LeaveBuyMode();
+    void OnBuyShop(wxCommandEvent&);
+    void OnBuyAction(wxCommandEvent&);
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
     void OnShowStrategicMap(wxCommandEvent& ev);
@@ -431,15 +442,37 @@ bool m_commanderNamesLoaded = false;
     std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
 
     wxButton* m_btnResearch = nullptr;
-    wxButton* m_btnBuy = nullptr;
-    wxButton* m_btnBuyCmd = nullptr;
-    wxButton* m_btnSell = nullptr;
+    wxButton* m_btnBuyShop  = nullptr;   // single "Buy / Sell" toggle
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
     wxButton* m_btnStrategicMap = nullptr;
     wxButton* m_btnHierarchy = nullptr;
     wxButton* m_btnResources = nullptr;
     wxButton* m_btnStats = nullptr;
+
+    // ── Buy / Sell page (root-level panel, replaces entire layout) ──
+    // Buy/Sell page status widgets (separate from normal sidebar)
+    wxStaticText* m_buyLblMoneyCaption = nullptr;
+    wxStaticText* m_buyLblMoneyValue = nullptr;
+    wxStaticText* m_buyLblResearchCaption = nullptr;
+    wxStaticText* m_buyLblResearchValue = nullptr;
+    wxStaticText* m_buyLblTurnCaption = nullptr;
+    wxStaticText* m_buyLblTurnValue = nullptr;
+
+    wxPanel*      m_normalLayoutPanel = nullptr;  // container for left+mid+right
+    wxPanel*      m_buyMainPanel     = nullptr;  // root buy panel
+    wxListCtrl*   m_buyShopList      = nullptr;  // shop list (right top)
+    wxListCtrl*   m_buyUnitRoster    = nullptr;  // left top (cloned roster)
+    wxListCtrl*   m_buyCmdRoster     = nullptr;  // left bottom (cloned cmd roster)
+    wxTextCtrl*   m_buyInfoText      = nullptr;  // selected item info (right bottom)
+    wxStaticText* m_buyTimeLabel     = nullptr;  // "Time: N"
+    wxStaticText* m_buyCostLabel     = nullptr;  // "Cost: N"
+    wxButton*     m_btnBuyAction     = nullptr;  // Buy/Sell button
+    bool          m_buyModeActive    = false;
+    bool          m_buyTabSell       = false;    // true = sell mode
+
+    std::set<int> m_levelResearchFlags;  // from LEVEL_XX.DEF SetResearchFlag(N)
+    std::unordered_map<int, std::string> m_unitCategories;
 
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
@@ -452,6 +485,8 @@ bool m_commanderNamesLoaded = false;
         ID_BTN_BUY,
         ID_BTN_BUY_CMD,
         ID_BTN_SELL,
+        ID_BTN_BUY_SHOP,
+        ID_BTN_BUY_ACTION,
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
