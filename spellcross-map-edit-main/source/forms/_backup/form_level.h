@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -46,15 +47,51 @@ public:
     void OnTerritory(wxCommandEvent& ev);
     void SelectTerritoryById(int territory_id);
     void OnResearch(wxCommandEvent& ev);
+    void OnShowInfo(wxCommandEvent& ev);  // NEW: Info/encyclopedia handler
     void OnBuyUnits(wxCommandEvent& ev);
     void OnBuyCommander(wxCommandEvent& ev);
     void OnSellUnits(wxCommandEvent& ev);
+    void BuildBuyPage();
+    void RefreshBuyShopList();
+    void RefreshBuyRosters();
+    void RefreshBuyInfo(long data);
+    void ShowBuyPanel(bool show);
+    void PostFixBuyLayout();
+    void EnterBuyMode();
+    void LeaveBuyMode();
+    void OnBuyShop(wxCommandEvent&);
+    void OnBuyAction(wxCommandEvent&);
     void OnEndTurn(wxCommandEvent& ev);
     void OnLaunch(wxCommandEvent& ev);
     void OnShowStrategicMap(wxCommandEvent& ev);
     void OnShowHierarchy(wxCommandEvent& ev);
     void OnShowStats(wxCommandEvent& ev);
     void OnShowResources(wxCommandEvent& ev);
+
+    // ============================================================
+    // Units Management Page (Recruit / Disband / Upgrade / Info)
+    // ============================================================
+    void OnUnitsShop(wxCommandEvent& ev);
+    void BuildUnitsPage();
+    void ShowUnitsPanel(bool show);
+    void PostFixUnitsLayout();
+    void EnterUnitsMode();
+    void LeaveUnitsMode();
+    void RefreshUnitsRoster();
+    void RefreshUnitsShopList();
+    void RefreshUnitsInfo(int unitIndex);
+    void RefreshUnitsActionButton();
+    void OnUnitsAction(wxCommandEvent& ev);
+    void OnUnitsTabChange(int tab);
+    void ApplyUnitsCooldownTick();  // Called at end of turn
+    int GetRecruitCost(int unitIndex, int quality) const;
+    int GetRecruitTime(int quality) const;
+    int GetUpgradeCost(int unitId, int upgradeId) const;
+    int GetUpgradeTime(int upgradeId) const;
+    wxString GetUnitCategoryName(int unitId) const;
+    bool CanUpgradeUnitTo(int fromUnitId, int toUnitId) const;
+    std::vector<int> GetAvailableUpgradesForUnit(int unitId) const;
+    std::vector<int> GetAvailableUnitTypesForUpgrade(int unitId) const;
 
 
 // menu (Strategic Level saves)
@@ -264,6 +301,14 @@ public:
     void OnResearchStartStop(wxCommandEvent& ev);
     void OnResearchAlloc(wxCommandEvent& ev);
 
+    // ============================================================
+    // Info / Encyclopedia (Strategic level) - NEW
+    // ============================================================
+    void EnterInfoMode();
+    void LeaveInfoMode();
+    void RefreshInfoUI();
+    void SelectInfoIndex(int idx);
+
 
     std::unordered_map<int, TerritoryResourceState> m_territoryResources;
 
@@ -416,6 +461,17 @@ bool m_commanderNamesLoaded = false;
     wxStaticText* m_researchAllocLabel = nullptr;
     wxButton* m_btnResearchStart = nullptr;
 
+    // Info / Encyclopedia UI panels - NEW
+    wxPanel* m_infoPanel = nullptr;      // left-side page (details)
+    wxPanel* m_midInfoPanel = nullptr;   // middle page (list)
+    wxListCtrl* m_infoList = nullptr;    // list of discovered items
+    wxTextCtrl* m_infoText = nullptr;    // detail text box
+
+    // Info state - NEW
+    bool m_infoMode = false;
+    bool m_infoRefreshing = false;       // re-entrancy guard
+    int m_infoBrowseIndex = -1;          // index in m_researchDb of selected item
+
     // Research state
     bool m_researchMode = false;
     bool m_researchRefreshing = false;  // re-entrancy guard for RefreshResearchUI
@@ -431,9 +487,8 @@ bool m_commanderNamesLoaded = false;
     std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
 
     wxButton* m_btnResearch = nullptr;
-    wxButton* m_btnBuy = nullptr;
-    wxButton* m_btnBuyCmd = nullptr;
-    wxButton* m_btnSell = nullptr;
+    wxButton* m_btnInfo = nullptr;       // NEW: Info/encyclopedia button
+    wxButton* m_btnBuyShop  = nullptr;   // single "Buy / Sell" toggle
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
     wxButton* m_btnStrategicMap = nullptr;
@@ -441,17 +496,103 @@ bool m_commanderNamesLoaded = false;
     wxButton* m_btnResources = nullptr;
     wxButton* m_btnStats = nullptr;
 
+    // ── Buy / Sell page (root-level panel, replaces entire layout) ──
+    // Buy/Sell page status widgets (separate from normal sidebar)
+    wxStaticText* m_buyLblMoneyCaption = nullptr;
+    wxStaticText* m_buyLblMoneyValue = nullptr;
+    wxStaticText* m_buyLblResearchCaption = nullptr;
+    wxStaticText* m_buyLblResearchValue = nullptr;
+    wxStaticText* m_buyLblTurnCaption = nullptr;
+    wxStaticText* m_buyLblTurnValue = nullptr;
+
+    wxPanel*      m_normalLayoutPanel = nullptr;  // container for left+mid+right
+    wxPanel*      m_buyMainPanel     = nullptr;  // root buy panel
+    wxListCtrl*   m_buyShopList      = nullptr;  // shop list (right top)
+    wxListCtrl*   m_buyUnitRoster    = nullptr;  // left top (cloned roster)
+    wxListCtrl*   m_buyCmdRoster     = nullptr;  // left bottom (cloned cmd roster)
+    wxTextCtrl*   m_buyInfoText      = nullptr;  // selected item info (right bottom)
+    wxStaticText* m_buyTimeLabel     = nullptr;  // "Time: N"
+    wxStaticText* m_buyCostLabel     = nullptr;  // "Cost: N"
+    wxButton*     m_btnBuyAction     = nullptr;  // Buy/Sell button
+    bool          m_buyModeActive    = false;
+    bool          m_buyTabSell       = false;    // true = sell mode
+
+    std::set<int> m_levelResearchFlags;  // from LEVEL_XX.DEF SetResearchFlag(N)
+    std::unordered_map<int, std::string> m_unitCategories;
+
     wxBitmap m_bgBitmapScaled;
     int m_bgScaledW = -1;
     int m_bgScaledH = -1;
+
+    // ── Units Management page (Recruit / Disband / Upgrade / Info) ──
+    // Units page status widgets
+    wxStaticText* m_unitsLblMoneyCaption = nullptr;
+    wxStaticText* m_unitsLblMoneyValue = nullptr;
+    wxStaticText* m_unitsLblResearchCaption = nullptr;
+    wxStaticText* m_unitsLblResearchValue = nullptr;
+    wxStaticText* m_unitsLblTurnCaption = nullptr;
+    wxStaticText* m_unitsLblTurnValue = nullptr;
+
+    wxPanel*      m_unitsMainPanel     = nullptr;  // root units panel
+    wxListCtrl*   m_unitsRoster        = nullptr;  // player units list (left)
+    wxListCtrl*   m_unitsShopList      = nullptr;  // shop/options list (middle top)
+    wxTextCtrl*   m_unitsInfoText      = nullptr;  // unit info (middle bottom)
+    wxPanel*      m_unitsIconCanvas    = nullptr;  // unit icon display
+    wxPanel*      m_unitsArtCanvas     = nullptr;  // unit art display (for Info mode)
+    wxStaticText* m_unitsTimeLabel     = nullptr;  // "Time: N"
+    wxStaticText* m_unitsCostLabel     = nullptr;  // "Cost: N"
+    wxButton*     m_btnUnitsAction     = nullptr;  // action button
+    wxButton*     m_btnUnitsShop       = nullptr;  // Units button in sidebar
+    wxButton*     m_btnUnitsTabRecruit = nullptr;
+    wxButton*     m_btnUnitsTabDisband = nullptr;
+    wxButton*     m_btnUnitsTabUpgrade = nullptr;
+    wxButton*     m_btnUnitsTabInfo    = nullptr;
+    wxChoice*     m_unitsQualityChoice = nullptr;  // recruit quality selector
+    wxChoice*     m_unitsUpgradeChoice = nullptr;  // upgrade type selector
+
+    bool          m_unitsModeActive    = false;
+
+    enum UnitsTab : int {
+        UNITS_TAB_RECRUIT = 0,
+        UNITS_TAB_DISBAND = 1,
+        UNITS_TAB_UPGRADE = 2,
+        UNITS_TAB_INFO    = 3
+    };
+    UnitsTab      m_unitsCurrentTab    = UNITS_TAB_RECRUIT;
+    int           m_unitsSelectedUnit  = -1;  // index in m_playerUnits
+    int           m_unitsSelectedUpgrade = -1;  // selected upgrade item
+
+    // Per-unit instance state for cooldowns and upgrades
+    struct UnitInstanceState
+    {
+        uint32_t uid = 0;              // matches roster uid
+        int cooldown_turns = 0;        // turns until unit is ready (after recruit/upgrade)
+        std::vector<int> upgrades;     // purchased upgrade IDs for this unit
+        int experience = 0;            // unit experience (gained in combat)
+        int level = 0;                 // unit level (derived from experience)
+        std::string custom_name;       // player-assigned name
+    };
+    std::vector<UnitInstanceState> m_unitStates;
+
+    // Recruit quality levels
+    static constexpr int RECRUIT_QUALITY_COUNT = 3;
+    static constexpr const char* RECRUIT_QUALITY_NAMES[RECRUIT_QUALITY_COUNT] = {
+        "Basic (50%)", "Standard (75%)", "Elite (100%)"
+    };
+    static constexpr int RECRUIT_QUALITY_PERCENT[RECRUIT_QUALITY_COUNT] = { 50, 75, 100 };
+    static constexpr int RECRUIT_QUALITY_COST_MULT[RECRUIT_QUALITY_COUNT] = { 50, 100, 200 };  // % of base cost
+    static constexpr int RECRUIT_QUALITY_TIME[RECRUIT_QUALITY_COUNT] = { 1, 2, 3 };  // turns
 
 
     enum : int {
         ID_TERRITORY_BASE = 20000,
         ID_BTN_RESEARCH,
+        ID_BTN_INFO,         // NEW: Info button ID
         ID_BTN_BUY,
         ID_BTN_BUY_CMD,
         ID_BTN_SELL,
+        ID_BTN_BUY_SHOP,
+        ID_BTN_BUY_ACTION,
         ID_BTN_ENDTURN,
         ID_BTN_LAUNCH,
         ID_BTN_STRATEGIC_MAP,
@@ -461,8 +602,14 @@ bool m_commanderNamesLoaded = false;
         ID_MENU_SAVE_GAME,
         ID_MENU_LOAD_GAME,
         ID_MENU_OPTIONS_AUDIO,
-        ID_MENU_GAME_MODE_TOGGLE
-
+        ID_MENU_GAME_MODE_TOGGLE,
+        // Units management page IDs
+        ID_BTN_UNITS,
+        ID_BTN_UNITS_ACTION,
+        ID_UNITS_TAB_RECRUIT,
+        ID_UNITS_TAB_DISBAND,
+        ID_UNITS_TAB_UPGRADE,
+        ID_UNITS_TAB_INFO
     };
 
     wxDECLARE_EVENT_TABLE();

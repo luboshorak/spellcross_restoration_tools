@@ -33,9 +33,14 @@
 
 wxBEGIN_EVENT_TABLE(StrategicLevelFrame, wxFrame)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_RESEARCH, StrategicLevelFrame::OnResearch)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_INFO, StrategicLevelFrame::OnShowInfo)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY, StrategicLevelFrame::OnBuyUnits)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY_CMD, StrategicLevelFrame::OnBuyCommander)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_SELL, StrategicLevelFrame::OnSellUnits)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY_SHOP, StrategicLevelFrame::OnBuyShop)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_BUY_ACTION, StrategicLevelFrame::OnBuyAction)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_UNITS, StrategicLevelFrame::OnUnitsShop)
+EVT_BUTTON(StrategicLevelFrame::ID_BTN_UNITS_ACTION, StrategicLevelFrame::OnUnitsAction)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_ENDTURN, StrategicLevelFrame::OnEndTurn)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_LAUNCH, StrategicLevelFrame::OnLaunch)
 EVT_BUTTON(StrategicLevelFrame::ID_BTN_STRATEGIC_MAP, StrategicLevelFrame::OnShowStrategicMap)
@@ -275,6 +280,82 @@ namespace
         StrategicLevelFrame* m_owner = nullptr;
         std::string m_type;
     };
+
+    // Parse SetResearchFlag(N) entries from a LEVEL_XX.DEF file
+    std::set<int> ParseResearchFlagsFromDef(const std::filesystem::path& defPath)
+    {
+        std::set<int> flags;
+        std::error_code ec;
+        if (!std::filesystem::exists(defPath, ec))
+            return flags;
+        
+        std::ifstream f(defPath);
+        if (!f)
+            return flags;
+        
+        std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        
+        // Match SetResearchFlag(N) - the number N is the unit type_id
+        std::regex re(R"(SetResearchFlag\s*\(\s*(\d+)\s*\))");
+        for (auto it = std::sregex_iterator(content.begin(), content.end(), re);
+             it != std::sregex_iterator(); ++it)
+        {
+            const auto& m = *it;
+            if (m.size() >= 2)
+            {
+                int flag = std::stoi(m[1].str());
+                flags.insert(flag);
+            }
+        }
+        return flags;
+    }
+
+    // Get cumulative research flags from LEVEL_01.DEF up to current level
+    std::set<int> GetCumulativeResearchFlags(const std::filesystem::path& currentLevelPath)
+    {
+        std::set<int> cumulative;
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        
+        // Get directory and current level number
+        fs::path dir = currentLevelPath.parent_path();
+        std::string stem = currentLevelPath.stem().string();
+        
+        // Extract level number from filename like "LEVEL_05" or "level_05"
+        int currentLevel = 0;
+        std::regex levelRe(R"([Ll][Ee][Vv][Ee][Ll]_?(\d+))");
+        std::smatch m;
+        if (std::regex_search(stem, m, levelRe) && m.size() >= 2)
+            currentLevel = std::stoi(m[1].str());
+        
+        if (currentLevel <= 0)
+            return cumulative;
+        
+        // Load flags from LEVEL_01.DEF up to current level
+        for (int lvl = 1; lvl <= currentLevel; ++lvl)
+        {
+            // Try various filename patterns
+            std::vector<std::string> patterns = {
+                std::string("LEVEL_") + (lvl < 10 ? "0" : "") + std::to_string(lvl) + ".DEF",
+                std::string("level_") + (lvl < 10 ? "0" : "") + std::to_string(lvl) + ".def",
+                std::string("LEVEL") + std::to_string(lvl) + ".DEF",
+                std::string("level") + std::to_string(lvl) + ".def"
+            };
+            
+            for (const auto& pattern : patterns)
+            {
+                fs::path candidate = dir / pattern;
+                if (fs::exists(candidate, ec))
+                {
+                    auto flags = ParseResearchFlagsFromDef(candidate);
+                    cumulative.insert(flags.begin(), flags.end());
+                    break;
+                }
+            }
+        }
+        
+        return cumulative;
+    }
 } // namespace
 
 static wxBitmap RenderStrategicLabel(const std::vector<StrategicTextSpan>& spans, const wxFont& fallbackFont,
@@ -605,7 +686,9 @@ static wxString RankNameCz(int rank)
     }
 }
 
-static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unordered_map<int, int>& outCosts)
+static bool LoadUnitCostsFromJson(const std::filesystem::path& path,
+    std::unordered_map<int, int>& outCosts,
+    std::unordered_map<int, std::string>* outCategories = nullptr)
 {
     std::ifstream file(path);
     if (!file.is_open())
@@ -667,6 +750,12 @@ static bool LoadUnitCostsFromJson(const std::filesystem::path& path, std::unorde
                     if (ParseJsonIntField(obj, "index", index) && ParseJsonIntField(obj, "cost_buy", cost))
                     {
                         outCosts[index] = cost;
+                        if (outCategories)
+                        {
+                            std::string cat;
+                            if (ParseJsonStringField(obj, "category", cat) && !cat.empty())
+                                (*outCategories)[index] = cat;
+                        }
                     }
                     objStart = std::string::npos;
                 }
@@ -910,6 +999,13 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     // init default resources state (20/20) for all territories
     for (const auto& t : m_level.territories)
         m_territoryResources[t.id] = TerritoryResourceState{};
+
+    // Load cumulative research flags from LEVEL_01..current for Game mode unit filtering
+    {
+        namespace fs = std::filesystem;
+        fs::path defPath = fs::path(m_level.source_path);
+        m_levelResearchFlags = GetCumulativeResearchFlags(defPath);
+    }
 
     BuildMenu();
 
@@ -1517,7 +1613,7 @@ bool StrategicLevelFrame::EnsureUnitCostsLoaded()
 
     m_unitCosts.clear();
     const auto path = GetUnitsJsonPath();
-    if (!LoadUnitCostsFromJson(path, m_unitCosts))
+    if (!LoadUnitCostsFromJson(path, m_unitCosts, &m_unitCategories))
     {
         wxMessageBox(wxString::Format("Units pricing file not found or invalid.\nExpected: %s", path.string().c_str()),
             "Units pricing", wxOK | wxICON_WARNING, this);
@@ -1555,12 +1651,15 @@ void StrategicLevelFrame::BuildUI()
 
     root->SetBackgroundColour(m_palette.background);
 
+    // Normal layout container
+    m_normalLayoutPanel = new wxPanel(root);
+    m_normalLayoutPanel->SetBackgroundColour(m_palette.background);
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     // ============================================================
     // LEFT: content book (Strategic map / Hierarchy)
     // ============================================================
-    m_leftBook = new wxSimplebook(root, wxID_ANY);
+    m_leftBook = new wxSimplebook(m_normalLayoutPanel, wxID_ANY);
     m_leftBook->SetBackgroundColour(m_palette.background);
 
     // --- Page 0: Strategic map ---
@@ -1696,11 +1795,33 @@ void StrategicLevelFrame::BuildUI()
         m_researchPanel->SetSizer(rs);
     }
 
+    // --- Page 5: Info / Encyclopedia – left side (browser detail only) ---
+    m_infoPanel = new wxPanel(m_leftBook);
+    m_infoPanel->SetBackgroundColour(m_palette.background);
+    m_infoPanel->SetMinSize(wxSize(1, 1));
+    {
+        auto* is = new wxBoxSizer(wxVERTICAL);
+
+        // Info text box (detail of selected item)
+        m_infoText = new wxTextCtrl(
+            m_infoPanel, wxID_ANY, "",
+            wxDefaultPosition, wxDefaultSize,
+            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+        m_infoText->SetFont(m_fontText);
+        m_infoText->SetBackgroundColour(m_palette.background);
+        m_infoText->SetForegroundColour(m_palette.text);
+        m_infoText->SetMinSize(wxSize(1, 1));
+        is->Add(m_infoText, 1, wxALL | wxEXPAND, 8);
+
+        m_infoPanel->SetSizer(is);
+    }
+
     m_leftBook->AddPage(m_mapPanel, "Strategic map", true);
     m_leftBook->AddPage(hierarchyPanel, "Hierarchy", false);
     m_leftBook->AddPage(m_resourcesPanel, "Resources", false);
     m_leftBook->AddPage(m_statsPanel, "Statistics", false);
     m_leftBook->AddPage(m_researchPanel, "Research", false);
+    m_leftBook->AddPage(m_infoPanel, "Info", false);
 
     mainSizer->Add(m_leftBook, 4, wxEXPAND);
 
@@ -1708,7 +1829,7 @@ void StrategicLevelFrame::BuildUI()
     // MIDDLE: player units (always visible)
     // ============================================================
     // Book for middle area: roster vs research
-    m_midBook = new wxSimplebook(root, wxID_ANY);
+    m_midBook = new wxSimplebook(m_normalLayoutPanel, wxID_ANY);
     m_midBook->SetBackgroundColour(m_palette.background);
 
     m_midRosterPanel = new wxPanel(m_midBook);
@@ -1817,14 +1938,62 @@ void StrategicLevelFrame::BuildUI()
     }
     m_midBook->AddPage(m_midResearchPanel, "Research", false);
 
+    // --- Middle Info/Encyclopedia page – categorized list (read-only browsing) ---
+    m_midInfoPanel = new wxPanel(m_midBook);
+    m_midInfoPanel->SetBackgroundColour(m_palette.background);
+    m_midInfoPanel->SetMinSize(wxSize(1, 1));
+    {
+        auto* is = new wxBoxSizer(wxVERTICAL);
+        auto* ititle = CreateStrategicLabel(
+            m_midInfoPanel,
+            { { "Encyclopedia", m_palette.heading, &m_fontHeading } },
+            m_fontHeading,
+            m_palette.shadow,
+            &m_palette.background);
+        is->Add(ititle, 0, wxALL, 8);
+
+        // wxListCtrl (single column, no header) – supports SetItemTextColour per row
+        m_infoList = new wxListCtrl(
+            m_midInfoPanel, wxID_ANY,
+            wxDefaultPosition, wxDefaultSize,
+            wxLC_REPORT | wxLC_NO_HEADER | wxLC_SINGLE_SEL);
+        m_infoList->SetFont(m_fontText);
+        m_infoList->SetBackgroundColour(m_palette.background);
+        m_infoList->SetForegroundColour(m_palette.text);
+        m_infoList->SetMinSize(wxSize(1, 1));
+        m_infoList->InsertColumn(0, "", wxLIST_FORMAT_LEFT, -1);
+        m_infoList->Bind(wxEVT_LIST_ITEM_SELECTED,
+            [this](wxListEvent& ev) {
+                if (m_infoRefreshing) return;
+                const long row = ev.GetIndex();
+                if (!m_infoList || row < 0) return;
+                const wxUIntPtr data = m_infoList->GetItemData(row);
+                // Skip header rows
+                if (data == static_cast<wxUIntPtr>(-1))
+                {
+                    m_infoList->SetItemState(row, 0, wxLIST_STATE_SELECTED);
+                    return;
+                }
+                SelectInfoIndex(static_cast<int>(data));
+            });
+        is->Add(m_infoList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+        m_midInfoPanel->SetSizer(is);
+    }
+    m_midBook->AddPage(m_midInfoPanel, "Info", false);
+
     mainSizer->Add(m_midBook, 1, wxEXPAND);
 
 
     // ============================================================
     // RIGHT: status + actions (always visible, consistent layout)
     // ============================================================
-    auto* right = new wxPanel(root);
+    // Keep the right sidebar width consistent across all pages.
+    // If added with a proportional grow factor, buttons become excessively wide on larger resolutions.
+    const int kRightSidebarW = 240;
+    auto* right = new wxPanel(m_normalLayoutPanel);
     right->SetBackgroundColour(m_palette.background);
+    right->SetMinSize(wxSize(kRightSidebarW, -1));
     auto* rightSizer = new wxBoxSizer(wxVERTICAL);
 
     // Status box (Money / Research / Turn)
@@ -1886,18 +2055,18 @@ void StrategicLevelFrame::BuildUI()
     m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
     m_btnResources = makeBtn(ID_BTN_RESOURCES, "Resources");
     m_btnResearch = makeBtn(ID_BTN_RESEARCH, "Research");
-    m_btnBuy = makeBtn(ID_BTN_BUY, "Buy units");
-    m_btnBuyCmd = makeBtn(ID_BTN_BUY_CMD, "Buy commander");
-    m_btnSell = makeBtn(ID_BTN_SELL, "Sell units");
+    m_btnInfo = makeBtn(ID_BTN_INFO, "Info");
+    m_btnBuyShop = makeBtn(ID_BTN_BUY_SHOP, "Buy / Sell");
+    m_btnUnitsShop = makeBtn(ID_BTN_UNITS, "Units");
     m_btnStats = makeBtn(ID_BTN_STATS, "Statistics");
     m_btnLaunch = makeBtn(ID_BTN_LAUNCH, "Launch mission");
     m_btnEndTurn = makeBtn(ID_BTN_ENDTURN, "End turn");
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
     btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuy, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuyCmd, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnSell, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuyShop, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnUnitsShop, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnResources, 0, wxEXPAND | wxBOTTOM, 6);
@@ -1908,13 +2077,1747 @@ void StrategicLevelFrame::BuildUI()
     rightSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     right->SetSizer(rightSizer);
 
-    mainSizer->Add(right, 1, wxEXPAND);
+    // Fixed-width sidebar (like original UI).
+    mainSizer->Add(right, 0, wxEXPAND);
+    m_normalLayoutPanel->SetSizer(mainSizer);
 
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
-    rootSizer->Add(mainSizer, 1, wxEXPAND);
+    rootSizer->Add(m_normalLayoutPanel, 1, wxEXPAND);
+    
+    // --- Buy/Sell root panel (hidden by default) ---
+    m_buyMainPanel = new wxPanel(root);
+    m_buyMainPanel->SetBackgroundColour(m_palette.background);
+    m_buyMainPanel->Show(false);
+    BuildBuyPage();
+    rootSizer->Add(m_buyMainPanel, 1, wxEXPAND);
+
+    // --- Units Management root panel (hidden by default) ---
+    m_unitsMainPanel = new wxPanel(root);
+    m_unitsMainPanel->SetBackgroundColour(m_palette.background);
+    m_unitsMainPanel->Show(false);
+    BuildUnitsPage();
+    rootSizer->Add(m_unitsMainPanel, 1, wxEXPAND);
+    
     root->SetSizer(rootSizer);
     //použije rekurzivně transparentní pozadí na všechny elementy wx - opatrně!
     //MakeChildrenTransparentRecursive(root);
+}
+
+// ============================================================
+//  Buy / Sell page
+// ============================================================
+
+static constexpr wxUIntPtr kBuyHdrSentinel = static_cast<wxUIntPtr>(-1);
+static constexpr wxUIntPtr kBuyCmdBase     = static_cast<wxUIntPtr>(0x40000000);
+
+void StrategicLevelFrame::BuildBuyPage()
+{
+    if (!m_buyMainPanel) return;
+
+    // 3-column layout: left rosters + middle shop/info + right sidebar (status + all buttons)
+    // Keep the right sidebar width consistent with the rest of Strategic UI.
+    // If the sidebar is proportional, buttons become excessively wide on larger resolutions.
+    const int kSidebarW = 240;
+    auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    // ---------------------------------------------------------------------
+    // LEFT: Rosters
+    // ---------------------------------------------------------------------
+    auto* leftPanel = new wxPanel(m_buyMainPanel);
+    leftPanel->SetBackgroundColour(m_palette.background);
+    auto* leftSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Unit roster (top)
+    {
+        auto* unitLabel = new wxStaticText(leftPanel, wxID_ANY, "Player units:");
+        unitLabel->SetFont(m_fontText);
+        unitLabel->SetForegroundColour(m_palette.heading);
+        leftSizer->Add(unitLabel, 0, wxALL, 4);
+
+        auto* unitRoster = new wxListCtrl(leftPanel, wxID_ANY,
+            wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+        unitRoster->SetFont(m_fontText);
+        unitRoster->SetBackgroundColour(m_palette.background);
+        unitRoster->SetForegroundColour(m_palette.text);
+
+        // Exactly the needed columns (no empty columns).
+        unitRoster->InsertColumn(0, "Unit");
+        unitRoster->InsertColumn(1, "HP");
+
+        leftSizer->Add(unitRoster, 3, wxALL | wxEXPAND, 4);
+        m_buyUnitRoster = unitRoster;
+    }
+
+    // Commander roster (bottom)
+    {
+        auto* cmdLabel = new wxStaticText(leftPanel, wxID_ANY, "Commanders:");
+        cmdLabel->SetFont(m_fontText);
+        cmdLabel->SetForegroundColour(m_palette.heading);
+        leftSizer->Add(cmdLabel, 0, wxALL, 4);
+
+        auto* cmdRoster = new wxListCtrl(leftPanel, wxID_ANY,
+            wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+        cmdRoster->SetFont(m_fontText);
+        cmdRoster->SetBackgroundColour(m_palette.background);
+        cmdRoster->SetForegroundColour(m_palette.text);
+
+        // Exactly the needed columns (no empty columns).
+        cmdRoster->InsertColumn(0, "Commander");
+        cmdRoster->InsertColumn(1, "Rank");
+
+        leftSizer->Add(cmdRoster, 1, wxALL | wxEXPAND, 4);
+        m_buyCmdRoster = cmdRoster;
+    }
+
+    leftPanel->SetSizer(leftSizer);
+    // Left / Middle should split 50/50 (like other pages).
+    mainSizer->Add(leftPanel, 1, wxEXPAND);
+
+    // ---------------------------------------------------------------------
+    // MIDDLE: Shop + info + buy/sell action
+    // ---------------------------------------------------------------------
+    auto* midPanel = new wxPanel(m_buyMainPanel);
+    midPanel->SetBackgroundColour(m_palette.background);
+    auto* midSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Tab toggles (Buy / Sell)
+    {
+        auto* tabRow = new wxBoxSizer(wxHORIZONTAL);
+
+        auto* btnTabBuy = new wxButton(midPanel, wxID_ANY, "Buy");
+        btnTabBuy->SetFont(m_fontText);
+        btnTabBuy->SetForegroundColour(m_palette.buttonText);
+        btnTabBuy->SetBackgroundColour(m_palette.buttonBackground);
+        btnTabBuy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            m_buyTabSell = false;
+            RefreshBuyShopList();
+        });
+
+        auto* btnTabSell = new wxButton(midPanel, wxID_ANY, "Sell");
+        btnTabSell->SetFont(m_fontText);
+        btnTabSell->SetForegroundColour(m_palette.buttonText);
+        btnTabSell->SetBackgroundColour(m_palette.buttonBackground);
+        btnTabSell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            m_buyTabSell = true;
+            RefreshBuyShopList();
+        });
+
+        tabRow->Add(btnTabBuy, 1, wxEXPAND | wxRIGHT, 4);
+        tabRow->Add(btnTabSell, 1, wxEXPAND);
+        midSizer->Add(tabRow, 0, wxALL | wxEXPAND, 8);
+    }
+
+    // Shop list (single column; width auto-resized)
+    m_buyShopList = new wxListCtrl(midPanel, wxID_ANY,
+        wxDefaultPosition, wxDefaultSize,
+        wxLC_REPORT | wxLC_NO_HEADER | wxLC_SINGLE_SEL | wxLC_NO_SORT_HEADER);
+    m_buyShopList->SetFont(m_fontText);
+    m_buyShopList->SetBackgroundColour(m_palette.background);
+    m_buyShopList->SetForegroundColour(m_palette.text);
+    m_buyShopList->InsertColumn(0, "", wxLIST_FORMAT_LEFT, -1);
+
+    m_buyShopList->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
+        const long row = ev.GetIndex();
+        if (!m_buyShopList || row < 0) return;
+        const wxUIntPtr data = m_buyShopList->GetItemData(row);
+        if (data == kBuyHdrSentinel) {
+            m_buyShopList->SetItemState(row, 0, wxLIST_STATE_SELECTED);
+            return;
+        }
+        RefreshBuyInfo(static_cast<long>(data));
+    });
+
+    m_buyShopList->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev) {
+        ev.Skip();
+        if (!m_buyShopList) return;
+        const int w = m_buyShopList->GetClientSize().GetWidth();
+        if (w > 0) m_buyShopList->SetColumnWidth(0, w);
+    });
+
+    midSizer->Add(m_buyShopList, 1, wxLEFT | wxRIGHT | wxEXPAND, 8);
+
+    // Time + Cost row
+    {
+        auto* priceRow = new wxBoxSizer(wxHORIZONTAL);
+
+        m_buyTimeLabel = new wxStaticText(midPanel, wxID_ANY, "Time: -");
+        m_buyTimeLabel->SetFont(m_fontText);
+        m_buyTimeLabel->SetForegroundColour(m_palette.text);
+
+        m_buyCostLabel = new wxStaticText(midPanel, wxID_ANY, "Cost: -");
+        m_buyCostLabel->SetFont(m_fontText);
+        m_buyCostLabel->SetForegroundColour(m_palette.heading);
+
+        priceRow->Add(m_buyTimeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 20);
+        priceRow->Add(m_buyCostLabel, 0, wxALIGN_CENTER_VERTICAL);
+
+        midSizer->Add(priceRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    }
+
+    // Buy/Sell action button
+    m_btnBuyAction = new wxButton(midPanel, ID_BTN_BUY_ACTION, "Buy");
+    m_btnBuyAction->SetFont(m_fontText);
+    m_btnBuyAction->SetForegroundColour(m_palette.buttonText);
+    m_btnBuyAction->SetBackgroundColour(m_palette.buttonBackground);
+    m_btnBuyAction->Enable(false);
+    midSizer->Add(m_btnBuyAction, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    midPanel->SetSizer(midSizer);
+    // Left / Middle 50/50
+    mainSizer->Add(midPanel, 1, wxEXPAND);
+
+    // ---------------------------------------------------------------------
+    // RIGHT: Sidebar (status + all buttons) – no duplicates
+    // ---------------------------------------------------------------------
+    auto* sidePanel = new wxPanel(m_buyMainPanel);
+    sidePanel->SetBackgroundColour(m_palette.background);
+    sidePanel->SetMinSize(wxSize(kSidebarW, -1));
+    auto* sideSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Status box (Money / Research / Turn)
+    {
+        auto* status = new wxPanel(sidePanel);
+        status->SetBackgroundColour(m_palette.background);
+        auto* statusSizer = new wxBoxSizer(wxVERTICAL);
+
+        auto makeStatusRow = [&](const wxString& caption,
+                                 wxStaticText*& outCaption,
+                                 wxStaticText*& outValue)
+        {
+            auto* row = new wxBoxSizer(wxHORIZONTAL);
+
+            outCaption = new wxStaticText(status, wxID_ANY, caption);
+            outValue = new wxStaticText(status, wxID_ANY, "0");
+
+            outCaption->SetFont(m_fontHeading);
+            outValue->SetFont(m_fontHeading);
+
+            outCaption->SetForegroundColour(m_palette.statusHeading);
+            outValue->SetForegroundColour(m_palette.statusNumber);
+
+            outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+            outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+
+            row->Add(outCaption, 0, wxRIGHT, 6);
+            row->Add(outValue, 0);
+            return row;
+        };
+
+        statusSizer->Add(makeStatusRow("Money:", m_buyLblMoneyCaption, m_buyLblMoneyValue),
+                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+        statusSizer->Add(makeStatusRow("Research:", m_buyLblResearchCaption, m_buyLblResearchValue),
+                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+        statusSizer->Add(makeStatusRow("Turn:", m_buyLblTurnCaption, m_buyLblTurnValue),
+                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+
+        status->SetSizer(statusSizer);
+        sideSizer->Add(status, 0, wxALL | wxEXPAND, 8);
+    }
+
+    auto makeBtn = [&](const wxString& label) -> wxButton*
+    {
+        return CreateStrategicButton(sidePanel, wxID_ANY, label,
+            m_fontText,
+            m_palette.buttonText,
+            m_palette.buttonBackground,
+            wxSize(-1, 44));
+    };
+
+    auto* btnSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* btnResearch = makeBtn("Research");
+    btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnResearch(ev); });
+
+    auto* btnBuySell = makeBtn("Buy / Sell");
+    btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { OnBuyShop(ev); });
+
+    auto* btnUnits = makeBtn("Units");
+    btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); EnterUnitsMode(); });
+
+    auto* btnStrategicMap = makeBtn("Strategic map");
+    btnStrategicMap->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowStrategicMap(ev); });
+
+    auto* btnHierarchy = makeBtn("Hierarchy");
+    btnHierarchy->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowHierarchy(ev); });
+
+    auto* btnResources = makeBtn("Resources");
+    btnResources->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowResources(ev); });
+
+    auto* btnStats = makeBtn("Statistics");
+    btnStats->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowStats(ev); });
+
+    auto* btnLaunch = makeBtn("Launch mission");
+    btnLaunch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnLaunch(ev); });
+    // Launch mission must only be enabled on the Strategic map page.
+    btnLaunch->Enable(false);
+
+    auto* btnEndTurn = makeBtn("End turn");
+    btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnEndTurn(ev); });
+
+    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnResources, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnStats, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnEndTurn, 0, wxEXPAND);
+
+    sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    sidePanel->SetSizer(sideSizer);
+    // Fixed-width sidebar (like the normal right panel).
+    mainSizer->Add(sidePanel, 0, wxEXPAND);
+
+    m_buyMainPanel->SetSizer(mainSizer);
+}
+
+void StrategicLevelFrame::RefreshBuyInfo(long data)
+{
+    if (!m_buyTimeLabel || !m_buyCostLabel || !m_btnBuyAction) return;
+    m_btnBuyAction->Enable(false);
+
+    if (data < 0 || data == (long)kBuyHdrSentinel){
+        m_buyTimeLabel->SetLabel("Time: -");
+        m_buyCostLabel->SetLabel("Cost: -");
+        return;
+    }
+
+    if (!m_buyTabSell)
+    {
+        // Buy mode
+        if ((wxUIntPtr)data >= kBuyCmdBase){
+            // Commander
+            m_buyTimeLabel->SetLabel("Time: 1");
+            m_buyCostLabel->SetLabel("Cost: 0");
+            m_btnBuyAction->SetLabel("Buy");
+            m_btnBuyAction->Enable((int)m_playerCommanders.size() < 14);
+        }
+        else{
+            // Unit
+            const int tid  = (int)data;
+            const int cost = GetUnitBuyCost(tid);
+            m_buyTimeLabel->SetLabel("Time: 1");
+            m_buyCostLabel->SetLabel(cost > 0 ? wxString::Format("Cost: %d", cost) : wxString("Cost: ?"));
+            m_btnBuyAction->SetLabel("Buy");
+            m_btnBuyAction->Enable(cost > 0 && m_money >= cost);
+        }
+    }
+    else
+    {
+        // Sell mode
+        const int idx = (int)data;
+        if (idx >= 0 && idx < (int)m_playerUnits.size()){
+            const auto& u = m_playerUnits[idx];
+            const int cost   = GetUnitBuyCost(u.unit_id);
+            const int refund = cost > 0 ? cost / 2 : 0;
+            m_buyTimeLabel->SetLabel("Time: 1");
+            m_buyCostLabel->SetLabel(refund > 0 ? wxString::Format("Cost: %d", refund) : wxString("Cost: ?"));
+            m_btnBuyAction->SetLabel("Sell");
+            m_btnBuyAction->Enable(refund > 0);
+        }
+    }
+}
+
+void StrategicLevelFrame::RefreshBuyRosters()
+{
+    if (!m_buyUnitRoster || !m_buyCmdRoster) return;
+
+    // Refresh unit roster
+    m_buyUnitRoster->DeleteAllItems();
+    for (const auto& u : m_playerUnits){
+        const long idx = m_buyUnitRoster->GetItemCount();
+        m_buyUnitRoster->InsertItem(idx, GetUnitDisplayName(u.unit_id));
+        m_buyUnitRoster->SetItem(idx, 1, wxString::Format("%d%%", u.health));
+        if (u.health < 100)
+            m_buyUnitRoster->SetItemTextColour(idx, wxColour(0xFF, 0xA0, 0x00));
+    }
+
+    // Refresh commander roster
+    m_buyCmdRoster->DeleteAllItems();
+    for (const auto& c : m_playerCommanders){
+        const long idx = m_buyCmdRoster->GetItemCount();
+        m_buyCmdRoster->InsertItem(idx, wxString::FromUTF8(c.name));
+        m_buyCmdRoster->SetItem(idx, 1, GetRankAbbrev(c.rank));
+    }
+
+    // Column widths (avoid empty space / extra columns)
+    {
+        int w = 0, h = 0;
+        if (m_buyUnitRoster)
+        {
+            m_buyUnitRoster->GetClientSize(&w, &h);
+            const int hpW = 55;
+            m_buyUnitRoster->SetColumnWidth(1, hpW);
+            m_buyUnitRoster->SetColumnWidth(0, std::max(80, w - hpW - 6));
+        }
+        if (m_buyCmdRoster)
+        {
+            m_buyCmdRoster->GetClientSize(&w, &h);
+            const int rankW = 70;
+            m_buyCmdRoster->SetColumnWidth(1, rankW);
+            m_buyCmdRoster->SetColumnWidth(0, std::max(90, w - rankW - 6));
+        }
+    }
+
+}
+
+void StrategicLevelFrame::RefreshBuyShopList()
+{
+    EnsureUnitCostsLoaded();
+    if (!m_buyShopList) return;
+
+    m_buyShopList->Freeze();
+    m_buyShopList->DeleteAllItems();
+
+    const wxColour clrHdr  = m_palette.heading;
+    const wxColour clrNorm = m_palette.text;
+    const wxColour clrGrey(0x60, 0x60, 0x60);
+    long row = 0;
+
+    auto addHdr = [&](const wxString& lbl){
+        m_buyShopList->InsertItem(row, lbl);
+        m_buyShopList->SetItemData(row, kBuyHdrSentinel);
+        m_buyShopList->SetItemTextColour(row, clrHdr);
+        ++row;
+    };
+
+    if (!m_buyTabSell)
+    {
+        // Buy mode - categorized shop list
+        if (m_spellData && m_spellData->units)
+        {
+            struct UE { int type_id; wxString name; int cost; };
+            const std::vector<std::string> catOrder = {"Infantry","Artillery","Transporters","Aerial guns","Other"};
+            std::map<std::string, std::vector<UE>> byCat;
+
+            for (const auto* unit : m_spellData->units->GetUnits())
+            {
+                if (!unit) continue;
+                const int cost = GetUnitBuyCost(unit->type_id);
+                if (cost <= 0) continue;
+
+                // Game mode filter
+                if (m_gameModeEnabled && !m_levelResearchFlags.empty()){
+                    if (m_levelResearchFlags.count(unit->type_id) == 0)
+                        continue;
+                }
+
+                std::string cat = "Other";
+                auto it = m_unitCategories.find(unit->type_id);
+                if (it != m_unitCategories.end() && !it->second.empty())
+                    cat = it->second;
+                byCat[cat].push_back({unit->type_id, wxString(char2wstringCP895(unit->name)), cost});
+            }
+
+            for (const auto& catName : catOrder){
+                auto it = byCat.find(catName);
+                if (it == byCat.end() || it->second.empty()) continue;
+                addHdr(wxString::FromUTF8(catName));
+                for (const auto& ue : it->second){
+                    m_buyShopList->InsertItem(row, wxString("  ") + ue.name);
+                    m_buyShopList->SetItemData(row, static_cast<wxUIntPtr>(ue.type_id));
+                    m_buyShopList->SetItemTextColour(row, m_money >= ue.cost ? clrNorm : clrGrey);
+                    ++row;
+                }
+            }
+        }
+
+        // Commanders
+        if (!m_availableCommanders.empty()){
+            addHdr("Commanders");
+            for (int ci = 0; ci < (int)m_availableCommanders.size(); ++ci){
+                const auto& c = m_availableCommanders[ci];
+                m_buyShopList->InsertItem(row,
+                    wxString("  ") + wxString::FromUTF8(c.name)
+                    + " (" + GetRankAbbrev(c.rank) + ")");
+                m_buyShopList->SetItemData(row, kBuyCmdBase + (wxUIntPtr)ci);
+                m_buyShopList->SetItemTextColour(row,
+                    (int)m_playerCommanders.size() < 14 ? clrNorm : clrGrey);
+                ++row;
+            }
+        }
+    }
+    else
+    {
+        // Sell mode - owned units list
+        if (!m_playerUnits.empty()){
+            struct SE { int idx; wxString name; int refund; };
+            const std::vector<std::string> catOrder = {"Infantry","Artillery","Transporters","Aerial guns","Other"};
+            std::map<std::string, std::vector<SE>> byCat;
+
+            for (int i = 0; i < (int)m_playerUnits.size(); ++i){
+                const auto& u = m_playerUnits[i];
+                const int cost = GetUnitBuyCost(u.unit_id);
+                std::string cat = "Other";
+                auto it = m_unitCategories.find(u.unit_id);
+                if (it != m_unitCategories.end() && !it->second.empty())
+                    cat = it->second;
+                byCat[cat].push_back({i, GetUnitDisplayName(u.unit_id), cost > 0 ? cost/2 : 0});
+            }
+
+            for (const auto& catName : catOrder){
+                auto it = byCat.find(catName);
+                if (it == byCat.end() || it->second.empty()) continue;
+                addHdr(wxString::FromUTF8(catName));
+                for (const auto& se : it->second){
+                    wxString lbl = wxString("  ") + se.name;
+                    if (se.refund > 0) lbl += wxString::Format(" (%d)", se.refund);
+                    m_buyShopList->InsertItem(row, lbl);
+                    m_buyShopList->SetItemData(row, static_cast<wxUIntPtr>(se.idx));
+                    m_buyShopList->SetItemTextColour(row, clrNorm);
+                    ++row;
+                }
+            }
+        }
+        else{
+            m_buyShopList->InsertItem(row, "  No units to sell.");
+            m_buyShopList->SetItemData(row, kBuyHdrSentinel);
+            m_buyShopList->SetItemTextColour(row, clrGrey);
+        }
+    }
+
+    const int lw = m_buyShopList->GetClientSize().GetWidth();
+    m_buyShopList->SetColumnWidth(0, lw > 0 ? lw : wxLIST_AUTOSIZE);
+    m_buyShopList->Thaw();
+
+    RefreshBuyInfo(-1);
+}
+
+
+void StrategicLevelFrame::ShowBuyPanel(bool show)
+{
+    // IMPORTANT: hide/show via the ROOT sizer, otherwise the hidden panel can still reserve space
+    // and the visible one ends up with 0 height (symptom: Buy/Sell looks like it did not load).
+    wxWindow* root = nullptr;
+    if (m_normalLayoutPanel)
+        root = m_normalLayoutPanel->GetParent();
+    else if (m_buyMainPanel)
+        root = m_buyMainPanel->GetParent();
+
+    if (root && root->GetSizer())
+    {
+        wxSizer* sz = root->GetSizer();
+        if (m_normalLayoutPanel) sz->Show(m_normalLayoutPanel, !show, true);
+        if (m_buyMainPanel)     sz->Show(m_buyMainPanel,     show, true);
+        if (m_unitsMainPanel)   sz->Show(m_unitsMainPanel,   false, true);
+        root->Layout();
+    }
+    else
+    {
+        // Fallback: plain Show/Hide (works, but can leave stale layout on some platforms).
+        if (m_normalLayoutPanel) m_normalLayoutPanel->Show(!show);
+        if (m_buyMainPanel)      m_buyMainPanel->Show(show);
+        if (m_unitsMainPanel)    m_unitsMainPanel->Show(false);
+        Layout();
+    }
+}
+
+void StrategicLevelFrame::PostFixBuyLayout()
+{
+    if (!m_buyModeActive || !m_buyMainPanel)
+        return;
+
+    // Now that the panel is truly visible and has a real size, rebuild lists + enforce column widths.
+    m_buyMainPanel->Layout();
+    Layout();
+
+    RefreshBuyRosters();
+    RefreshBuyShopList();
+
+    if (m_buyShopList)
+    {
+        const int w = m_buyShopList->GetClientSize().GetWidth();
+        if (w > 0)
+            m_buyShopList->SetColumnWidth(0, w);
+    }
+
+    if (m_buyUnitRoster)
+    {
+        int cw = 0, ch = 0;
+        m_buyUnitRoster->GetClientSize(&cw, &ch);
+        const int hpW = 70;
+        const int unitW = std::max(100, cw - hpW - 4);
+        if (m_buyUnitRoster->GetColumnCount() >= 2)
+        {
+            m_buyUnitRoster->SetColumnWidth(1, hpW);
+            m_buyUnitRoster->SetColumnWidth(0, unitW);
+        }
+    }
+
+    if (m_buyCmdRoster)
+    {
+        int cw = 0, ch = 0;
+        m_buyCmdRoster->GetClientSize(&cw, &ch);
+        const int rankW = 70;
+        const int nameW = std::max(90, cw - rankW - 4);
+        if (m_buyCmdRoster->GetColumnCount() >= 2)
+        {
+            m_buyCmdRoster->SetColumnWidth(1, rankW);
+            m_buyCmdRoster->SetColumnWidth(0, nameW);
+        }
+    }
+
+    Refresh();
+}
+
+void StrategicLevelFrame::EnterBuyMode()
+{
+    m_buyModeActive = true;
+
+    ShowBuyPanel(true);
+
+    // Defer the expensive refresh until after wx has assigned a real size to the shown panel.
+    // (Without this, list controls often report 0 width on first open.)
+    CallAfter(&StrategicLevelFrame::PostFixBuyLayout);
+
+    // Update status labels immediately
+    if (m_buyLblMoneyValue) m_buyLblMoneyValue->SetLabel(wxString::Format("%d", m_money));
+    if (m_buyLblResearchValue) m_buyLblResearchValue->SetLabel(wxString::Format("%d", m_research));
+    if (m_buyLblTurnValue) m_buyLblTurnValue->SetLabel(wxString::Format("%d", m_turn));
+}
+
+void StrategicLevelFrame::LeaveBuyMode()
+{
+    m_buyModeActive = false;
+
+    ShowBuyPanel(false);
+
+    RefreshUI();
+    Refresh();
+}
+
+void StrategicLevelFrame::OnBuyShop(wxCommandEvent&)
+{
+    if (m_buyModeActive)
+        LeaveBuyMode();
+    else{
+        if (m_researchMode) LeaveResearchMode();
+        if (m_unitsModeActive) LeaveUnitsMode();
+        EnterBuyMode();
+    }
+}
+
+void StrategicLevelFrame::OnBuyAction(wxCommandEvent&)
+{
+    if (!m_buyShopList) return;
+    const long sel = m_buyShopList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    if (sel < 0) return;
+    const wxUIntPtr data = m_buyShopList->GetItemData(sel);
+    if (data == kBuyHdrSentinel) return;
+
+    EnsureUnitCostsLoaded();
+
+    if (!m_buyTabSell)
+    {
+        // BUY
+        if (data >= kBuyCmdBase){
+            // Commander
+            const int ci = (int)(data - kBuyCmdBase);
+            if (ci >= (int)m_availableCommanders.size()) return;
+            if ((int)m_playerCommanders.size() >= 14){
+                wxMessageBox("Commander limit reached (14).", "Buy", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            m_playerCommanders.push_back(m_availableCommanders[(size_t)ci]);
+            m_availableCommanders.clear();
+        }
+        else{
+            // Unit
+            const int tid  = (int)data;
+            const int cost = GetUnitBuyCost(tid);
+            if (cost <= 0){ wxMessageBox("No price defined.", "Buy", wxOK | wxICON_WARNING, this); return; }
+            if (m_money < cost){
+                wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
+                    "Buy", wxOK | wxICON_WARNING, this);
+                return;
+            }
+            LevelData::PlayerUnitAdd add;
+            add.unit_id = tid; add.count = 1; add.health = 100; add.extra = "-";
+            m_playerUnits.push_back(add);
+            m_money -= cost;
+        }
+    }
+    else
+    {
+        // SELL
+        const int idx = (int)data;
+        if (idx < 0 || idx >= (int)m_playerUnits.size()) return;
+        const auto& u  = m_playerUnits[idx];
+        const int cost = GetUnitBuyCost(u.unit_id);
+        if (cost <= 0){ wxMessageBox("No price defined.", "Sell", wxOK | wxICON_WARNING, this); return; }
+        m_money += cost / 2;
+        m_playerUnits.erase(m_playerUnits.begin() + idx);
+    }
+
+    SaveStrategicState();
+    RefreshUI();
+    RefreshBuyRosters();
+    RefreshBuyShopList();
+}
+
+// ============================================================
+//  Units Management Page (Recruit / Disband / Upgrade / Info)
+// ============================================================
+
+static constexpr wxUIntPtr kUnitsHdrSentinel = static_cast<wxUIntPtr>(-1);
+
+void StrategicLevelFrame::BuildUnitsPage()
+{
+    if (!m_unitsMainPanel) return;
+
+    const int kSidebarW = 240;
+    auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    // ---------------------------------------------------------------------
+    // LEFT: Player Units Roster
+    // ---------------------------------------------------------------------
+    auto* leftPanel = new wxPanel(m_unitsMainPanel);
+    leftPanel->SetBackgroundColour(m_palette.background);
+    auto* leftSizer = new wxBoxSizer(wxVERTICAL);
+
+    {
+        auto* unitLabel = new wxStaticText(leftPanel, wxID_ANY, "Your Units:");
+        unitLabel->SetFont(m_fontText);
+        unitLabel->SetForegroundColour(m_palette.heading);
+        leftSizer->Add(unitLabel, 0, wxALL, 4);
+
+        m_unitsRoster = new wxListCtrl(leftPanel, wxID_ANY,
+            wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+        m_unitsRoster->SetFont(m_fontText);
+        m_unitsRoster->SetBackgroundColour(m_palette.background);
+        m_unitsRoster->SetForegroundColour(m_palette.text);
+
+        m_unitsRoster->InsertColumn(0, "Unit");
+        m_unitsRoster->InsertColumn(1, "HP");
+        m_unitsRoster->InsertColumn(2, "XP");
+        m_unitsRoster->InsertColumn(3, "Status");
+
+        m_unitsRoster->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
+            m_unitsSelectedUnit = ev.GetIndex();
+            RefreshUnitsInfo(m_unitsSelectedUnit);
+            RefreshUnitsShopList();
+            RefreshUnitsActionButton();
+        });
+
+        leftSizer->Add(m_unitsRoster, 1, wxALL | wxEXPAND, 4);
+
+        // Unit icon canvas
+        m_unitsIconCanvas = new wxPanel(leftPanel, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
+        m_unitsIconCanvas->SetBackgroundColour(m_palette.background);
+        m_unitsIconCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
+        m_unitsIconCanvas->Bind(wxEVT_PAINT, [this](wxPaintEvent& ev) {
+            wxPaintDC dc(m_unitsIconCanvas);
+            dc.SetBackground(wxBrush(m_palette.background));
+            dc.Clear();
+
+            if (m_unitsSelectedUnit < 0 || m_unitsSelectedUnit >= (int)m_playerUnits.size())
+                return;
+
+            const auto& u = m_playerUnits[m_unitsSelectedUnit];
+            if (!m_spellData || !m_spellData->units) return;
+
+            auto* unitRec = m_spellData->units->GetUnit(u.unit_id);
+            if (!unitRec || !unitRec->icon_glyph) return;
+
+            wxBitmap* bmp = unitRec->icon_glyph->Render(
+                m_unitsIconCanvas->GetClientSize().GetWidth(),
+                m_unitsIconCanvas->GetClientSize().GetHeight());
+            if (bmp) {
+                dc.DrawBitmap(*bmp, wxPoint(0, 0));
+                delete bmp;
+            }
+        });
+        leftSizer->Add(m_unitsIconCanvas, 0, wxALL | wxEXPAND, 4);
+    }
+
+    leftPanel->SetSizer(leftSizer);
+    mainSizer->Add(leftPanel, 1, wxEXPAND);
+
+    // ---------------------------------------------------------------------
+    // MIDDLE: Tab buttons + options/shop list + info
+    // ---------------------------------------------------------------------
+    auto* midPanel = new wxPanel(m_unitsMainPanel);
+    midPanel->SetBackgroundColour(m_palette.background);
+    auto* midSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Tab row (Recruit / Disband / Upgrade / Info)
+    {
+        auto* tabRow = new wxBoxSizer(wxHORIZONTAL);
+
+        auto makeTabBtn = [&](const wxString& label, int tabId) -> wxButton* {
+            auto* btn = new wxButton(midPanel, tabId, label);
+            btn->SetFont(m_fontText);
+            btn->SetForegroundColour(m_palette.buttonText);
+            btn->SetBackgroundColour(m_palette.buttonBackground);
+            return btn;
+        };
+
+        m_btnUnitsTabRecruit = makeTabBtn("Recruit", ID_UNITS_TAB_RECRUIT);
+        m_btnUnitsTabDisband = makeTabBtn("Disband", ID_UNITS_TAB_DISBAND);
+        m_btnUnitsTabUpgrade = makeTabBtn("Upgrade", ID_UNITS_TAB_UPGRADE);
+        m_btnUnitsTabInfo = makeTabBtn("Info", ID_UNITS_TAB_INFO);
+
+        m_btnUnitsTabRecruit->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnUnitsTabChange(UNITS_TAB_RECRUIT); });
+        m_btnUnitsTabDisband->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnUnitsTabChange(UNITS_TAB_DISBAND); });
+        m_btnUnitsTabUpgrade->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnUnitsTabChange(UNITS_TAB_UPGRADE); });
+        m_btnUnitsTabInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnUnitsTabChange(UNITS_TAB_INFO); });
+
+        tabRow->Add(m_btnUnitsTabRecruit, 1, wxEXPAND | wxRIGHT, 2);
+        tabRow->Add(m_btnUnitsTabDisband, 1, wxEXPAND | wxRIGHT, 2);
+        tabRow->Add(m_btnUnitsTabUpgrade, 1, wxEXPAND | wxRIGHT, 2);
+        tabRow->Add(m_btnUnitsTabInfo, 1, wxEXPAND);
+        midSizer->Add(tabRow, 0, wxALL | wxEXPAND, 8);
+    }
+
+    // Quality selector (for Recruit mode)
+    {
+        auto* qualityRow = new wxBoxSizer(wxHORIZONTAL);
+        auto* qualityLabel = new wxStaticText(midPanel, wxID_ANY, "Quality:");
+        qualityLabel->SetFont(m_fontText);
+        qualityLabel->SetForegroundColour(m_palette.text);
+
+        wxArrayString choices;
+        for (int i = 0; i < RECRUIT_QUALITY_COUNT; i++)
+            choices.Add(RECRUIT_QUALITY_NAMES[i]);
+
+        m_unitsQualityChoice = new wxChoice(midPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize, choices);
+        m_unitsQualityChoice->SetFont(m_fontText);
+        m_unitsQualityChoice->SetSelection(1); // Default to Standard
+        m_unitsQualityChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) {
+            RefreshUnitsInfo(m_unitsSelectedUnit);
+            RefreshUnitsActionButton();
+        });
+
+        qualityRow->Add(qualityLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        qualityRow->Add(m_unitsQualityChoice, 1, wxEXPAND);
+        midSizer->Add(qualityRow, 0, wxLEFT | wxRIGHT | wxEXPAND, 8);
+    }
+
+    // Upgrade type selector (for Upgrade mode)
+    {
+        auto* upgradeRow = new wxBoxSizer(wxHORIZONTAL);
+        auto* upgradeLabel = new wxStaticText(midPanel, wxID_ANY, "Upgrade to:");
+        upgradeLabel->SetFont(m_fontText);
+        upgradeLabel->SetForegroundColour(m_palette.text);
+
+        m_unitsUpgradeChoice = new wxChoice(midPanel, wxID_ANY);
+        m_unitsUpgradeChoice->SetFont(m_fontText);
+        m_unitsUpgradeChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) {
+            RefreshUnitsInfo(m_unitsSelectedUnit);
+            RefreshUnitsActionButton();
+        });
+
+        upgradeRow->Add(upgradeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        upgradeRow->Add(m_unitsUpgradeChoice, 1, wxEXPAND);
+        midSizer->Add(upgradeRow, 0, wxALL | wxEXPAND, 8);
+    }
+
+    // Shop/options list
+    m_unitsShopList = new wxListCtrl(midPanel, wxID_ANY,
+        wxDefaultPosition, wxDefaultSize,
+        wxLC_REPORT | wxLC_NO_HEADER | wxLC_SINGLE_SEL);
+    m_unitsShopList->SetFont(m_fontText);
+    m_unitsShopList->SetBackgroundColour(m_palette.background);
+    m_unitsShopList->SetForegroundColour(m_palette.text);
+    m_unitsShopList->InsertColumn(0, "", wxLIST_FORMAT_LEFT, -1);
+
+    m_unitsShopList->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
+        m_unitsSelectedUpgrade = ev.GetIndex();
+        RefreshUnitsActionButton();
+    });
+
+    m_unitsShopList->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev) {
+        ev.Skip();
+        if (!m_unitsShopList) return;
+        const int w = m_unitsShopList->GetClientSize().GetWidth();
+        if (w > 0) m_unitsShopList->SetColumnWidth(0, w);
+    });
+
+    midSizer->Add(m_unitsShopList, 1, wxLEFT | wxRIGHT | wxEXPAND, 8);
+
+    // Time + Cost row
+    {
+        auto* priceRow = new wxBoxSizer(wxHORIZONTAL);
+
+        m_unitsTimeLabel = new wxStaticText(midPanel, wxID_ANY, "Time: -");
+        m_unitsTimeLabel->SetFont(m_fontText);
+        m_unitsTimeLabel->SetForegroundColour(m_palette.text);
+
+        m_unitsCostLabel = new wxStaticText(midPanel, wxID_ANY, "Cost: -");
+        m_unitsCostLabel->SetFont(m_fontText);
+        m_unitsCostLabel->SetForegroundColour(m_palette.heading);
+
+        priceRow->Add(m_unitsTimeLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 20);
+        priceRow->Add(m_unitsCostLabel, 0, wxALIGN_CENTER_VERTICAL);
+
+        midSizer->Add(priceRow, 0, wxALL, 8);
+    }
+
+    // Action button
+    m_btnUnitsAction = new wxButton(midPanel, ID_BTN_UNITS_ACTION, "Action");
+    m_btnUnitsAction->SetFont(m_fontText);
+    m_btnUnitsAction->SetForegroundColour(m_palette.buttonText);
+    m_btnUnitsAction->SetBackgroundColour(m_palette.buttonBackground);
+    m_btnUnitsAction->Enable(false);
+    m_btnUnitsAction->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnUnitsAction, this);
+    midSizer->Add(m_btnUnitsAction, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    // Unit Art canvas (for Info mode)
+    m_unitsArtCanvas = new wxPanel(midPanel, wxID_ANY, wxDefaultPosition, wxSize(-1, 200));
+    m_unitsArtCanvas->SetBackgroundColour(m_palette.background);
+    m_unitsArtCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_unitsArtCanvas->Bind(wxEVT_PAINT, [this](wxPaintEvent& ev) {
+        wxPaintDC dc(m_unitsArtCanvas);
+        dc.SetBackground(wxBrush(m_palette.background));
+        dc.Clear();
+
+        if (m_unitsCurrentTab != UNITS_TAB_INFO) return;
+        if (m_unitsSelectedUnit < 0 || m_unitsSelectedUnit >= (int)m_playerUnits.size()) return;
+
+        // Art painting logic would go here (similar to form_units.cpp)
+        // For now, just display placeholder
+        dc.SetTextForeground(m_palette.text);
+        dc.DrawText("Unit Art", 10, 10);
+    });
+    midSizer->Add(m_unitsArtCanvas, 0, wxALL | wxEXPAND, 8);
+
+    // Info text
+    m_unitsInfoText = new wxTextCtrl(midPanel, wxID_ANY, "",
+        wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_WORDWRAP);
+    m_unitsInfoText->SetFont(m_fontText);
+    m_unitsInfoText->SetBackgroundColour(m_palette.background);
+    m_unitsInfoText->SetForegroundColour(m_palette.text);
+    midSizer->Add(m_unitsInfoText, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    midPanel->SetSizer(midSizer);
+    mainSizer->Add(midPanel, 1, wxEXPAND);
+
+    // ---------------------------------------------------------------------
+    // RIGHT: Sidebar (status + all buttons)
+    // ---------------------------------------------------------------------
+    auto* sidePanel = new wxPanel(m_unitsMainPanel);
+    sidePanel->SetBackgroundColour(m_palette.background);
+    sidePanel->SetMinSize(wxSize(kSidebarW, -1));
+    auto* sideSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Status box
+    {
+        auto* status = new wxPanel(sidePanel);
+        status->SetBackgroundColour(m_palette.background);
+        auto* statusSizer = new wxBoxSizer(wxVERTICAL);
+
+        auto makeStatusRow = [&](const wxString& caption,
+                                 wxStaticText*& outCaption,
+                                 wxStaticText*& outValue)
+        {
+            auto* row = new wxBoxSizer(wxHORIZONTAL);
+
+            outCaption = new wxStaticText(status, wxID_ANY, caption);
+            outValue = new wxStaticText(status, wxID_ANY, "0");
+
+            outCaption->SetFont(m_fontHeading);
+            outValue->SetFont(m_fontHeading);
+
+            outCaption->SetForegroundColour(m_palette.statusHeading);
+            outValue->SetForegroundColour(m_palette.statusNumber);
+
+            outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+            outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+
+            row->Add(outCaption, 0, wxRIGHT, 6);
+            row->Add(outValue, 0);
+            return row;
+        };
+
+        statusSizer->Add(makeStatusRow("Money:", m_unitsLblMoneyCaption, m_unitsLblMoneyValue),
+                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+        statusSizer->Add(makeStatusRow("Research:", m_unitsLblResearchCaption, m_unitsLblResearchValue),
+                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+        statusSizer->Add(makeStatusRow("Turn:", m_unitsLblTurnCaption, m_unitsLblTurnValue),
+                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+
+        status->SetSizer(statusSizer);
+        sideSizer->Add(status, 0, wxALL | wxEXPAND, 8);
+    }
+
+    auto makeBtn = [&](const wxString& label) -> wxButton*
+    {
+        return CreateStrategicButton(sidePanel, wxID_ANY, label,
+            m_fontText,
+            m_palette.buttonText,
+            m_palette.buttonBackground,
+            wxSize(-1, 44));
+    };
+
+    auto* btnSizer = new wxBoxSizer(wxVERTICAL);
+
+    auto* btnResearch = makeBtn("Research");
+    btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnResearch(ev); });
+
+    auto* btnBuySell = makeBtn("Buy / Sell");
+    btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); EnterBuyMode(); });
+
+    auto* btnUnits = makeBtn("Units");
+    btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { OnUnitsShop(ev); });
+
+    auto* btnStrategicMap = makeBtn("Strategic map");
+    btnStrategicMap->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowStrategicMap(ev); });
+
+    auto* btnHierarchy = makeBtn("Hierarchy");
+    btnHierarchy->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowHierarchy(ev); });
+
+    auto* btnResources = makeBtn("Resources");
+    btnResources->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowResources(ev); });
+
+    auto* btnStats = makeBtn("Statistics");
+    btnStats->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowStats(ev); });
+
+    auto* btnLaunch = makeBtn("Launch mission");
+    btnLaunch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnLaunch(ev); });
+    btnLaunch->Enable(false);
+
+    auto* btnEndTurn = makeBtn("End turn");
+    btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnEndTurn(ev); });
+
+    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnResources, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnStats, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnEndTurn, 0, wxEXPAND);
+
+    sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    sidePanel->SetSizer(sideSizer);
+    mainSizer->Add(sidePanel, 0, wxEXPAND);
+
+    m_unitsMainPanel->SetSizer(mainSizer);
+}
+
+void StrategicLevelFrame::ShowUnitsPanel(bool show)
+{
+    wxWindow* root = m_normalLayoutPanel ? m_normalLayoutPanel->GetParent() : nullptr;
+    if (!root && m_unitsMainPanel)
+        root = m_unitsMainPanel->GetParent();
+    if (!root) return;
+
+    wxSizer* sz = root->GetSizer();
+    if (sz) {
+        if (m_normalLayoutPanel) sz->Show(m_normalLayoutPanel, !show, true);
+        if (m_buyMainPanel)      sz->Show(m_buyMainPanel,      false, true);
+        if (m_unitsMainPanel)    sz->Show(m_unitsMainPanel,    show, true);
+        root->Layout();
+    } else {
+        if (m_normalLayoutPanel) m_normalLayoutPanel->Show(!show);
+        if (m_buyMainPanel)      m_buyMainPanel->Show(false);
+        if (m_unitsMainPanel)    m_unitsMainPanel->Show(show);
+    }
+}
+
+void StrategicLevelFrame::PostFixUnitsLayout()
+{
+    if (!m_unitsModeActive || !m_unitsMainPanel)
+        return;
+
+    m_unitsMainPanel->Layout();
+
+    RefreshUnitsRoster();
+    RefreshUnitsShopList();
+    OnUnitsTabChange(m_unitsCurrentTab);
+}
+
+void StrategicLevelFrame::EnterUnitsMode()
+{
+    m_unitsModeActive = true;
+
+    ShowUnitsPanel(true);
+
+    CallAfter(&StrategicLevelFrame::PostFixUnitsLayout);
+
+    // Update status labels
+    if (m_unitsLblMoneyValue) m_unitsLblMoneyValue->SetLabel(wxString::Format("%d", m_money));
+    if (m_unitsLblResearchValue) m_unitsLblResearchValue->SetLabel(wxString::Format("%d", m_research));
+    if (m_unitsLblTurnValue) m_unitsLblTurnValue->SetLabel(wxString::Format("%d", m_turn));
+}
+
+void StrategicLevelFrame::LeaveUnitsMode()
+{
+    m_unitsModeActive = false;
+
+    ShowUnitsPanel(false);
+
+    RefreshUI();
+    Refresh();
+}
+
+void StrategicLevelFrame::OnUnitsShop(wxCommandEvent&)
+{
+    if (m_unitsModeActive)
+        LeaveUnitsMode();
+    else {
+        if (m_buyModeActive) LeaveBuyMode();
+        if (m_researchMode) LeaveResearchMode();
+        EnterUnitsMode();
+    }
+}
+
+void StrategicLevelFrame::RefreshUnitsRoster()
+{
+    if (!m_unitsRoster) return;
+
+    m_unitsRoster->Freeze();
+    m_unitsRoster->DeleteAllItems();
+
+    for (size_t i = 0; i < m_playerUnits.size(); i++)
+    {
+        const auto& u = m_playerUnits[i];
+        wxString name = GetUnitDisplayName(u.unit_id);
+
+        // Check for custom name in unit state
+        if (i < m_unitStates.size() && !m_unitStates[i].custom_name.empty())
+            name = wxString::FromUTF8(m_unitStates[i].custom_name);
+
+        long idx = m_unitsRoster->InsertItem(i, name);
+        m_unitsRoster->SetItem(idx, 1, wxString::Format("%d%%", u.health));
+
+        // XP/Level
+        int xp = (i < m_unitStates.size()) ? m_unitStates[i].experience : 0;
+        m_unitsRoster->SetItem(idx, 2, wxString::Format("L%d", xp / 100));
+
+        // Status (cooldown)
+        int cooldown = (i < m_unitStates.size()) ? m_unitStates[i].cooldown_turns : 0;
+        if (cooldown > 0)
+            m_unitsRoster->SetItem(idx, 3, wxString::Format("-%dT", cooldown));
+        else
+            m_unitsRoster->SetItem(idx, 3, "Ready");
+
+        m_unitsRoster->SetItemData(idx, i);
+    }
+
+    // Auto-size columns
+    for (int c = 0; c < 4; c++)
+        m_unitsRoster->SetColumnWidth(c, wxLIST_AUTOSIZE_USEHEADER);
+
+    m_unitsRoster->Thaw();
+}
+
+void StrategicLevelFrame::RefreshUnitsShopList()
+{
+    if (!m_unitsShopList) return;
+
+    m_unitsShopList->Freeze();
+    m_unitsShopList->DeleteAllItems();
+
+    // Show/hide controls based on current tab
+    bool showQuality = (m_unitsCurrentTab == UNITS_TAB_RECRUIT);
+    bool showUpgrade = (m_unitsCurrentTab == UNITS_TAB_UPGRADE);
+
+    if (m_unitsQualityChoice) m_unitsQualityChoice->Show(showQuality);
+    if (m_unitsUpgradeChoice) m_unitsUpgradeChoice->Show(showUpgrade);
+    if (m_unitsArtCanvas) m_unitsArtCanvas->Show(m_unitsCurrentTab == UNITS_TAB_INFO);
+
+    switch (m_unitsCurrentTab)
+    {
+    case UNITS_TAB_RECRUIT:
+        // Show recruit quality options (already handled by choice control)
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+        {
+            const auto& u = m_playerUnits[m_unitsSelectedUnit];
+            if (u.health < 100)
+            {
+                m_unitsShopList->InsertItem(0, wxString::Format("Recruit to %d%% health",
+                    RECRUIT_QUALITY_PERCENT[m_unitsQualityChoice ? m_unitsQualityChoice->GetSelection() : 1]));
+            }
+            else
+            {
+                m_unitsShopList->InsertItem(0, "Unit is at full strength");
+            }
+        }
+        break;
+
+    case UNITS_TAB_DISBAND:
+        // Show disband option
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+        {
+            const auto& u = m_playerUnits[m_unitsSelectedUnit];
+            int cost = GetUnitBuyCost(u.unit_id);
+            int refund = cost > 0 ? cost / 2 : 0;
+            m_unitsShopList->InsertItem(0, wxString::Format("Disband unit (refund: %d)", refund));
+        }
+        break;
+
+    case UNITS_TAB_UPGRADE:
+        // Show available upgrades
+        if (m_unitsUpgradeChoice)
+        {
+            m_unitsUpgradeChoice->Clear();
+            if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+            {
+                const auto& u = m_playerUnits[m_unitsSelectedUnit];
+                auto upgrades = GetAvailableUnitTypesForUpgrade(u.unit_id);
+                for (int upId : upgrades)
+                {
+                    wxString name = GetUnitDisplayName(upId);
+                    m_unitsUpgradeChoice->Append(name, reinterpret_cast<void*>(static_cast<intptr_t>(upId)));
+                }
+                if (m_unitsUpgradeChoice->GetCount() > 0)
+                    m_unitsUpgradeChoice->SetSelection(0);
+            }
+        }
+        // Show item upgrades list
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+        {
+            const auto& u = m_playerUnits[m_unitsSelectedUnit];
+            auto itemUpgrades = GetAvailableUpgradesForUnit(u.unit_id);
+            for (size_t i = 0; i < itemUpgrades.size(); i++)
+            {
+                // Find upgrade name from research database
+                wxString upgName = wxString::Format("Upgrade #%d", itemUpgrades[i]);
+                for (const auto& r : m_researchDb) {
+                    if (r.id == itemUpgrades[i]) {
+                        upgName = r.title;
+                        break;
+                    }
+                }
+                long idx = m_unitsShopList->InsertItem(i, upgName);
+                m_unitsShopList->SetItemData(idx, itemUpgrades[i]);
+            }
+        }
+        break;
+
+    case UNITS_TAB_INFO:
+        // Info mode - show unit properties
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+        {
+            const auto& u = m_playerUnits[m_unitsSelectedUnit];
+            if (m_spellData && m_spellData->units)
+            {
+                auto* unitRec = m_spellData->units->GetUnit(u.unit_id);
+                if (unitRec)
+                {
+                    m_unitsShopList->InsertItem(0, wxString::Format("Sight: %d", unitRec->sdir));
+                    m_unitsShopList->InsertItem(1, wxString::Format("Move: %d", unitRec->apw));
+                    m_unitsShopList->InsertItem(2, wxString::Format("Defence: %d", unitRec->defence));
+                    m_unitsShopList->InsertItem(3, wxString::Format("Light ATK: %d", unitRec->attack_light));
+                    m_unitsShopList->InsertItem(4, wxString::Format("Armor ATK: %d", unitRec->attack_armored));
+                    m_unitsShopList->InsertItem(5, wxString::Format("Air ATK: %d", unitRec->attack_air));
+                    m_unitsShopList->InsertItem(6, wxString::Format("Man count: %d", unitRec->cnt));
+                }
+            }
+        }
+        break;
+    }
+
+    m_unitsShopList->Thaw();
+
+    if (m_unitsMainPanel)
+        m_unitsMainPanel->Layout();
+}
+
+void StrategicLevelFrame::RefreshUnitsInfo(int unitIndex)
+{
+    if (!m_unitsInfoText) return;
+
+    m_unitsInfoText->Clear();
+
+    if (unitIndex < 0 || unitIndex >= (int)m_playerUnits.size())
+        return;
+
+    const auto& u = m_playerUnits[unitIndex];
+
+    wxString info;
+
+    // Unit name
+    info += "Unit: " + GetUnitDisplayName(u.unit_id) + "\n";
+
+    // Custom name if set
+    if (unitIndex < (int)m_unitStates.size() && !m_unitStates[unitIndex].custom_name.empty())
+        info += "Name: " + wxString::FromUTF8(m_unitStates[unitIndex].custom_name) + "\n";
+
+    // Health
+    info += wxString::Format("Health: %d%%\n", u.health);
+
+    // Experience/Level
+    if (unitIndex < (int)m_unitStates.size())
+    {
+        int xp = m_unitStates[unitIndex].experience;
+        int lvl = m_unitStates[unitIndex].level;
+        info += wxString::Format("Experience: %d (Level %d)\n", xp, lvl);
+    }
+
+    // Cooldown
+    if (unitIndex < (int)m_unitStates.size() && m_unitStates[unitIndex].cooldown_turns > 0)
+    {
+        info += wxString::Format("Status: Unavailable for %d turns\n",
+            m_unitStates[unitIndex].cooldown_turns);
+    }
+    else
+    {
+        info += "Status: Ready for deployment\n";
+    }
+
+    // Category
+    info += "Category: " + GetUnitCategoryName(u.unit_id) + "\n";
+
+    // Tab-specific info
+    switch (m_unitsCurrentTab)
+    {
+    case UNITS_TAB_RECRUIT:
+        if (u.health < 100)
+        {
+            int quality = m_unitsQualityChoice ? m_unitsQualityChoice->GetSelection() : 1;
+            int cost = GetRecruitCost(unitIndex, quality);
+            int time = GetRecruitTime(quality);
+            info += wxString::Format("\nRecruit cost: %d\nTime: %d turns\n", cost, time);
+        }
+        else
+        {
+            info += "\nUnit is at full strength.\n";
+        }
+        break;
+
+    case UNITS_TAB_DISBAND:
+        {
+            int cost = GetUnitBuyCost(u.unit_id);
+            int refund = cost > 0 ? cost / 2 : 0;
+            info += wxString::Format("\nDisband refund: %d\n", refund);
+        }
+        break;
+
+    case UNITS_TAB_UPGRADE:
+        info += "\nSelect an upgrade from the list.\n";
+        break;
+
+    case UNITS_TAB_INFO:
+        // Load unit description from INFO files
+        if (m_spellData && m_spellData->units && m_spellData->info)
+        {
+            auto* unitRec = m_spellData->units->GetUnit(u.unit_id);
+            if (unitRec)
+            {
+                auto artList = unitRec->GetArtList(m_spellData->info);
+                if (!artList.empty())
+                {
+                    std::vector<std::string> langs = {"CZ", "ENG"};
+                    for (const auto& lang : langs)
+                    {
+                        std::string artInfoName = artList[0] + "." + lang;
+                        uint8_t* txtBuf;
+                        int txtSize;
+                        if (!m_spellData->info->GetFile(artInfoName.c_str(), &txtBuf, &txtSize))
+                        {
+                            std::string text(reinterpret_cast<char*>(txtBuf), txtSize);
+                            info += "\n" + wxString::FromUTF8(text);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    }
+
+    m_unitsInfoText->SetValue(info);
+
+    // Refresh icon
+    if (m_unitsIconCanvas)
+        m_unitsIconCanvas->Refresh();
+}
+
+void StrategicLevelFrame::RefreshUnitsActionButton()
+{
+    if (!m_btnUnitsAction) return;
+
+    m_btnUnitsAction->Enable(false);
+
+    if (m_unitsSelectedUnit < 0 || m_unitsSelectedUnit >= (int)m_playerUnits.size())
+        return;
+
+    const auto& u = m_playerUnits[m_unitsSelectedUnit];
+
+    // Check cooldown
+    bool hasCooldown = (m_unitsSelectedUnit < (int)m_unitStates.size() &&
+                        m_unitStates[m_unitsSelectedUnit].cooldown_turns > 0);
+
+    switch (m_unitsCurrentTab)
+    {
+    case UNITS_TAB_RECRUIT:
+        {
+            m_btnUnitsAction->SetLabel("Recruit");
+            if (u.health >= 100)
+            {
+                // Already at full strength
+                m_btnUnitsAction->Enable(false);
+            }
+            else if (hasCooldown)
+            {
+                m_btnUnitsAction->Enable(false);
+            }
+            else
+            {
+                int quality = m_unitsQualityChoice ? m_unitsQualityChoice->GetSelection() : 1;
+                int cost = GetRecruitCost(m_unitsSelectedUnit, quality);
+                m_btnUnitsAction->Enable(m_money >= cost);
+
+                if (m_unitsTimeLabel)
+                    m_unitsTimeLabel->SetLabel(wxString::Format("Time: %d", GetRecruitTime(quality)));
+                if (m_unitsCostLabel)
+                    m_unitsCostLabel->SetLabel(wxString::Format("Cost: %d", cost));
+            }
+        }
+        break;
+
+    case UNITS_TAB_DISBAND:
+        {
+            m_btnUnitsAction->SetLabel("Disband");
+            m_btnUnitsAction->Enable(!hasCooldown);
+
+            int cost = GetUnitBuyCost(u.unit_id);
+            int refund = cost > 0 ? cost / 2 : 0;
+            if (m_unitsTimeLabel)
+                m_unitsTimeLabel->SetLabel("Time: 0");
+            if (m_unitsCostLabel)
+                m_unitsCostLabel->SetLabel(wxString::Format("Refund: %d", refund));
+        }
+        break;
+
+    case UNITS_TAB_UPGRADE:
+        {
+            m_btnUnitsAction->SetLabel("Upgrade");
+
+            if (hasCooldown)
+            {
+                m_btnUnitsAction->Enable(false);
+            }
+            else if (m_unitsUpgradeChoice && m_unitsUpgradeChoice->GetCount() > 0)
+            {
+                int sel = m_unitsUpgradeChoice->GetSelection();
+                if (sel >= 0)
+                {
+                    int toUnitId = static_cast<int>(reinterpret_cast<intptr_t>(
+                        m_unitsUpgradeChoice->GetClientData(sel)));
+                    int cost = GetUpgradeCost(u.unit_id, toUnitId);
+                    int time = 2; // Default upgrade time
+                    m_btnUnitsAction->Enable(m_money >= cost && cost > 0);
+
+                    if (m_unitsTimeLabel)
+                        m_unitsTimeLabel->SetLabel(wxString::Format("Time: %d", time));
+                    if (m_unitsCostLabel)
+                        m_unitsCostLabel->SetLabel(wxString::Format("Cost: %d", cost));
+                }
+            }
+            else
+            {
+                m_btnUnitsAction->Enable(false);
+            }
+        }
+        break;
+
+    case UNITS_TAB_INFO:
+        {
+            m_btnUnitsAction->SetLabel("Close");
+            m_btnUnitsAction->Enable(true);
+
+            if (m_unitsTimeLabel)
+                m_unitsTimeLabel->SetLabel("Time: -");
+            if (m_unitsCostLabel)
+                m_unitsCostLabel->SetLabel("Cost: -");
+        }
+        break;
+    }
+}
+
+void StrategicLevelFrame::OnUnitsTabChange(int tab)
+{
+    m_unitsCurrentTab = static_cast<UnitsTab>(tab);
+    m_unitsSelectedUpgrade = -1;
+
+    // Update tab button highlighting
+    auto highlightTab = [this](wxButton* btn, bool active) {
+        if (!btn) return;
+        if (active)
+            btn->SetBackgroundColour(m_palette.heading);
+        else
+            btn->SetBackgroundColour(m_palette.buttonBackground);
+        btn->Refresh();
+    };
+
+    highlightTab(m_btnUnitsTabRecruit, tab == UNITS_TAB_RECRUIT);
+    highlightTab(m_btnUnitsTabDisband, tab == UNITS_TAB_DISBAND);
+    highlightTab(m_btnUnitsTabUpgrade, tab == UNITS_TAB_UPGRADE);
+    highlightTab(m_btnUnitsTabInfo, tab == UNITS_TAB_INFO);
+
+    RefreshUnitsShopList();
+    RefreshUnitsInfo(m_unitsSelectedUnit);
+    RefreshUnitsActionButton();
+
+    if (m_unitsArtCanvas)
+        m_unitsArtCanvas->Refresh();
+}
+
+void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
+{
+    if (m_unitsSelectedUnit < 0 || m_unitsSelectedUnit >= (int)m_playerUnits.size())
+        return;
+
+    auto& u = m_playerUnits[m_unitsSelectedUnit];
+
+    // Ensure unit state exists
+    while (m_unitStates.size() <= (size_t)m_unitsSelectedUnit)
+    {
+        UnitInstanceState state;
+        state.uid = m_nextRosterUid++;
+        m_unitStates.push_back(state);
+    }
+
+    switch (m_unitsCurrentTab)
+    {
+    case UNITS_TAB_RECRUIT:
+        {
+            if (u.health >= 100)
+            {
+                wxMessageBox("Unit is already at full strength.", "Recruit", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+
+            int quality = m_unitsQualityChoice ? m_unitsQualityChoice->GetSelection() : 1;
+            int cost = GetRecruitCost(m_unitsSelectedUnit, quality);
+            int time = GetRecruitTime(quality);
+
+            if (m_money < cost)
+            {
+                wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
+                    "Recruit", wxOK | wxICON_WARNING, this);
+                return;
+            }
+
+            // Apply recruitment
+            m_money -= cost;
+            u.health = RECRUIT_QUALITY_PERCENT[quality];
+            m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
+
+            wxMessageBox(wxString::Format("Unit recruited to %d%% strength.\nReady in %d turns.",
+                u.health, time), "Recruit", wxOK | wxICON_INFORMATION, this);
+        }
+        break;
+
+    case UNITS_TAB_DISBAND:
+        {
+            int cost = GetUnitBuyCost(u.unit_id);
+            int refund = cost > 0 ? cost / 2 : 0;
+
+            int result = wxMessageBox(
+                wxString::Format("Disband this unit for %d credits?", refund),
+                "Disband", wxYES_NO | wxICON_QUESTION, this);
+
+            if (result != wxYES)
+                return;
+
+            m_money += refund;
+            m_playerUnits.erase(m_playerUnits.begin() + m_unitsSelectedUnit);
+            if ((size_t)m_unitsSelectedUnit < m_unitStates.size())
+                m_unitStates.erase(m_unitStates.begin() + m_unitsSelectedUnit);
+
+            m_unitsSelectedUnit = -1;
+        }
+        break;
+
+    case UNITS_TAB_UPGRADE:
+        {
+            if (!m_unitsUpgradeChoice || m_unitsUpgradeChoice->GetCount() == 0)
+                return;
+
+            int sel = m_unitsUpgradeChoice->GetSelection();
+            if (sel < 0)
+                return;
+
+            int toUnitId = static_cast<int>(reinterpret_cast<intptr_t>(
+                m_unitsUpgradeChoice->GetClientData(sel)));
+            int cost = GetUpgradeCost(u.unit_id, toUnitId);
+            int time = 2;
+
+            if (m_money < cost)
+            {
+                wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
+                    "Upgrade", wxOK | wxICON_WARNING, this);
+                return;
+            }
+
+            wxString fromName = GetUnitDisplayName(u.unit_id);
+            wxString toName = GetUnitDisplayName(toUnitId);
+
+            int result = wxMessageBox(
+                wxString::Format("Upgrade %s to %s for %d credits?\nReady in %d turns.",
+                    fromName, toName, cost, time),
+                "Upgrade", wxYES_NO | wxICON_QUESTION, this);
+
+            if (result != wxYES)
+                return;
+
+            m_money -= cost;
+            u.unit_id = toUnitId;
+            m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
+
+            wxMessageBox(wxString::Format("Unit upgraded to %s.\nReady in %d turns.",
+                toName, time), "Upgrade", wxOK | wxICON_INFORMATION, this);
+        }
+        break;
+
+    case UNITS_TAB_INFO:
+        // Close info mode
+        LeaveUnitsMode();
+        return;
+    }
+
+    SaveStrategicState();
+    RefreshUI();
+    RefreshUnitsRoster();
+    RefreshUnitsShopList();
+    RefreshUnitsInfo(m_unitsSelectedUnit);
+    RefreshUnitsActionButton();
+
+    // Update status labels
+    if (m_unitsLblMoneyValue)
+        m_unitsLblMoneyValue->SetLabel(wxString::Format("%d", m_money));
+}
+
+void StrategicLevelFrame::ApplyUnitsCooldownTick()
+{
+    for (auto& state : m_unitStates)
+    {
+        if (state.cooldown_turns > 0)
+            state.cooldown_turns--;
+    }
+}
+
+int StrategicLevelFrame::GetRecruitCost(int unitIndex, int quality) const
+{
+    if (unitIndex < 0 || unitIndex >= (int)m_playerUnits.size())
+        return 0;
+
+    const auto& u = m_playerUnits[unitIndex];
+    int baseCost = GetUnitBuyCost(u.unit_id);
+    if (baseCost <= 0)
+        return 0;
+
+    // Cost is proportional to damage and quality
+    int damage = 100 - u.health;
+    int costPercent = (damage * RECRUIT_QUALITY_COST_MULT[quality]) / 100;
+    return (baseCost * costPercent) / 100;
+}
+
+int StrategicLevelFrame::GetRecruitTime(int quality) const
+{
+    if (quality < 0 || quality >= RECRUIT_QUALITY_COUNT)
+        return 1;
+    return RECRUIT_QUALITY_TIME[quality];
+}
+
+int StrategicLevelFrame::GetUpgradeCost(int unitId, int upgradeId) const
+{
+    int fromCost = GetUnitBuyCost(unitId);
+    int toCost = GetUnitBuyCost(upgradeId);
+
+    if (fromCost <= 0 || toCost <= 0)
+        return 0;
+
+    // Upgrade cost is the difference plus 20%
+    int diff = toCost - fromCost;
+    if (diff < 0) diff = 0;
+    return diff + (diff / 5);
+}
+
+int StrategicLevelFrame::GetUpgradeTime(int upgradeId) const
+{
+    // Default upgrade time
+    return 2;
+}
+
+wxString StrategicLevelFrame::GetUnitCategoryName(int unitId) const
+{
+    auto it = m_unitCategories.find(unitId);
+    if (it != m_unitCategories.end())
+        return wxString::FromUTF8(it->second);
+
+    // Try to determine from unit type
+    if (m_spellData && m_spellData->units)
+    {
+        auto* unitRec = m_spellData->units->GetUnit(unitId);
+        if (unitRec)
+        {
+            // Simple category detection based on unit properties
+            if (unitRec->attack_air > 0 && unitRec->attack_air > unitRec->attack_light)
+                return "Air Defense";
+            if (unitRec->attack_armored > unitRec->attack_light)
+                return "Heavy";
+            return "Light";
+        }
+    }
+    return "Unknown";
+}
+
+bool StrategicLevelFrame::CanUpgradeUnitTo(int fromUnitId, int toUnitId) const
+{
+    // Check if units are in the same category
+    wxString fromCat = GetUnitCategoryName(fromUnitId);
+    wxString toCat = GetUnitCategoryName(toUnitId);
+
+    if (fromCat != toCat)
+        return false;
+
+    // Check if upgrade is researched
+    // For now, allow all same-category upgrades
+    return true;
+}
+
+std::vector<int> StrategicLevelFrame::GetAvailableUpgradesForUnit(int unitId) const
+{
+    std::vector<int> result;
+
+    // Find upgrades from research database that apply to this unit
+    for (const auto& r : m_researchDb)
+    {
+        if (r.flags.Contains("UpgradeItem") && m_researchCompleted.count(r.id))
+        {
+            // Check if this upgrade applies to the unit type
+            // For now, include all completed UpgradeItem research
+            result.push_back(r.id);
+        }
+    }
+
+    return result;
+}
+
+std::vector<int> StrategicLevelFrame::GetAvailableUnitTypesForUpgrade(int unitId) const
+{
+    std::vector<int> result;
+
+    if (!m_spellData || !m_spellData->units)
+        return result;
+
+    wxString currentCat = GetUnitCategoryName(unitId);
+
+    // Find all units in the same category that are different
+    for (int i = 0; i < m_spellData->units->Count(); i++)
+    {
+        if (i == unitId)
+            continue;
+
+        wxString cat = GetUnitCategoryName(i);
+        if (cat == currentCat)
+        {
+            // Check if upgrade to this unit is unlocked via research
+            // For now, include all same-category units
+            result.push_back(i);
+        }
+    }
+
+    return result;
 }
 
 void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
@@ -2974,6 +4877,14 @@ void StrategicLevelFrame::RefreshUI()
         m_lblResearchValue->SetLabel(wxString::Format("%d", m_research));
     if (m_lblTurnValue)
         m_lblTurnValue->SetLabel(wxString::Format("%d", m_turn));
+    // Buy/Sell sidebar status labels (separate widgets)
+    if (m_buyLblMoneyValue)
+        m_buyLblMoneyValue->SetLabel(wxString::Format("%d", m_money));
+    if (m_buyLblResearchValue)
+        m_buyLblResearchValue->SetLabel(wxString::Format("%d", m_research));
+    if (m_buyLblTurnValue)
+        m_buyLblTurnValue->SetLabel(wxString::Format("%d", m_turn));
+
 
     // Commanders list
     if (m_cmdRoster)
@@ -3067,16 +4978,12 @@ void StrategicLevelFrame::RefreshUI()
     m_roster->SetColumnWidth(1, hpWidth);
     m_roster->SetColumnWidth(0, unitWidth);
 
-    m_btnLaunch->Enable(m_selectedTerritory >= 0);
-    if (m_btnSell)
-        m_btnSell->Enable(!m_playerUnits.empty());
-
-    if (m_btnBuyCmd)
-    {
-        const bool haveOffer = !m_availableCommanders.empty();
-        const bool haveSpace = (int)m_playerCommanders.size() < 14;
-        m_btnBuyCmd->Enable(haveOffer && haveSpace);
-    }
+    // Launch mission is only available on the Strategic map page (left book page 0)
+    // and never while Buy/Sell overlay is active.
+    const bool onStrategicMap = (m_leftBook && m_leftBook->GetSelection() == 0 && !m_buyModeActive);
+    m_btnLaunch->Enable(onStrategicMap && m_selectedTerritory >= 0);
+    if (m_btnBuyShop)
+        m_btnBuyShop->Enable(true);
 
     if (m_researchMode)
         RefreshResearchUI();
@@ -3879,6 +5786,176 @@ void StrategicLevelFrame::RefreshResearchUI()
 }
 
 
+// ============================================================
+// Info / Encyclopedia mode (read-only browsing of discovered items)
+// ============================================================
+
+void StrategicLevelFrame::EnterInfoMode()
+{
+    EnsureResearchLoaded();
+    m_infoMode = true;
+
+    // Switch pages: left info panel + middle info list
+    // Page indices: 0=map, 1=hierarchy, 2=resources, 3=stats, 4=research, 5=info
+    if (m_leftBook) m_leftBook->SetSelection(5);
+    // Mid book: 0=roster, 1=research, 2=info
+    if (m_midBook)  m_midBook->SetSelection(2);
+
+    // Update button label
+    if (m_btnInfo) m_btnInfo->SetLabel("Back");
+
+    RefreshInfoUI();
+}
+
+void StrategicLevelFrame::LeaveInfoMode()
+{
+    m_infoMode = false;
+
+    if (m_leftBook) m_leftBook->SetSelection(0);
+    if (m_midBook)  m_midBook->SetSelection(0);
+
+    if (m_btnInfo) m_btnInfo->SetLabel("Info");
+
+    RefreshUI();
+}
+
+void StrategicLevelFrame::SelectInfoIndex(int idx)
+{
+    if (idx < 0 || idx >= (int)m_researchDb.size())
+        return;
+
+    m_infoBrowseIndex = idx;
+    RefreshInfoUI();
+}
+
+void StrategicLevelFrame::RefreshInfoUI()
+{
+    if (!m_infoList && !m_infoText)
+        return;
+
+    // Re-entrancy guard
+    if (m_infoRefreshing)
+        return;
+    m_infoRefreshing = true;
+    struct RGuard { bool& f; ~RGuard(){ f = false; } } _rg{m_infoRefreshing};
+
+    EnsureResearchLoaded();
+
+    // In game mode: show only completed research
+    // Without game mode: show everything
+    auto isVisible = [&](const ResearchItem& it) -> bool {
+        if (!m_gameModeEnabled)
+            return true;  // Show all in sandbox mode
+        // In game mode: only show completed items
+        return (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
+    };
+
+    // ----------------------------------------------------------------
+    // Categorized list (wxListCtrl)
+    // ----------------------------------------------------------------
+    static constexpr wxUIntPtr kHdrSentinel = static_cast<wxUIntPtr>(-1);
+
+    if (m_infoList)
+    {
+        m_infoList->Freeze();
+        m_infoList->DeleteAllItems();
+
+        const wxColour clrHeader = m_palette.heading;
+        const wxColour clrNormal = m_palette.text;
+
+        wxString lastGroup;
+        long row = 0, selRow = -1;
+
+        for (int i = 0; i < (int)m_researchDb.size(); ++i)
+        {
+            const ResearchItem& it = m_researchDb[i];
+            
+            // Filter: only show items that pass visibility check
+            if (!isVisible(it))
+                continue;
+
+            // Group header
+            if (it.group != lastGroup)
+            {
+                lastGroup = it.group;
+                if (!lastGroup.empty())
+                {
+                    m_infoList->InsertItem(row, lastGroup);
+                    m_infoList->SetItemData(row, kHdrSentinel);
+                    m_infoList->SetItemTextColour(row, clrHeader);
+                    ++row;
+                }
+            }
+
+            wxString label = wxString("  ") + it.title;
+            m_infoList->InsertItem(row, label);
+            m_infoList->SetItemData(row, static_cast<wxUIntPtr>(i));
+            m_infoList->SetItemTextColour(row, clrNormal);
+
+            if (i == m_infoBrowseIndex)
+                selRow = row;
+            ++row;
+        }
+
+        // Auto-fit column
+        if (row > 0)
+        {
+            m_infoList->SetColumnWidth(0, wxLIST_AUTOSIZE);
+            const int lw = m_infoList->GetClientSize().GetWidth();
+            if (m_infoList->GetColumnWidth(0) < lw)
+                m_infoList->SetColumnWidth(0, lw);
+        }
+
+        // Select item
+        if (selRow >= 0)
+        {
+            m_infoList->SetItemState(selRow,
+                wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED,
+                wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
+            m_infoList->EnsureVisible(selRow);
+        }
+        m_infoList->Thaw();
+    }
+
+    // ----------------------------------------------------------------
+    // Info text box: detail of the selected item
+    // ----------------------------------------------------------------
+    if (m_infoText)
+    {
+        if (m_infoBrowseIndex >= 0 && m_infoBrowseIndex < (int)m_researchDb.size())
+        {
+            const ResearchItem& cur = m_researchDb[m_infoBrowseIndex];
+            wxString txt = cur.info.empty() ? cur.brief : cur.info;
+            m_infoText->SetValue(txt);
+        }
+        else
+        {
+            if (m_gameModeEnabled)
+                m_infoText->SetValue("Select a discovered item from the list.\n\nIn campaign mode, only researched items are shown.");
+            else
+                m_infoText->SetValue("Select an item from the list to view details.");
+        }
+    }
+}
+
+void StrategicLevelFrame::OnShowInfo(wxCommandEvent&)
+{
+    // Leave buy mode if active
+    if (m_buyModeActive)
+        LeaveBuyMode();
+
+    // Leave research mode if active
+    if (m_researchMode)
+        LeaveResearchMode();
+
+    // Toggle info mode
+    if (m_infoMode)
+        LeaveInfoMode();
+    else
+        EnterInfoMode();
+}
+
+
 void StrategicLevelFrame::ApplyResearchTickEndTurn()
 {
     // Research allocation is automatic: when research is active (m_researchAllocPerTurn > 0),
@@ -3920,6 +5997,8 @@ void StrategicLevelFrame::ApplyResearchTickEndTurn()
 void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 {
     if (m_researchMode) LeaveResearchMode();
+    if (m_infoMode) LeaveInfoMode();
+    if (m_unitsModeActive) LeaveUnitsMode();
     if (m_leftBook)
         m_leftBook->SetSelection(0);
 }
@@ -3927,6 +6006,8 @@ void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
 void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 {
     if (m_researchMode) LeaveResearchMode();
+    if (m_infoMode) LeaveInfoMode();
+    if (m_unitsModeActive) LeaveUnitsMode();
     if (m_leftBook)
         m_leftBook->SetSelection(1);
 }
@@ -3935,6 +6016,8 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
 void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 {
     if (m_researchMode) LeaveResearchMode();
+    if (m_infoMode) LeaveInfoMode();
+    if (m_unitsModeActive) LeaveUnitsMode();
     SaveStrategicState();
 
     // Switch page FIRST so canvas has correct size when Refresh triggers paint
@@ -3948,6 +6031,8 @@ void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
 void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
 {
     if (m_researchMode) LeaveResearchMode();
+    if (m_infoMode) LeaveInfoMode();
+    if (m_unitsModeActive) LeaveUnitsMode();
     // Ensure the stats page sees the latest state.
     SaveStrategicState();
     LoadRanksTable();
@@ -4273,6 +6358,11 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
 void StrategicLevelFrame::OnResearch(wxCommandEvent&)
 {
+    if (m_infoMode)
+        LeaveInfoMode();
+    if (m_unitsModeActive)
+        LeaveUnitsMode();
+
     if (!m_researchMode)
         EnterResearchMode();
     else
@@ -4931,6 +7021,10 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 
 
     ApplyResearchTickEndTurn();
+
+    // Apply unit cooldown ticks (recruit/upgrade completion)
+    ApplyUnitsCooldownTick();
+
     // Commander offers are generated on end-turn (for the *new* turn).
     // Offers do not carry over between turns.
     // Store offer of commanders only for the current turn.
