@@ -2034,7 +2034,6 @@ void StrategicLevelFrame::BuildUI()
     // m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
     // m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
-    midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
     m_midBook->AddPage(m_midRosterPanel, "Roster", true);

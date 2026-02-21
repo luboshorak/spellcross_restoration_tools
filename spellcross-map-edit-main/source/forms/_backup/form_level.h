@@ -87,8 +87,11 @@ public:
     void ApplyUnitsCooldownTick();  // Called at end of turn
     int GetRecruitCost(int unitIndex, int quality) const;
     int GetRecruitTime(int quality) const;
-    int GetUpgradeCost(int unitId, int upgradeId) const;
-    int GetUpgradeTime(int upgradeId) const;
+    int GetUpgradeCost(int unitId, int upgradeId) const;  // re-arm cost (uses cost_upgrade from units.json)
+    int GetUpgradeTime(int upgradeId) const;              // re-arm time
+    int GetTechUpgradeCost(int upgradeId) const;          // tech upgrade cost (from UPGRADES.DEF)
+    int GetTechUpgradeTime(int upgradeId) const;          // tech upgrade time (from UPGRADES.DEF)
+    bool EnsureUpgradeDefsLoaded();                       // load UPGRADES.DEF
     wxString GetUnitCategoryName(int unitId) const;
     bool CanUpgradeUnitTo(int fromUnitId, int toUnitId) const;
     std::vector<int> GetAvailableUpgradesForUnit(int unitId) const;
@@ -254,8 +257,20 @@ public:
     // Per-roster-row unique IDs (session-stable). Used for hierarchy assignment.
     mutable std::vector<uint32_t> m_rosterRowUids;
     mutable uint32_t m_nextRosterUid = 1;
-    std::unordered_map<int, int> m_unitCosts;
+    std::unordered_map<int, int> m_unitCosts;        // unit_id -> cost_buy
+    std::unordered_map<int, int> m_unitUpgradeCosts; // unit_id -> cost_upgrade (re-arm cost)
     bool m_unitCostsLoaded = false;
+
+    // Tech upgrades from UPGRADES.DEF (Engine/Weapon/Armour style)
+    struct UpgradeDefRec
+    {
+        int id = -1;
+        int price = 0;
+        int time = 1;
+        std::set<int> suitableTypes; // unit type_ids this upgrade applies to
+    };
+    std::unordered_map<int, UpgradeDefRec> m_upgradeDefs;
+    bool m_upgradeDefsLoaded = false;
 
     // Game mode (campaign progression)
     bool m_gameModeEnabled = false;
@@ -486,6 +501,25 @@ public:
     wxButton* m_btnHierarchyPageToggle = nullptr;
     std::vector<HierarchySlot> m_hierarchySlots;
     std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
+
+    // ── Mission unit selection ──
+    // Selected unit UIDs (roster row UIDs) for the next mission launch
+    std::unordered_set<uint32_t> m_selectedUnitsForMission;
+    // Selected commander UIDs for mission (their units are automatically included)
+    std::unordered_set<uint32_t> m_selectedCommandersForMission;
+
+    // Get all unit UIDs assigned under a commander in hierarchy
+    std::vector<uint32_t> GetUnitsUnderCommander(uint32_t commander_uid) const;
+    // Handler for commander selection in roster (selects all units under them)
+    void OnCommanderSelectForMission(wxListEvent& ev);
+    // Handler for unit selection in roster
+    void OnUnitSelectForMission(wxListEvent& ev);
+    // Update visual selection state in roster (units)
+    void UpdateRosterSelectionVisuals();
+    // Update visual selection state in commander roster
+    void UpdateCommanderRosterSelectionVisuals();
+    // Get selected units as PlayerUnitAdd vector for mission launch
+    std::vector<LevelData::PlayerUnitAdd> GetSelectedUnitsForLaunch() const;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnInfo = nullptr;       // NEW: Info/encyclopedia button
