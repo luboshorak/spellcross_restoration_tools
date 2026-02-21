@@ -74,6 +74,49 @@ static void MakeChildrenTransparentRecursive(wxWindow* root)
     }
 }
 
+// Grid overlay for list controls - draws subtle grid lines on the background
+// Note: On Windows, native ListView ignores EVT_ERASE_BACKGROUND, so we use
+// a post-paint approach with wxClientDC + CallAfter for the overlay effect.
+static void BindListGridOverlay(wxListCtrl* list, const wxColour& gridColor = wxColour(0x40, 0x60, 0x38))
+{
+    if (!list) return;
+
+    // Force custom background style so we have more control
+    list->SetBackgroundStyle(wxBG_STYLE_PAINT);
+
+    // Paint handler: let native control paint first, then overlay grid
+    list->Bind(wxEVT_PAINT, [list, gridColor](wxPaintEvent& ev) {
+        // MUST create wxPaintDC first, even if we don't use it directly
+        wxPaintDC paintDC(list);
+
+        // Let native control draw its content
+        ev.Skip();
+
+        // Schedule grid drawing AFTER native paint completes using CallAfter
+        // This ensures grid is drawn on top of the native rendering
+        list->CallAfter([list, gridColor]() {
+            if (!list || !list->IsShownOnScreen()) return;
+
+            // Use wxClientDC for post-paint drawing
+            wxClientDC dc(list);
+            if (!dc.IsOk()) return;
+
+            int w, h;
+            list->GetClientSize(&w, &h);
+            if (w <= 0 || h <= 0) return;
+
+            // Draw grid lines with higher visibility
+            dc.SetPen(wxPen(gridColor, 1, wxPENSTYLE_SOLID));
+
+            const int gridSize = 20;
+            for (int gx = 0; gx < w; gx += gridSize)
+                dc.DrawLine(gx, 0, gx, h);
+            for (int gy = 0; gy < h; gy += gridSize)
+                dc.DrawLine(0, gy, w, gy);
+        });
+    });
+}
+
 // UI-only: readonly text panel under the territory grid (instead of popups)
 static const int ID_TERRITORY_TEXTBOX = wxID_HIGHEST + 2201;
 
@@ -537,10 +580,94 @@ static wxButton* CreateStrategicButton(
     if (minSize != wxDefaultSize)
     {
         btn->SetMinSize(minSize);
+        btn->SetMaxSize(minSize);  // Fixed size, no expansion
     }
 
     // volitelně – trochu větší vnitřní okraje (padding), aby to vypadalo líp
     // btn->SetMargins(12, 8);   // funguje od wx 3.1+, pokud máš starší verzi → ignoruj
+
+    return btn;
+}
+
+// ============================================================
+// Bitmap buttons for strategic menu (icon-based)
+// ============================================================
+
+static std::filesystem::path GetMenuIconPath()
+{
+    return std::filesystem::current_path() / "data" / "menu";
+}
+
+static wxBitmap LoadMenuIcon(const wxString& name, const wxSize& targetSize = wxDefaultSize)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const fs::path dir = GetMenuIconPath();
+    const fs::path pngPath = dir / (name.ToStdString() + ".png");
+
+    if (!fs::exists(pngPath, ec))
+    {
+        wxLogWarning("[MENU] Icon not found: %s", pngPath.string().c_str());
+        return wxBitmap();
+    }
+
+    wxImage img;
+    if (!img.LoadFile(wxString::FromUTF8(pngPath.string()), wxBITMAP_TYPE_PNG))
+    {
+        wxLogWarning("[MENU] Failed to load icon: %s", pngPath.string().c_str());
+        return wxBitmap();
+    }
+
+    // Scale to target size while preserving aspect ratio
+    if (targetSize != wxDefaultSize && targetSize.GetWidth() > 0 && targetSize.GetHeight() > 0)
+    {
+        const int srcW = img.GetWidth();
+        const int srcH = img.GetHeight();
+        if (srcW > 0 && srcH > 0)
+        {
+            const double scaleX = (double)targetSize.GetWidth() / (double)srcW;
+            const double scaleY = (double)targetSize.GetHeight() / (double)srcH;
+            const double scale = std::min(scaleX, scaleY);  // fit inside target, preserve aspect
+            const int newW = std::max(1, (int)std::lround(srcW * scale));
+            const int newH = std::max(1, (int)std::lround(srcH * scale));
+            img = img.Scale(newW, newH, wxIMAGE_QUALITY_HIGH);
+        }
+    }
+
+    return wxBitmap(img);
+}
+
+static wxBitmapButton* CreateStrategicBitmapButton(
+    wxWindow* parent,
+    int id,
+    const wxString& iconName,
+    const wxColour& background,
+    const wxSize& minSize = wxDefaultSize)
+{
+    // Load icon (use minSize for scaling if specified)
+    wxSize iconSize = minSize;
+    if (iconSize == wxDefaultSize)
+        iconSize = wxSize(200, 44);  // default button size
+
+    wxBitmap bmp = LoadMenuIcon(iconName, iconSize);
+
+    wxBitmapButton* btn;
+    if (bmp.IsOk())
+    {
+        btn = new wxBitmapButton(parent, id, bmp, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    }
+    else
+    {
+        // Fallback: create text button if icon missing
+        btn = new wxBitmapButton(parent, id, wxBitmap(1, 1), wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+        wxLogWarning("[MENU] Using fallback for icon: %s", iconName.ToStdString().c_str());
+    }
+
+    btn->SetBackgroundColour(background);
+
+    if (minSize != wxDefaultSize)
+        btn->SetMinSize(minSize);
 
     return btn;
 }
@@ -2000,6 +2127,7 @@ void StrategicLevelFrame::BuildUI()
     m_cmdRoster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnCommanderBeginDrag, this);
     m_cmdRoster->Bind(wxEVT_LIST_ITEM_SELECTED, &StrategicLevelFrame::OnCommanderSelectForMission, this);
     m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
+    BindListGridOverlay(m_cmdRoster);
     // Commanders list - compact height, units list gets more space
     {
         const int rowsVisible = 5;                   // fewer rows for commanders
@@ -2033,6 +2161,7 @@ void StrategicLevelFrame::BuildUI()
     // Units are no longer dragged into hierarchy slots; assignment is done by selecting a unit under a commander.
     // m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
     // m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
+    BindListGridOverlay(m_roster);
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
@@ -2077,6 +2206,7 @@ void StrategicLevelFrame::BuildUI()
                 }
                 SelectResearchIndex(static_cast<int>(data));
             });
+        BindListGridOverlay(m_researchList);
         rs->Add(m_researchList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
         m_midResearchPanel->SetSizer(rs);
@@ -2121,6 +2251,7 @@ void StrategicLevelFrame::BuildUI()
                 }
                 SelectInfoIndex(static_cast<int>(data));
             });
+        BindListGridOverlay(m_infoList);
         is->Add(m_infoList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
         m_midInfoPanel->SetSizer(is);
@@ -2135,7 +2266,7 @@ void StrategicLevelFrame::BuildUI()
     // ============================================================
     // Keep the right sidebar width consistent across all pages.
     // If added with a proportional grow factor, buttons become excessively wide on larger resolutions.
-    const int kRightSidebarW = 240;
+    const int kRightSidebarW = 180;
     auto* right = new wxPanel(m_normalLayoutPanel);
     right->SetBackgroundColour(m_palette.background);
     right->SetMinSize(wxSize(kRightSidebarW, -1));
@@ -2182,49 +2313,79 @@ void StrategicLevelFrame::BuildUI()
     status->SetSizer(statusSizer);
     rightSizer->Add(status, 0, wxALL | wxEXPAND, 8);
 
-    auto makeBtn = [&](int id, const wxString& label) -> wxButton*
+    auto makeBtn = [&](int id, const wxString& label, const wxString& iconName = "") -> wxButton*
         {
-            //return CreateStrategicButton(right, id, label, m_fontText, m_palette.buttonText,
-            //                             m_palette.shadow, m_palette.buttonBackground, wxSize(-1, 44));
-            return CreateStrategicButton(right, id, label,
+            wxButton* btn = CreateStrategicButton(right, id, label,
                 m_fontText,
                 m_palette.buttonText,
                 m_palette.buttonBackground,
-                wxSize(-1, 44));
+                wxSize(110, 44));
 
+            // Try to load icon - if found, hide text (text is fallback only)
+            if (!iconName.empty())
+            {
+                wxBitmap bmp = LoadMenuIcon(iconName, wxSize(32, 32));
+                if (bmp.IsOk())
+                {
+                    btn->SetBitmap(bmp);
+                    btn->SetBitmapPosition(wxLEFT);
+                    btn->SetLabel("");  // Hide text when icon is available
+                }
+            }
+
+            return btn;
         };
 
     // Buttons (consistent order across all pages)
 
-    m_btnStrategicMap = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
-    m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
-    m_btnUnitsShop = makeBtn(ID_BTN_UNITS, "Units");
-    m_btnBuyShop = makeBtn(ID_BTN_BUY_SHOP, "Buy / Sell");
-    m_btnResearch = makeBtn(ID_BTN_RESEARCH, "Research");
-    m_btnInfo = makeBtn(ID_BTN_INFO, "Info");
-    m_btnResources = makeBtn(ID_BTN_RESOURCES, "Resources");
-    m_btnStats = makeBtn(ID_BTN_STATS, "Statistics");
-    m_btnLaunch = makeBtn(ID_BTN_LAUNCH, "Launch mission");
+    m_btnStrategicMap = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map", "strategic_map");
+    m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy", "hierarchy");
+    m_btnUnitsShop = makeBtn(ID_BTN_UNITS, "Units", "units");
+    m_btnBuyShop = makeBtn(ID_BTN_BUY_SHOP, "Buy / Sell", "buy_sell");
+    m_btnResearch = makeBtn(ID_BTN_RESEARCH, "Research", "research");
+    m_btnInfo = makeBtn(ID_BTN_INFO, "Info", "info");
+    m_btnResources = makeBtn(ID_BTN_RESOURCES, "Resources", "resources");
+    m_btnStats = makeBtn(ID_BTN_STATS, "Statistics", "statistics");
+    m_btnLaunch = makeBtn(ID_BTN_LAUNCH, "Launch mission");  // No icon in original game
 
-    // End Turn button with black background and turn number
+    // End Turn button with black background and turn number (no icon in original game)
+    // Two-line format: "Turn" + number, hover shows "End" with gray background
     m_btnEndTurn = CreateStrategicButton(right, ID_BTN_ENDTURN,
-        wxString::Format("End Turn %02d", m_turn),
+        wxString::Format("Turn\n%02d", m_turn),
         m_fontText,
         m_palette.buttonText,
         wxColour(0, 0, 0),  // black background
-        wxSize(-1, 44));
+        wxSize(110, 44));
+
+    // Hover effect: gray background, show "End"
+    m_btnEndTurn->Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent& ev) {
+        if (m_btnEndTurn) {
+            m_btnEndTurn->SetLabel("End");
+            m_btnEndTurn->SetBackgroundColour(m_palette.buttonBackground);
+            m_btnEndTurn->Refresh();
+        }
+        ev.Skip();
+    });
+    m_btnEndTurn->Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent& ev) {
+        if (m_btnEndTurn) {
+            m_btnEndTurn->SetLabel(wxString::Format("Turn\n%02d", m_turn));
+            m_btnEndTurn->SetBackgroundColour(wxColour(0, 0, 0));
+            m_btnEndTurn->Refresh();
+        }
+        ev.Skip();
+    });
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
-    btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnUnitsShop, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuyShop, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnResources, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnStats, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(m_btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(m_btnEndTurn, 0, wxEXPAND);
+    btnSizer->Add(m_btnStrategicMap, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(m_btnHierarchy, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(m_btnUnitsShop, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(m_btnBuyShop, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(m_btnResearch, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(m_btnInfo, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(m_btnResources, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(m_btnStats, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(m_btnLaunch, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(m_btnEndTurn, 0, wxALIGN_CENTER_HORIZONTAL);
 
     rightSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     right->SetSizer(rightSizer);
@@ -2269,7 +2430,7 @@ void StrategicLevelFrame::BuildBuyPage()
     // 3-column layout: left rosters + middle shop/info + right sidebar (status + all buttons)
     // Keep the right sidebar width consistent with the rest of Strategic UI.
     // If the sidebar is proportional, buttons become excessively wide on larger resolutions.
-    const int kSidebarW = 240;
+    const int kSidebarW = 180;
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     // ---------------------------------------------------------------------
@@ -2296,6 +2457,7 @@ void StrategicLevelFrame::BuildBuyPage()
         unitRoster->InsertColumn(0, "Unit");
         unitRoster->InsertColumn(1, "HP");
 
+        BindListGridOverlay(unitRoster);
         leftSizer->Add(unitRoster, 3, wxALL | wxEXPAND, 4);
         m_buyUnitRoster = unitRoster;
     }
@@ -2317,6 +2479,7 @@ void StrategicLevelFrame::BuildBuyPage()
         cmdRoster->InsertColumn(0, "Commander");
         cmdRoster->InsertColumn(1, "Rank");
 
+        BindListGridOverlay(cmdRoster);
         leftSizer->Add(cmdRoster, 1, wxALL | wxEXPAND, 4);
         m_buyCmdRoster = cmdRoster;
     }
@@ -2386,6 +2549,7 @@ void StrategicLevelFrame::BuildBuyPage()
         if (w > 0) m_buyShopList->SetColumnWidth(0, w);
         });
 
+    BindListGridOverlay(m_buyShopList);
     midSizer->Add(m_buyShopList, 1, wxLEFT | wxRIGHT | wxEXPAND, 8);
 
     // Time + Cost row
@@ -2466,39 +2630,53 @@ void StrategicLevelFrame::BuildBuyPage()
         sideSizer->Add(status, 0, wxALL | wxEXPAND, 8);
     }
 
-    auto makeBtn = [&](const wxString& label) -> wxButton*
+    auto makeBtn = [&](const wxString& label, const wxString& iconName = "") -> wxButton*
         {
-            return CreateStrategicButton(sidePanel, wxID_ANY, label,
+            wxButton* btn = CreateStrategicButton(sidePanel, wxID_ANY, label,
                 m_fontText,
                 m_palette.buttonText,
                 m_palette.buttonBackground,
-                wxSize(-1, 44));
+                wxSize(110, 44));
+
+            // Try to load icon - if found, hide text (text is fallback only)
+            if (!iconName.empty())
+            {
+                wxBitmap bmp = LoadMenuIcon(iconName, wxSize(32, 32));
+                if (bmp.IsOk())
+                {
+                    btn->SetBitmap(bmp);
+                    btn->SetBitmapPosition(wxLEFT);
+                    btn->SetLabel("");
+                }
+            }
+
+            return btn;
         };
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* btnStrategicMap = makeBtn("Strategic map");
+    auto* btnStrategicMap = makeBtn("Strategic map", "strategic_map");
     btnStrategicMap->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowStrategicMap(ev); });
 
-    auto* btnHierarchy = makeBtn("Hierarchy");
+    auto* btnHierarchy = makeBtn("Hierarchy", "hierarchy");
     btnHierarchy->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowHierarchy(ev); });
 
-    auto* btnUnits = makeBtn("Units");
+    auto* btnUnits = makeBtn("Units", "units");
     btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); EnterUnitsMode(); });
 
-    auto* btnBuySell = makeBtn("Back");  // "Back" when in Buy/Sell mode
+    auto* btnBuySell = makeBtn("Buy / Sell", "buy_sell");
     btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveBuyMode(); });
 
-    auto* btnResearch = makeBtn("Research");
+    auto* btnResearch = makeBtn("Research", "research");
     btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnResearch(ev); });
 
-    auto* btnInfo = makeBtn("Info");
+    auto* btnInfo = makeBtn("Info", "info");
     btnInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowInfo(ev); });
 
-    auto* btnResources = makeBtn("Resources");
+    auto* btnResources = makeBtn("Resources", "resources");
     btnResources->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowResources(ev); });
 
-    auto* btnStats = makeBtn("Statistics");
+    auto* btnStats = makeBtn("Statistics", "statistics");
     btnStats->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowStats(ev); });
 
     auto* btnLaunch = makeBtn("Launch mission");
@@ -2506,25 +2684,38 @@ void StrategicLevelFrame::BuildBuyPage()
     // Launch mission must only be enabled on the Strategic map page.
     btnLaunch->Enable(false);
 
-    // End Turn with black background and turn number
+    // End Turn with black background and turn number (two-line format)
     auto* btnEndTurn = CreateStrategicButton(sidePanel, wxID_ANY,
-        wxString::Format("End Turn %02d", m_turn),
+        wxString::Format("Turn\n%02d", m_turn),
         m_fontText,
         m_palette.buttonText,
         wxColour(0, 0, 0),  // black background
-        wxSize(-1, 44));
+        wxSize(110, 44));
     btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnEndTurn(ev); });
+    // Hover effect
+    btnEndTurn->Bind(wxEVT_ENTER_WINDOW, [this, btnEndTurn](wxMouseEvent& ev) {
+        btnEndTurn->SetLabel("End");
+        btnEndTurn->SetBackgroundColour(m_palette.buttonBackground);
+        btnEndTurn->Refresh();
+        ev.Skip();
+    });
+    btnEndTurn->Bind(wxEVT_LEAVE_WINDOW, [this, btnEndTurn](wxMouseEvent& ev) {
+        btnEndTurn->SetLabel(wxString::Format("Turn\n%02d", m_turn));
+        btnEndTurn->SetBackgroundColour(wxColour(0, 0, 0));
+        btnEndTurn->Refresh();
+        ev.Skip();
+    });
 
-    btnSizer->Add(btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnResources, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnStats, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(btnEndTurn, 0, wxEXPAND);
+    btnSizer->Add(btnStrategicMap, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnHierarchy, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnUnits, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnBuySell, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(btnResearch, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnInfo, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnResources, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnStats, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(btnLaunch, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(btnEndTurn, 0, wxALIGN_CENTER_HORIZONTAL);
 
     sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
@@ -2929,7 +3120,7 @@ void StrategicLevelFrame::BuildUnitsPage()
 {
     if (!m_unitsMainPanel) return;
 
-    const int kSidebarW = 240;
+    const int kSidebarW = 180;
     const int kModeW = 150;
 
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -2966,6 +3157,7 @@ void StrategicLevelFrame::BuildUnitsPage()
         RefreshUnitsActionButton();
         });
 
+    BindListGridOverlay(m_unitsRoster);
     leftSizer->Add(m_unitsRoster, 1, wxALL | wxEXPAND, 8);
 
     // Temporary units list (same width, slightly lower) - will be filled once temporary units exist in data.
@@ -2982,6 +3174,7 @@ void StrategicLevelFrame::BuildUnitsPage()
     // Keep selection logic simple for now (temporary units are not yet implemented).
     m_unitsTempRoster->Enable(false);
 
+    BindListGridOverlay(m_unitsTempRoster);
     leftSizer->Add(m_unitsTempRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     leftPanel->SetSizer(leftSizer);
@@ -3082,6 +3275,7 @@ void StrategicLevelFrame::BuildUnitsPage()
         if (w > 0) m_unitsShopList->SetColumnWidth(0, w);
         });
 
+    BindListGridOverlay(m_unitsShopList);
     upgTop->Add(m_unitsShopList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     // Bottom: unit types in same category (re-arm)
@@ -3244,64 +3438,91 @@ void StrategicLevelFrame::BuildUnitsPage()
         sideSizer->Add(status, 0, wxALL | wxEXPAND, 8);
     }
 
-    auto makeBtn = [&](const wxString& label) -> wxButton*
+    auto makeBtn = [&](const wxString& label, const wxString& iconName = "") -> wxButton*
         {
-            return CreateStrategicButton(sidePanel, wxID_ANY, label,
+            wxButton* btn = CreateStrategicButton(sidePanel, wxID_ANY, label,
                 m_fontText,
                 m_palette.buttonText,
                 m_palette.buttonBackground,
-                wxSize(-1, 44));
+                wxSize(110, 44));
+
+            // Try to load icon - if found, hide text (text is fallback only)
+            if (!iconName.empty())
+            {
+                wxBitmap bmp = LoadMenuIcon(iconName, wxSize(32, 32));
+                if (bmp.IsOk())
+                {
+                    btn->SetBitmap(bmp);
+                    btn->SetBitmapPosition(wxLEFT);
+                    btn->SetLabel("");
+                }
+            }
+
+            return btn;
         };
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* btnStrategicMap = makeBtn("Strategic map");
+    auto* btnStrategicMap = makeBtn("Strategic map", "strategic_map");
     btnStrategicMap->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowStrategicMap(ev); });
 
-    auto* btnHierarchy = makeBtn("Hierarchy");
+    auto* btnHierarchy = makeBtn("Hierarchy", "hierarchy");
     btnHierarchy->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowHierarchy(ev); });
 
-    auto* btnUnits = makeBtn("Back");  // "Back" when in Units mode
+    auto* btnUnits = makeBtn("Units", "units");
     btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveUnitsMode(); });
 
-    auto* btnBuySell = makeBtn("Buy / Sell");
+    auto* btnBuySell = makeBtn("Buy / Sell", "buy_sell");
     btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveUnitsMode(); EnterBuyMode(); });
 
-    auto* btnResearch = makeBtn("Research");
+    auto* btnResearch = makeBtn("Research", "research");
     btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnResearch(ev); });
 
-    auto* btnInfo = makeBtn("Info");
+    auto* btnInfo = makeBtn("Info", "info");
     btnInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowInfo(ev); });
 
-    auto* btnResources = makeBtn("Resources");
+    auto* btnResources = makeBtn("Resources", "resources");
     btnResources->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowResources(ev); });
 
-    auto* btnStats = makeBtn("Statistics");
+    auto* btnStats = makeBtn("Statistics", "statistics");
     btnStats->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowStats(ev); });
 
     auto* btnLaunch = makeBtn("Launch mission");
     btnLaunch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnLaunch(ev); });
     btnLaunch->Enable(false);
 
-    // End Turn with black background and turn number
+    // End Turn with black background and turn number (two-line format)
     auto* btnEndTurn = CreateStrategicButton(sidePanel, wxID_ANY,
-        wxString::Format("End Turn %02d", m_turn),
+        wxString::Format("Turn\n%02d", m_turn),
         m_fontText,
         m_palette.buttonText,
         wxColour(0, 0, 0),  // black background
-        wxSize(-1, 44));
+        wxSize(110, 44));
     btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnEndTurn(ev); });
+    // Hover effect
+    btnEndTurn->Bind(wxEVT_ENTER_WINDOW, [this, btnEndTurn](wxMouseEvent& ev) {
+        btnEndTurn->SetLabel("End");
+        btnEndTurn->SetBackgroundColour(m_palette.buttonBackground);
+        btnEndTurn->Refresh();
+        ev.Skip();
+    });
+    btnEndTurn->Bind(wxEVT_LEAVE_WINDOW, [this, btnEndTurn](wxMouseEvent& ev) {
+        btnEndTurn->SetLabel(wxString::Format("Turn\n%02d", m_turn));
+        btnEndTurn->SetBackgroundColour(wxColour(0, 0, 0));
+        btnEndTurn->Refresh();
+        ev.Skip();
+    });
 
-    btnSizer->Add(btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnResources, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnStats, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
-    btnSizer->Add(btnEndTurn, 0, wxEXPAND);
+    btnSizer->Add(btnStrategicMap, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnHierarchy, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnUnits, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnBuySell, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(btnResearch, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnInfo, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnResources, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 4);
+    btnSizer->Add(btnStats, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(btnLaunch, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 8);
+    btnSizer->Add(btnEndTurn, 0, wxALIGN_CENTER_HORIZONTAL);
 
     sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
@@ -5560,9 +5781,9 @@ void StrategicLevelFrame::RefreshUI()
     if (m_buyLblTurnValue)
         m_buyLblTurnValue->SetLabel(wxString::Format("%d", m_turn));
 
-    // Update End Turn button label with current turn number
+    // Update End Turn button label with current turn number (two-line format)
     if (m_btnEndTurn)
-        m_btnEndTurn->SetLabel(wxString::Format("End Turn %02d", m_turn));
+        m_btnEndTurn->SetLabel(wxString::Format("Turn\n%02d", m_turn));
 
 
     // Commanders list
@@ -5784,6 +6005,7 @@ void StrategicLevelFrame::BuildResourcesPage()
             m_selectedTerritory = (int)tid;
             RefreshResourcesPage();
         });
+    BindListGridOverlay(m_resourcesTable);
     us->Add(m_resourcesTable, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     m_resourcesSlider->Bind(wxEVT_SLIDER, [this](wxCommandEvent&)
@@ -6245,8 +6467,7 @@ void StrategicLevelFrame::EnterResearchMode()
     if (m_leftBook) m_leftBook->SetSelection(4);
     if (m_midBook)  m_midBook->SetSelection(1);
 
-    // Update button label
-    if (m_btnResearch) m_btnResearch->SetLabel("Back");
+    // Button keeps its icon - clicking it again will leave research mode
 
     RefreshResearchUI();
 }
@@ -6257,8 +6478,6 @@ void StrategicLevelFrame::LeaveResearchMode()
 
     if (m_leftBook) m_leftBook->SetSelection(0);
     if (m_midBook)  m_midBook->SetSelection(0);
-
-    if (m_btnResearch) m_btnResearch->SetLabel("Research");
 
     RefreshUI();
 }
@@ -6496,8 +6715,7 @@ void StrategicLevelFrame::EnterInfoMode()
     // Mid book: 0=roster, 1=research, 2=info
     if (m_midBook)  m_midBook->SetSelection(2);
 
-    // Update button label
-    if (m_btnInfo) m_btnInfo->SetLabel("Back");
+    // Button keeps its icon - clicking it again will leave info mode
 
     RefreshInfoUI();
 }
@@ -6508,8 +6726,6 @@ void StrategicLevelFrame::LeaveInfoMode()
 
     if (m_leftBook) m_leftBook->SetSelection(0);
     if (m_midBook)  m_midBook->SetSelection(0);
-
-    if (m_btnInfo) m_btnInfo->SetLabel("Info");
 
     RefreshUI();
 }
@@ -8968,6 +9184,18 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
 
     wxAutoBufferedPaintDC dc(target);
     dc.Clear();
+
+    // Draw grid on background (visible only in empty areas around/outside the map bitmap)
+    {
+        int pw, ph;
+        target->GetClientSize(&pw, &ph);
+        dc.SetPen(wxPen(wxColour(0x20, 0x40, 0x15), 1)); // darker green line
+        const int gridSize = 32;
+        for (int gx = 0; gx < pw; gx += gridSize)
+            dc.DrawLine(gx, 0, gx, ph);
+        for (int gy = 0; gy < ph; gy += gridSize)
+            dc.DrawLine(0, gy, pw, gy);
+    }
 
     if (m_hasBg && m_bgBitmap.IsOk())
     {
