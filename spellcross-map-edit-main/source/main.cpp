@@ -173,7 +173,11 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             unit->experience_init = 0;
             unit->experience_level = 1;
             unit->ResetAP();
-            unit->man = entry.health > 0 ? entry.health : unit_rec->cnt;
+            // entry.health is percentage (0-100), convert to actual man count based on unit_rec->cnt
+            if (entry.health > 0 && entry.health <= 100)
+                unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+            else
+                unit->man = unit_rec->cnt;
             unit->wounded = 0;
 
             if (spell_map->PlaceUnit(unit))

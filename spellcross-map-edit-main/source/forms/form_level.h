@@ -502,6 +502,25 @@ public:
     std::vector<HierarchySlot> m_hierarchySlots;
     std::unordered_map<std::string, size_t> m_hierarchySlotIndex;
 
+    // ── Mission unit selection ──
+    // Selected unit UIDs (roster row UIDs) for the next mission launch
+    std::unordered_set<uint32_t> m_selectedUnitsForMission;
+    // Selected commander UIDs for mission (their units are automatically included)
+    std::unordered_set<uint32_t> m_selectedCommandersForMission;
+
+    // Get all unit UIDs assigned under a commander in hierarchy
+    std::vector<uint32_t> GetUnitsUnderCommander(uint32_t commander_uid) const;
+    // Handler for commander selection in roster (selects all units under them)
+    void OnCommanderSelectForMission(wxListEvent& ev);
+    // Handler for unit selection in roster
+    void OnUnitSelectForMission(wxListEvent& ev);
+    // Update visual selection state in roster (units)
+    void UpdateRosterSelectionVisuals();
+    // Update visual selection state in commander roster
+    void UpdateCommanderRosterSelectionVisuals();
+    // Get selected units as PlayerUnitAdd vector for mission launch
+    std::vector<LevelData::PlayerUnitAdd> GetSelectedUnitsForLaunch() const;
+
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnInfo = nullptr;       // NEW: Info/encyclopedia button
     wxButton* m_btnBuyShop = nullptr;   // single "Buy / Sell" toggle

@@ -1998,14 +1998,14 @@ void StrategicLevelFrame::BuildUI()
     m_cmdRoster->InsertColumn(0, "Commander");
     m_cmdRoster->InsertColumn(1, "Rank");
     m_cmdRoster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnCommanderBeginDrag, this);
+    m_cmdRoster->Bind(wxEVT_LIST_ITEM_SELECTED, &StrategicLevelFrame::OnCommanderSelectForMission, this);
     m_cmdRoster->SetDropTarget(new HierarchyPoolDropTarget(this, "commander"));
-    // Keep the commanders list compact (14 rows max)
-    // NOVĚ: výška podle fontu + menší počet řádků
+    // Commanders list - compact height, units list gets more space
     {
-        const int rowsVisible = 8;                   // uprav dle potřeby (např. 6–8)
-        const int ch = m_cmdRoster->GetCharHeight(); // výška znaku dle aktuálního fontu
-        const int rowH = ch + 8;                     // odhad výšky řádku (font + padding)
-        const int headerH = ch + 18;                 // odhad výšky headeru
+        const int rowsVisible = 5;                   // fewer rows for commanders
+        const int ch = m_cmdRoster->GetCharHeight();
+        const int rowH = ch + 8;
+        const int headerH = ch + 18;
         m_cmdRoster->SetMinSize(wxSize(-1, headerH + rowsVisible * rowH));
     };
     midSizer->Add(m_cmdRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
@@ -2019,7 +2019,7 @@ void StrategicLevelFrame::BuildUI()
 
     midSizer->Add(midTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-    // v BuildUI(): úprava definice sloupců m_roster
+    // v BuildUI(): úprava definice sloupců m_roster - selection managed manually via toggle
     m_roster = new wxListCtrl(mid, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_roster->SetFont(m_fontText);
     m_roster->SetBackgroundColour(m_palette.background);
@@ -2028,9 +2028,12 @@ void StrategicLevelFrame::BuildUI()
     // NOVĚ: jen dva sloupce: Unit a HP
     m_roster->InsertColumn(0, "Unit");
     m_roster->InsertColumn(1, "HP");
+    // Use SELECTED event for toggle behavior (click = toggle selection state)
+    m_roster->Bind(wxEVT_LIST_ITEM_SELECTED, &StrategicLevelFrame::OnUnitSelectForMission, this);
     // Units are no longer dragged into hierarchy slots; assignment is done by selecting a unit under a commander.
     // m_roster->Bind(wxEVT_LIST_BEGIN_DRAG, &StrategicLevelFrame::OnRosterBeginDrag, this);
     // m_roster->SetDropTarget(new HierarchyPoolDropTarget(this, "unit"));
+    midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
     midSizer->Add(m_roster, 1, wxALL | wxEXPAND, 8);
 
     mid->SetSizer(midSizer);
@@ -2192,26 +2195,33 @@ void StrategicLevelFrame::BuildUI()
 
         };
 
-    // Buttons (order matches original-ish layout)
+    // Buttons (consistent order across all pages)
 
     m_btnStrategicMap = makeBtn(ID_BTN_STRATEGIC_MAP, "Strategic map");
     m_btnHierarchy = makeBtn(ID_BTN_HIERARCHY, "Hierarchy");
-    m_btnResources = makeBtn(ID_BTN_RESOURCES, "Resources");
+    m_btnUnitsShop = makeBtn(ID_BTN_UNITS, "Units");
+    m_btnBuyShop = makeBtn(ID_BTN_BUY_SHOP, "Buy / Sell");
     m_btnResearch = makeBtn(ID_BTN_RESEARCH, "Research");
     m_btnInfo = makeBtn(ID_BTN_INFO, "Info");
-    m_btnBuyShop = makeBtn(ID_BTN_BUY_SHOP, "Buy / Sell");
-    m_btnUnitsShop = makeBtn(ID_BTN_UNITS, "Units");
+    m_btnResources = makeBtn(ID_BTN_RESOURCES, "Resources");
     m_btnStats = makeBtn(ID_BTN_STATS, "Statistics");
     m_btnLaunch = makeBtn(ID_BTN_LAUNCH, "Launch mission");
-    m_btnEndTurn = makeBtn(ID_BTN_ENDTURN, "End turn");
+
+    // End Turn button with black background and turn number
+    m_btnEndTurn = CreateStrategicButton(right, ID_BTN_ENDTURN,
+        wxString::Format("End Turn %02d", m_turn),
+        m_fontText,
+        m_palette.buttonText,
+        wxColour(0, 0, 0),  // black background
+        wxSize(-1, 44));
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
-    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnBuyShop, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(m_btnUnitsShop, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnUnitsShop, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnBuyShop, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(m_btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(m_btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnResources, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(m_btnStats, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(m_btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
@@ -2468,20 +2478,23 @@ void StrategicLevelFrame::BuildBuyPage()
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* btnResearch = makeBtn("Research");
-    btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnResearch(ev); });
-
-    auto* btnBuySell = makeBtn("Buy / Sell");
-    btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { OnBuyShop(ev); });
-
-    auto* btnUnits = makeBtn("Units");
-    btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); EnterUnitsMode(); });
-
     auto* btnStrategicMap = makeBtn("Strategic map");
     btnStrategicMap->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowStrategicMap(ev); });
 
     auto* btnHierarchy = makeBtn("Hierarchy");
     btnHierarchy->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowHierarchy(ev); });
+
+    auto* btnUnits = makeBtn("Units");
+    btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); EnterUnitsMode(); });
+
+    auto* btnBuySell = makeBtn("Back");  // "Back" when in Buy/Sell mode
+    btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveBuyMode(); });
+
+    auto* btnResearch = makeBtn("Research");
+    btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnResearch(ev); });
+
+    auto* btnInfo = makeBtn("Info");
+    btnInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowInfo(ev); });
 
     auto* btnResources = makeBtn("Resources");
     btnResources->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnShowResources(ev); });
@@ -2494,14 +2507,21 @@ void StrategicLevelFrame::BuildBuyPage()
     // Launch mission must only be enabled on the Strategic map page.
     btnLaunch->Enable(false);
 
-    auto* btnEndTurn = makeBtn("End turn");
+    // End Turn with black background and turn number
+    auto* btnEndTurn = CreateStrategicButton(sidePanel, wxID_ANY,
+        wxString::Format("End Turn %02d", m_turn),
+        m_fontText,
+        m_palette.buttonText,
+        wxColour(0, 0, 0),  // black background
+        wxSize(-1, 44));
     btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveBuyMode(); OnEndTurn(ev); });
 
-    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(btnResources, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(btnStats, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
@@ -2934,7 +2954,8 @@ void StrategicLevelFrame::BuildUnitsPage()
     m_unitsRoster->InsertColumn(2, "Status");
 
     m_unitsRoster->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
-        m_unitsSelectedUnit = (int)ev.GetIndex();
+        // ItemData stores the original m_playerUnits index (not the expanded row index)
+        m_unitsSelectedUnit = (int)m_unitsRoster->GetItemData(ev.GetIndex());
         m_unitsSelectedRearmUnitId = -1;
 
         // Default selection for recruit quality.
@@ -3235,20 +3256,23 @@ void StrategicLevelFrame::BuildUnitsPage()
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* btnResearch = makeBtn("Research");
-    btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnResearch(ev); });
-
-    auto* btnBuySell = makeBtn("Buy / Sell");
-    btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveUnitsMode(); EnterBuyMode(); });
-
-    auto* btnUnits = makeBtn("Units");
-    btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { OnUnitsShop(ev); });
-
     auto* btnStrategicMap = makeBtn("Strategic map");
     btnStrategicMap->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowStrategicMap(ev); });
 
     auto* btnHierarchy = makeBtn("Hierarchy");
     btnHierarchy->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowHierarchy(ev); });
+
+    auto* btnUnits = makeBtn("Back");  // "Back" when in Units mode
+    btnUnits->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveUnitsMode(); });
+
+    auto* btnBuySell = makeBtn("Buy / Sell");
+    btnBuySell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LeaveUnitsMode(); EnterBuyMode(); });
+
+    auto* btnResearch = makeBtn("Research");
+    btnResearch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnResearch(ev); });
+
+    auto* btnInfo = makeBtn("Info");
+    btnInfo->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowInfo(ev); });
 
     auto* btnResources = makeBtn("Resources");
     btnResources->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnShowResources(ev); });
@@ -3260,14 +3284,21 @@ void StrategicLevelFrame::BuildUnitsPage()
     btnLaunch->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnLaunch(ev); });
     btnLaunch->Enable(false);
 
-    auto* btnEndTurn = makeBtn("End turn");
+    // End Turn with black background and turn number
+    auto* btnEndTurn = CreateStrategicButton(sidePanel, wxID_ANY,
+        wxString::Format("End Turn %02d", m_turn),
+        m_fontText,
+        m_palette.buttonText,
+        wxColour(0, 0, 0),  // black background
+        wxSize(-1, 44));
     btnEndTurn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& ev) { LeaveUnitsMode(); OnEndTurn(ev); });
 
-    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 6);
-    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(btnStrategicMap, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(btnHierarchy, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnUnits, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnBuySell, 0, wxEXPAND | wxBOTTOM, 10);
+    btnSizer->Add(btnResearch, 0, wxEXPAND | wxBOTTOM, 6);
+    btnSizer->Add(btnInfo, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(btnResources, 0, wxEXPAND | wxBOTTOM, 6);
     btnSizer->Add(btnStats, 0, wxEXPAND | wxBOTTOM, 10);
     btnSizer->Add(btnLaunch, 0, wxEXPAND | wxBOTTOM, 10);
@@ -3356,26 +3387,35 @@ void StrategicLevelFrame::RefreshUnitsRoster()
     m_unitsRoster->Freeze();
     m_unitsRoster->DeleteAllItems();
 
-    for (size_t i = 0; i < m_playerUnits.size(); i++)
+    // Expand units into roster rows by count (same logic as RefreshUI() for the main roster).
+    // Each row stores the original m_playerUnits index in ItemData for selection handling.
+    long row = 0;
+    for (size_t pIdx = 0; pIdx < m_playerUnits.size(); pIdx++)
     {
-        const auto& u = m_playerUnits[i];
-        wxString name = GetUnitDisplayName(u.unit_id);
+        const auto& u = m_playerUnits[pIdx];
 
-        // Custom name if set
-        if (i < m_unitStates.size() && !m_unitStates[i].custom_name.empty())
-            name = wxString::FromUTF8(m_unitStates[i].custom_name);
+        for (int inst = 0; inst < u.count; ++inst)
+        {
+            wxString name = GetUnitDisplayName(u.unit_id);
 
-        long idx = m_unitsRoster->InsertItem((long)i, name);
+            // Custom name if set (shared across instances of the same stack)
+            if (pIdx < m_unitStates.size() && !m_unitStates[pIdx].custom_name.empty())
+                name = wxString::FromUTF8(m_unitStates[pIdx].custom_name);
 
-        int lvl = (i < m_unitStates.size()) ? m_unitStates[i].level : 0;
-        if (lvl == 0 && i < m_unitStates.size())
-            lvl = m_unitStates[i].experience / 100;
-        m_unitsRoster->SetItem(idx, 1, wxString::Format("%d", lvl));
+            long idx = m_unitsRoster->InsertItem(row, name);
 
-        int cooldown = (i < m_unitStates.size()) ? m_unitStates[i].cooldown_turns : 0;
-        m_unitsRoster->SetItem(idx, 2, cooldown > 0 ? wxString::Format("-%dT", cooldown) : wxString("Ready"));
+            int lvl = (pIdx < m_unitStates.size()) ? m_unitStates[pIdx].level : 0;
+            if (lvl == 0 && pIdx < m_unitStates.size())
+                lvl = m_unitStates[pIdx].experience / 100;
+            m_unitsRoster->SetItem(idx, 1, wxString::Format("%d", lvl));
 
-        m_unitsRoster->SetItemData(idx, (long)i);
+            int cooldown = (pIdx < m_unitStates.size()) ? m_unitStates[pIdx].cooldown_turns : 0;
+            m_unitsRoster->SetItem(idx, 2, cooldown > 0 ? wxString::Format("-%dT", cooldown) : wxString("Ready"));
+
+            // Store the original playerUnits index for selection handling
+            m_unitsRoster->SetItemData(idx, (long)pIdx);
+            ++row;
+        }
     }
 
     for (int c = 0; c < 3; c++)
@@ -5256,6 +5296,255 @@ void StrategicLevelFrame::OnCommanderBeginDrag(wxListEvent& event)
     dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
 
+// ============================================================
+// Mission unit selection
+// ============================================================
+
+std::vector<uint32_t> StrategicLevelFrame::GetUnitsUnderCommander(uint32_t commander_uid) const
+{
+    std::vector<uint32_t> result;
+    if (commander_uid == 0)
+        return result;
+
+    // Find which hierarchy slot this commander is in
+    std::string commanderSlotId;
+    for (const auto& slot : m_hierarchySlots)
+    {
+        if (slot.type == "commander" && slot.commander_uid == commander_uid)
+        {
+            commanderSlotId = slot.id;
+            break;
+        }
+    }
+    if (commanderSlotId.empty())
+        return result;
+
+    // Determine the scope based on commander slot type (battalion/regiment/brigade)
+    // battalion_X_commander -> 4 units (battalion_X_unit_1..4)
+    // regiment_X_commander -> 8 units (2 battalions)
+    // brigade_X_commander -> 16 units (4 battalions)
+
+    std::vector<std::string> unitSlotIds;
+
+    auto parseNumber = [](const std::string& s, const std::string& pre, const std::string& suf) -> int
+        {
+            if (s.rfind(pre, 0) != 0) return -1;
+            size_t p = s.find(suf, pre.size());
+            if (p == std::string::npos) return -1;
+            std::string num = s.substr(pre.size(), p - pre.size());
+            try { return std::stoi(num); }
+            catch (...) { return -1; }
+        };
+
+    if (commanderSlotId.find("battalion_") == 0 && endsWith(commanderSlotId, "_commander"))
+    {
+        int bIndex = parseNumber(commanderSlotId, "battalion_", "_commander");
+        if (bIndex > 0)
+        {
+            for (int u = 1; u <= 4; ++u)
+                unitSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
+        }
+    }
+    else if (commanderSlotId.find("regiment_") == 0 && endsWith(commanderSlotId, "_commander"))
+    {
+        int rIndex = parseNumber(commanderSlotId, "regiment_", "_commander");
+        if (rIndex > 0)
+        {
+            int brigadeIndex = (rIndex - 1) / 2 + 1;
+            int rLocal = (rIndex - 1) % 2;
+            int battalionBase = (brigadeIndex - 1) * 4;
+            int b0 = battalionBase + rLocal * 2 + 1;
+            int b1 = battalionBase + rLocal * 2 + 2;
+            for (int b : { b0, b1 })
+            {
+                for (int u = 1; u <= 4; ++u)
+                    unitSlotIds.push_back("battalion_" + std::to_string(b) + "_unit_" + std::to_string(u));
+            }
+        }
+    }
+    else if (commanderSlotId.find("brigade_") == 0 && endsWith(commanderSlotId, "_commander"))
+    {
+        int brigIndex = parseNumber(commanderSlotId, "brigade_", "_commander");
+        if (brigIndex > 0)
+        {
+            int battalionBase = (brigIndex - 1) * 4;
+            for (int b = 1; b <= 4; ++b)
+            {
+                int bIndex = battalionBase + b;
+                for (int u = 1; u <= 4; ++u)
+                    unitSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
+            }
+        }
+    }
+
+    // Collect unit UIDs from the slots
+    for (const auto& slotId : unitSlotIds)
+    {
+        auto it = m_hierarchySlotIndex.find(slotId);
+        if (it == m_hierarchySlotIndex.end())
+            continue;
+        const HierarchySlot& slot = m_hierarchySlots[it->second];
+        if (slot.type == "unit" && slot.unit_uid != 0)
+            result.push_back(slot.unit_uid);
+    }
+
+    return result;
+}
+
+void StrategicLevelFrame::OnCommanderSelectForMission(wxListEvent& ev)
+{
+    const long item = ev.GetIndex();
+    if (item < 0 || !m_cmdRoster)
+        return;
+
+    const uint32_t cmdUid = (uint32_t)m_cmdRoster->GetItemData(item);
+    if (cmdUid == 0)
+        return;
+
+    // Toggle commander selection
+    const bool wasSelected = (m_selectedCommandersForMission.count(cmdUid) > 0);
+
+    // Get all units under this commander
+    std::vector<uint32_t> units = GetUnitsUnderCommander(cmdUid);
+
+    if (units.empty() && !wasSelected)
+    {
+        wxMessageBox("This commander has no units assigned in the hierarchy.\n\n"
+            "Go to Hierarchy page and assign units under this commander first.",
+            "Select Units", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    if (wasSelected)
+    {
+        // Deselect commander and all their units
+        m_selectedCommandersForMission.erase(cmdUid);
+        for (uint32_t uid : units)
+            m_selectedUnitsForMission.erase(uid);
+    }
+    else
+    {
+        // Select commander and all their units
+        m_selectedCommandersForMission.insert(cmdUid);
+        for (uint32_t uid : units)
+            m_selectedUnitsForMission.insert(uid);
+    }
+
+    UpdateCommanderRosterSelectionVisuals();
+    UpdateRosterSelectionVisuals();
+}
+
+void StrategicLevelFrame::OnUnitSelectForMission(wxListEvent& ev)
+{
+    if (!m_roster)
+        return;
+
+    const long item = ev.GetIndex();
+    if (item < 0)
+        return;
+
+    const uint32_t uid = (uint32_t)m_roster->GetItemData(item);
+    if (uid == 0)
+        return;
+
+    // Toggle selection: if already selected, remove; otherwise add
+    if (m_selectedUnitsForMission.count(uid) > 0)
+        m_selectedUnitsForMission.erase(uid);
+    else
+        m_selectedUnitsForMission.insert(uid);
+
+    // Update visuals (colors)
+    UpdateRosterSelectionVisuals();
+}
+
+void StrategicLevelFrame::UpdateRosterSelectionVisuals()
+{
+    if (!m_roster)
+        return;
+
+    const wxColour clrSelected(0x00, 0xFF, 0x00);  // bright green for selected
+    const wxColour clrUnselected(0x80, 0x80, 0x80); // gray for unselected
+
+    // Update text color in the list control to match m_selectedUnitsForMission
+    // We don't modify the native selection state - we only use colors for visual feedback
+    const long count = m_roster->GetItemCount();
+    for (long i = 0; i < count; ++i)
+    {
+        const uint32_t uid = (uint32_t)m_roster->GetItemData(i);
+        const bool isSelectedForMission = (uid != 0 && m_selectedUnitsForMission.count(uid) > 0);
+
+        // Update text color based on mission selection
+        m_roster->SetItemTextColour(i, isSelectedForMission ? clrSelected : clrUnselected);
+    }
+
+    // Force refresh to show color changes
+    m_roster->Refresh();
+
+    // Update launch button enable state
+    const bool onStrategicMap = (m_leftBook && m_leftBook->GetSelection() == 0 && !m_buyModeActive);
+    if (m_btnLaunch)
+        m_btnLaunch->Enable(onStrategicMap && m_selectedTerritory >= 0 && !m_selectedUnitsForMission.empty());
+}
+
+void StrategicLevelFrame::UpdateCommanderRosterSelectionVisuals()
+{
+    if (!m_cmdRoster)
+        return;
+
+    const wxColour clrSelected(0x00, 0xFF, 0x00);  // bright green for selected
+    const wxColour clrUnselected(0x80, 0x80, 0x80); // gray for unselected
+
+    // Update text color in the commander list to match m_selectedCommandersForMission
+    const long count = m_cmdRoster->GetItemCount();
+    for (long i = 0; i < count; ++i)
+    {
+        const uint32_t uid = (uint32_t)m_cmdRoster->GetItemData(i);
+        const bool isSelectedForMission = (uid != 0 && m_selectedCommandersForMission.count(uid) > 0);
+
+        // Update text color based on mission selection
+        m_cmdRoster->SetItemTextColour(i, isSelectedForMission ? clrSelected : clrUnselected);
+    }
+
+    // Force refresh to show color changes
+    m_cmdRoster->Refresh();
+}
+
+std::vector<LevelData::PlayerUnitAdd> StrategicLevelFrame::GetSelectedUnitsForLaunch() const
+{
+    std::vector<LevelData::PlayerUnitAdd> result;
+
+    if (m_selectedUnitsForMission.empty())
+        return result;
+
+    // Map roster row UID -> playerUnits index
+    // We need to find which m_playerUnits entries correspond to selected UIDs
+    int uidIndex = 0;
+    for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+    {
+        const auto& u = m_playerUnits[pIdx];
+        for (int inst = 0; inst < u.count; ++inst)
+        {
+            if (uidIndex < (int)m_rosterRowUids.size())
+            {
+                const uint32_t uid = m_rosterRowUids[uidIndex];
+                if (m_selectedUnitsForMission.count(uid) > 0)
+                {
+                    // Add this unit instance to the result
+                    LevelData::PlayerUnitAdd add;
+                    add.unit_id = u.unit_id;
+                    add.count = 1;
+                    add.health = u.health;
+                    add.extra = u.extra;
+                    result.push_back(add);
+                }
+            }
+            ++uidIndex;
+        }
+    }
+
+    return result;
+}
+
 void StrategicLevelFrame::RefreshUI()
 {
     if (m_lblMoneyValue)
@@ -5271,6 +5560,10 @@ void StrategicLevelFrame::RefreshUI()
         m_buyLblResearchValue->SetLabel(wxString::Format("%d", m_research));
     if (m_buyLblTurnValue)
         m_buyLblTurnValue->SetLabel(wxString::Format("%d", m_turn));
+
+    // Update End Turn button label with current turn number
+    if (m_btnEndTurn)
+        m_btnEndTurn->SetLabel(wxString::Format("End Turn %02d", m_turn));
 
 
     // Commanders list
@@ -5293,9 +5586,14 @@ void StrategicLevelFrame::RefreshUI()
             if (c.uid == 0)
                 c.uid = m_nextCommanderUid++;
 
+            const wxColour clrSelected(0x00, 0xFF, 0x00);  // bright green for selected
+            const wxColour clrUnselected(0x80, 0x80, 0x80); // gray for unselected
+            const bool isSelectedForMission = (m_selectedCommandersForMission.count(c.uid) > 0);
+
             long cidx = m_cmdRoster->InsertItem(crow++, wxString::FromUTF8(c.name));
             m_cmdRoster->SetItem(cidx, 1, GetRankAbbrev(c.rank));
             m_cmdRoster->SetItemData(cidx, (long)c.uid);
+            m_cmdRoster->SetItemTextColour(cidx, isSelectedForMission ? clrSelected : clrUnselected);
             m_commanderRankByUid[c.uid] = c.rank;
         }
 
@@ -5334,6 +5632,8 @@ void StrategicLevelFrame::RefreshUI()
 
     long row = 0;
     int uidIndex = 0;
+    const wxColour clrSelected(0x00, 0xFF, 0x00);  // bright green for selected
+    const wxColour clrUnselected(0x80, 0x80, 0x80); // gray for unselected
     for (const auto& u : m_playerUnits)
     {
         for (int i = 0; i < u.count; ++i)
@@ -5343,6 +5643,9 @@ void StrategicLevelFrame::RefreshUI()
             m_roster->SetItem(idx, 1, wxString::Format("%d", u.health));
             // Store UID in item data for picking.
             m_roster->SetItemData(idx, (long)uid);
+            // Set text color based on selection state
+            const bool isSelected = (m_selectedUnitsForMission.count(uid) > 0);
+            m_roster->SetItemTextColour(idx, isSelected ? clrSelected : clrUnselected);
         }
     }
 
@@ -5355,26 +5658,32 @@ void StrategicLevelFrame::RefreshUI()
     //        m_btnSell->Enable(!m_playerUnits.empty());
     //}
 
-        // Pevná šířka pro HP, zbytek pro název jednotky
-    int clientW = 0, clientH = 0;
-    m_roster->GetClientSize(&clientW, &clientH);
+            // Pevná šířka pro HP, zbytek pro název jednotky
+            int clientW = 0, clientH = 0;
+            m_roster->GetClientSize(&clientW, &clientH);
 
-    const int hpWidth = 70;                // upravte dle potřeby (např. 70–100)
-    const int unitWidth = std::max(100, clientW - hpWidth - 4); // rezerva na okraj/scrollbar
+            const int hpWidth = 70;                // upravte dle potřeby (např. 70–100)
+            const int unitWidth = std::max(100, clientW - hpWidth - 4); // rezerva na okraj/scrollbar
 
-    m_roster->SetColumnWidth(1, hpWidth);
-    m_roster->SetColumnWidth(0, unitWidth);
+            m_roster->SetColumnWidth(1, hpWidth);
+            m_roster->SetColumnWidth(0, unitWidth);
 
-    // Launch mission is only available on the Strategic map page (left book page 0)
-    // and never while Buy/Sell overlay is active.
-    const bool onStrategicMap = (m_leftBook && m_leftBook->GetSelection() == 0 && !m_buyModeActive);
-    m_btnLaunch->Enable(onStrategicMap && m_selectedTerritory >= 0);
-    if (m_btnBuyShop)
-        m_btnBuyShop->Enable(true);
+            // Restore selection state for units and commanders (after roster rebuild)
+            UpdateRosterSelectionVisuals();
+            UpdateCommanderRosterSelectionVisuals();
 
-    if (m_researchMode)
-        RefreshResearchUI();
-}
+            // Launch mission is only available on the Strategic map page (left book page 0)
+            // and never while Buy/Sell overlay is active.
+            // Also requires at least one unit selected.
+            const bool onStrategicMap = (m_leftBook && m_leftBook->GetSelection() == 0 && !m_buyModeActive);
+            const bool hasSelection = !m_selectedUnitsForMission.empty();
+            m_btnLaunch->Enable(onStrategicMap && m_selectedTerritory >= 0 && hasSelection);
+            if (m_btnBuyShop)
+                m_btnBuyShop->Enable(true);
+
+            if (m_researchMode)
+                RefreshResearchUI();
+        }
 
 
 
@@ -7330,6 +7639,18 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     if (m_selectedTerritory < 0 || !m_main)
         return;
 
+    // Get selected units for this mission
+    std::vector<LevelData::PlayerUnitAdd> unitsForMission = GetSelectedUnitsForLaunch();
+
+    if (unitsForMission.empty())
+    {
+        wxMessageBox("No units selected for mission.\n\n"
+            "Select units in the Units list (click to select, Ctrl+click for multiple)\n"
+            "or click a Commander to select all units under them.",
+            "Launch", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
     const int terr_id = m_selectedTerritory;
     std::string token = ResolveMissionTokenForTerritory(terr_id);
     wxLogMessage(
@@ -7349,20 +7670,20 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     }
 
     wxLogMessage("[LAUNCH] DEF: %ls", defPath.c_str());
-    wxLogMessage("[LAUNCH] playerUnits.count=%zu", m_playerUnits.size());
-    for (size_t i = 0; i < m_playerUnits.size(); ++i)
+    wxLogMessage("[LAUNCH] selectedUnits.count=%zu (from %zu total)", unitsForMission.size(), m_playerUnits.size());
+    for (size_t i = 0; i < unitsForMission.size(); ++i)
     {
-        const auto& u = m_playerUnits[i];
+        const auto& u = unitsForMission[i];
         wxLogMessage("[LAUNCH] unit[%zu]: id=%d count=%d health=%d",
             i, u.unit_id, u.count, u.health);
     }
 
-    bool ok = m_main->LoadMapFromDefPath(defPath, m_playerUnits);
+    bool ok = m_main->LoadMapFromDefPath(defPath, unitsForMission);
 
-    if (!ok && !m_playerUnits.empty())
+    if (!ok && !unitsForMission.empty())
     {
         wxLogWarning("[LAUNCH] Load failed WITH units, retrying WITHOUT units...");
-        const decltype(m_playerUnits) empty_units;
+        const std::vector<LevelData::PlayerUnitAdd> empty_units;
         ok = m_main->LoadMapFromDefPath(defPath, empty_units);
     }
 
@@ -7386,6 +7707,10 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
             m_territoryCurrentMission[terr_id] = to_lower(m->end_ok_mission);
         }
     }
+
+    // Clear selection after launch
+    m_selectedUnitsForMission.clear();
+    m_selectedCommandersForMission.clear();
 
     // persist progression before leaving the strategic screen
     SaveStrategicState();
