@@ -288,17 +288,17 @@ namespace
         std::error_code ec;
         if (!std::filesystem::exists(defPath, ec))
             return flags;
-        
+
         std::ifstream f(defPath);
         if (!f)
             return flags;
-        
+
         std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        
+
         // Match SetResearchFlag(N) - the number N is the unit type_id
         std::regex re(R"(SetResearchFlag\s*\(\s*(\d+)\s*\))");
         for (auto it = std::sregex_iterator(content.begin(), content.end(), re);
-             it != std::sregex_iterator(); ++it)
+            it != std::sregex_iterator(); ++it)
         {
             const auto& m = *it;
             if (m.size() >= 2)
@@ -316,21 +316,21 @@ namespace
         std::set<int> cumulative;
         namespace fs = std::filesystem;
         std::error_code ec;
-        
+
         // Get directory and current level number
         fs::path dir = currentLevelPath.parent_path();
         std::string stem = currentLevelPath.stem().string();
-        
+
         // Extract level number from filename like "LEVEL_05" or "level_05"
         int currentLevel = 0;
         std::regex levelRe(R"([Ll][Ee][Vv][Ee][Ll]_?(\d+))");
         std::smatch m;
         if (std::regex_search(stem, m, levelRe) && m.size() >= 2)
             currentLevel = std::stoi(m[1].str());
-        
+
         if (currentLevel <= 0)
             return cumulative;
-        
+
         // Load flags from LEVEL_01.DEF up to current level
         for (int lvl = 1; lvl <= currentLevel; ++lvl)
         {
@@ -341,7 +341,7 @@ namespace
                 std::string("LEVEL") + std::to_string(lvl) + ".DEF",
                 std::string("level") + std::to_string(lvl) + ".def"
             };
-            
+
             for (const auto& pattern : patterns)
             {
                 fs::path candidate = dir / pattern;
@@ -353,7 +353,7 @@ namespace
                 }
             }
         }
-        
+
         return cumulative;
     }
 } // namespace
@@ -688,7 +688,8 @@ static wxString RankNameCz(int rank)
 
 static bool LoadUnitCostsFromJson(const std::filesystem::path& path,
     std::unordered_map<int, int>& outCosts,
-    std::unordered_map<int, std::string>* outCategories = nullptr)
+    std::unordered_map<int, std::string>* outCategories = nullptr,
+    std::unordered_map<int, int>* outUpgradeCosts = nullptr)
 {
     std::ifstream file(path);
     if (!file.is_open())
@@ -755,6 +756,12 @@ static bool LoadUnitCostsFromJson(const std::filesystem::path& path,
                             std::string cat;
                             if (ParseJsonStringField(obj, "category", cat) && !cat.empty())
                                 (*outCategories)[index] = cat;
+                        }
+                        if (outUpgradeCosts)
+                        {
+                            int upgCost = 0;
+                            if (ParseJsonIntField(obj, "cost_upgrade", upgCost))
+                                (*outUpgradeCosts)[index] = upgCost;
                         }
                     }
                     objStart = std::string::npos;
@@ -884,10 +891,10 @@ static std::filesystem::path FindTextsDirForLevel(const LevelData& level)
     fs::path texts_dir;
 
     auto try_dir = [&](const fs::path& p)
-    {
-        if (texts_dir.empty() && !p.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
-            texts_dir = p;
-    };
+        {
+            if (texts_dir.empty() && !p.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
+                texts_dir = p;
+        };
 
     // Walk up from level DEF location and try common layouts
     fs::path base = fs::path(level.source_path).parent_path();
@@ -1374,9 +1381,9 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
         bool gm2 = false;
         std::vector<int> owned2;
-                std::unordered_map<int, TerritoryResourceState> terrRes;
+        std::unordered_map<int, TerritoryResourceState> terrRes;
 
-                if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
+        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
             wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
             return;
         }
@@ -1472,10 +1479,10 @@ void StrategicLevelFrame::ApplyTerritoryVisibility()
 
 
     auto mark = [&](int tid)
-    {
-        if (tid > 0 && tid < (int)m_visibleTerritory.size())
-            m_visibleTerritory[tid] = 1;
-    };
+        {
+            if (tid > 0 && tid < (int)m_visibleTerritory.size())
+                m_visibleTerritory[tid] = 1;
+        };
 
     for (int tid : m_ownedTerritories)
         mark(tid);
@@ -1612,8 +1619,9 @@ bool StrategicLevelFrame::EnsureUnitCostsLoaded()
         return true;
 
     m_unitCosts.clear();
+    m_unitUpgradeCosts.clear();
     const auto path = GetUnitsJsonPath();
-    if (!LoadUnitCostsFromJson(path, m_unitCosts, &m_unitCategories))
+    if (!LoadUnitCostsFromJson(path, m_unitCosts, &m_unitCategories, &m_unitUpgradeCosts))
     {
         wxMessageBox(wxString::Format("Units pricing file not found or invalid.\nExpected: %s", path.string().c_str()),
             "Units pricing", wxOK | wxICON_WARNING, this);
@@ -1630,6 +1638,141 @@ int StrategicLevelFrame::GetUnitBuyCost(int unit_id) const
     if (it == m_unitCosts.end())
         return -1;
     return it->second;
+}
+
+bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
+{
+    if (m_upgradeDefsLoaded)
+        return true;
+
+    m_upgradeDefs.clear();
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    // Search for UPGRADES.DEF in common locations
+    const fs::path base = GetStableBaseDir();
+    const std::vector<fs::path> candidates = {
+        base / "temp" / "COMMON" / "UPGRADES.DEF",
+        base / "builds" / "x64" / "Release" / "temp" / "COMMON" / "UPGRADES.DEF",
+        base / "builds" / "x64" / "Debug" / "temp" / "COMMON" / "UPGRADES.DEF",
+        base / "data" / "UPGRADES.DEF",
+        fs::current_path(ec) / "temp" / "COMMON" / "UPGRADES.DEF",
+    };
+
+    fs::path defPath;
+    for (const auto& p : candidates)
+    {
+        if (!p.empty() && fs::exists(p, ec))
+        {
+            defPath = p;
+            break;
+        }
+    }
+
+    if (defPath.empty())
+    {
+        wxLogWarning("[UPGRADES] UPGRADES.DEF not found.");
+        m_upgradeDefsLoaded = true;
+        return false;
+    }
+
+    std::ifstream f(defPath);
+    if (!f)
+    {
+        m_upgradeDefsLoaded = true;
+        return false;
+    }
+
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (content.empty())
+    {
+        m_upgradeDefsLoaded = true;
+        return false;
+    }
+
+    // Parse Upgrade(N) { ... } blocks
+    UpgradeDefRec cur;
+    int curId = -1;
+    bool inside = false;
+    std::istringstream ss(content);
+    std::string line;
+
+    while (std::getline(ss, line))
+    {
+        // Strip CR
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+
+        // Skip leading whitespace
+        size_t s = line.find_first_not_of(" \t");
+        if (s == std::string::npos)
+            continue;
+        line = line.substr(s);
+
+        // Skip comments
+        if (!line.empty() && line[0] == ';')
+            continue;
+
+        // Match Upgrade(N) {
+        static const std::regex rxUpgrade(R"(Upgrade\s*\(\s*(\d+)\s*\)\s*\{)");
+        std::smatch m;
+        if (std::regex_search(line, m, rxUpgrade))
+        {
+            cur = UpgradeDefRec{};
+            curId = std::stoi(m[1].str());
+            cur.id = curId;
+            inside = true;
+            continue;
+        }
+
+        if (!inside)
+            continue;
+
+        // End of block
+        if (line[0] == '}')
+        {
+            if (curId >= 0)
+                m_upgradeDefs[curId] = std::move(cur);
+            inside = false;
+            curId = -1;
+            continue;
+        }
+
+        // Parse fields inside block
+        static const std::regex rxPrice(R"(UpgradePrice\s*\(\s*(\d+)\s*\))");
+        static const std::regex rxTime(R"(UpgradeTime\s*\(\s*(\d+)\s*\))");
+        static const std::regex rxTypes(R"(SuitableTypes\s*\(\s*([^)]+)\s*\))");
+
+        if (std::regex_search(line, m, rxPrice))
+            cur.price = std::stoi(m[1].str());
+
+        if (std::regex_search(line, m, rxTime))
+            cur.time = std::stoi(m[1].str());
+
+        if (std::regex_search(line, m, rxTypes))
+        {
+            // Parse comma-separated list of type IDs
+            std::string types = m[1].str();
+            std::istringstream tss(types);
+            std::string tok;
+            while (std::getline(tss, tok, ','))
+            {
+                size_t ts = tok.find_first_not_of(" \t");
+                if (ts != std::string::npos)
+                {
+                    try {
+                        int tid = std::stoi(tok.substr(ts));
+                        cur.suitableTypes.insert(tid);
+                    }
+                    catch (...) {}
+                }
+            }
+        }
+    }
+
+    m_upgradeDefsLoaded = true;
+    return !m_upgradeDefs.empty();
 }
 
 
@@ -2083,7 +2226,7 @@ void StrategicLevelFrame::BuildUI()
 
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
     rootSizer->Add(m_normalLayoutPanel, 1, wxEXPAND);
-    
+
     // --- Buy/Sell root panel (hidden by default) ---
     m_buyMainPanel = new wxPanel(root);
     m_buyMainPanel->SetBackgroundColour(m_palette.background);
@@ -2097,7 +2240,7 @@ void StrategicLevelFrame::BuildUI()
     m_unitsMainPanel->Show(false);
     BuildUnitsPage();
     rootSizer->Add(m_unitsMainPanel, 1, wxEXPAND);
-    
+
     root->SetSizer(rootSizer);
     //použije rekurzivně transparentní pozadí na všechny elementy wx - opatrně!
     //MakeChildrenTransparentRecursive(root);
@@ -2108,7 +2251,7 @@ void StrategicLevelFrame::BuildUI()
 // ============================================================
 
 static constexpr wxUIntPtr kBuyHdrSentinel = static_cast<wxUIntPtr>(-1);
-static constexpr wxUIntPtr kBuyCmdBase     = static_cast<wxUIntPtr>(0x40000000);
+static constexpr wxUIntPtr kBuyCmdBase = static_cast<wxUIntPtr>(0x40000000);
 
 void StrategicLevelFrame::BuildBuyPage()
 {
@@ -2191,7 +2334,7 @@ void StrategicLevelFrame::BuildBuyPage()
         btnTabBuy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
             m_buyTabSell = false;
             RefreshBuyShopList();
-        });
+            });
 
         auto* btnTabSell = new wxButton(midPanel, wxID_ANY, "Sell");
         btnTabSell->SetFont(m_fontText);
@@ -2200,7 +2343,7 @@ void StrategicLevelFrame::BuildBuyPage()
         btnTabSell->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
             m_buyTabSell = true;
             RefreshBuyShopList();
-        });
+            });
 
         tabRow->Add(btnTabBuy, 1, wxEXPAND | wxRIGHT, 4);
         tabRow->Add(btnTabSell, 1, wxEXPAND);
@@ -2225,14 +2368,14 @@ void StrategicLevelFrame::BuildBuyPage()
             return;
         }
         RefreshBuyInfo(static_cast<long>(data));
-    });
+        });
 
     m_buyShopList->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev) {
         ev.Skip();
         if (!m_buyShopList) return;
         const int w = m_buyShopList->GetClientSize().GetWidth();
         if (w > 0) m_buyShopList->SetColumnWidth(0, w);
-    });
+        });
 
     midSizer->Add(m_buyShopList, 1, wxLEFT | wxRIGHT | wxEXPAND, 8);
 
@@ -2281,47 +2424,47 @@ void StrategicLevelFrame::BuildBuyPage()
         auto* statusSizer = new wxBoxSizer(wxVERTICAL);
 
         auto makeStatusRow = [&](const wxString& caption,
-                                 wxStaticText*& outCaption,
-                                 wxStaticText*& outValue)
-        {
-            auto* row = new wxBoxSizer(wxHORIZONTAL);
+            wxStaticText*& outCaption,
+            wxStaticText*& outValue)
+            {
+                auto* row = new wxBoxSizer(wxHORIZONTAL);
 
-            outCaption = new wxStaticText(status, wxID_ANY, caption);
-            outValue = new wxStaticText(status, wxID_ANY, "0");
+                outCaption = new wxStaticText(status, wxID_ANY, caption);
+                outValue = new wxStaticText(status, wxID_ANY, "0");
 
-            outCaption->SetFont(m_fontHeading);
-            outValue->SetFont(m_fontHeading);
+                outCaption->SetFont(m_fontHeading);
+                outValue->SetFont(m_fontHeading);
 
-            outCaption->SetForegroundColour(m_palette.statusHeading);
-            outValue->SetForegroundColour(m_palette.statusNumber);
+                outCaption->SetForegroundColour(m_palette.statusHeading);
+                outValue->SetForegroundColour(m_palette.statusNumber);
 
-            outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
-            outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+                outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+                outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
 
-            row->Add(outCaption, 0, wxRIGHT, 6);
-            row->Add(outValue, 0);
-            return row;
-        };
+                row->Add(outCaption, 0, wxRIGHT, 6);
+                row->Add(outValue, 0);
+                return row;
+            };
 
         statusSizer->Add(makeStatusRow("Money:", m_buyLblMoneyCaption, m_buyLblMoneyValue),
-                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+            0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
         statusSizer->Add(makeStatusRow("Research:", m_buyLblResearchCaption, m_buyLblResearchValue),
-                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+            0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
         statusSizer->Add(makeStatusRow("Turn:", m_buyLblTurnCaption, m_buyLblTurnValue),
-                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+            0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
 
         status->SetSizer(statusSizer);
         sideSizer->Add(status, 0, wxALL | wxEXPAND, 8);
     }
 
     auto makeBtn = [&](const wxString& label) -> wxButton*
-    {
-        return CreateStrategicButton(sidePanel, wxID_ANY, label,
-            m_fontText,
-            m_palette.buttonText,
-            m_palette.buttonBackground,
-            wxSize(-1, 44));
-    };
+        {
+            return CreateStrategicButton(sidePanel, wxID_ANY, label,
+                m_fontText,
+                m_palette.buttonText,
+                m_palette.buttonBackground,
+                wxSize(-1, 44));
+        };
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
 
@@ -2378,7 +2521,7 @@ void StrategicLevelFrame::RefreshBuyInfo(long data)
     if (!m_buyTimeLabel || !m_buyCostLabel || !m_btnBuyAction) return;
     m_btnBuyAction->Enable(false);
 
-    if (data < 0 || data == (long)kBuyHdrSentinel){
+    if (data < 0 || data == (long)kBuyHdrSentinel) {
         m_buyTimeLabel->SetLabel("Time: -");
         m_buyCostLabel->SetLabel("Cost: -");
         return;
@@ -2387,16 +2530,16 @@ void StrategicLevelFrame::RefreshBuyInfo(long data)
     if (!m_buyTabSell)
     {
         // Buy mode
-        if ((wxUIntPtr)data >= kBuyCmdBase){
+        if ((wxUIntPtr)data >= kBuyCmdBase) {
             // Commander
             m_buyTimeLabel->SetLabel("Time: 1");
             m_buyCostLabel->SetLabel("Cost: 0");
             m_btnBuyAction->SetLabel("Buy");
             m_btnBuyAction->Enable((int)m_playerCommanders.size() < 14);
         }
-        else{
+        else {
             // Unit
-            const int tid  = (int)data;
+            const int tid = (int)data;
             const int cost = GetUnitBuyCost(tid);
             m_buyTimeLabel->SetLabel("Time: 1");
             m_buyCostLabel->SetLabel(cost > 0 ? wxString::Format("Cost: %d", cost) : wxString("Cost: ?"));
@@ -2408,9 +2551,9 @@ void StrategicLevelFrame::RefreshBuyInfo(long data)
     {
         // Sell mode
         const int idx = (int)data;
-        if (idx >= 0 && idx < (int)m_playerUnits.size()){
+        if (idx >= 0 && idx < (int)m_playerUnits.size()) {
             const auto& u = m_playerUnits[idx];
-            const int cost   = GetUnitBuyCost(u.unit_id);
+            const int cost = GetUnitBuyCost(u.unit_id);
             const int refund = cost > 0 ? cost / 2 : 0;
             m_buyTimeLabel->SetLabel("Time: 1");
             m_buyCostLabel->SetLabel(refund > 0 ? wxString::Format("Cost: %d", refund) : wxString("Cost: ?"));
@@ -2426,7 +2569,7 @@ void StrategicLevelFrame::RefreshBuyRosters()
 
     // Refresh unit roster
     m_buyUnitRoster->DeleteAllItems();
-    for (const auto& u : m_playerUnits){
+    for (const auto& u : m_playerUnits) {
         const long idx = m_buyUnitRoster->GetItemCount();
         m_buyUnitRoster->InsertItem(idx, GetUnitDisplayName(u.unit_id));
         m_buyUnitRoster->SetItem(idx, 1, wxString::Format("%d%%", u.health));
@@ -2436,7 +2579,7 @@ void StrategicLevelFrame::RefreshBuyRosters()
 
     // Refresh commander roster
     m_buyCmdRoster->DeleteAllItems();
-    for (const auto& c : m_playerCommanders){
+    for (const auto& c : m_playerCommanders) {
         const long idx = m_buyCmdRoster->GetItemCount();
         m_buyCmdRoster->InsertItem(idx, wxString::FromUTF8(c.name));
         m_buyCmdRoster->SetItem(idx, 1, GetRankAbbrev(c.rank));
@@ -2471,17 +2614,17 @@ void StrategicLevelFrame::RefreshBuyShopList()
     m_buyShopList->Freeze();
     m_buyShopList->DeleteAllItems();
 
-    const wxColour clrHdr  = m_palette.heading;
+    const wxColour clrHdr = m_palette.heading;
     const wxColour clrNorm = m_palette.text;
     const wxColour clrGrey(0x60, 0x60, 0x60);
     long row = 0;
 
-    auto addHdr = [&](const wxString& lbl){
+    auto addHdr = [&](const wxString& lbl) {
         m_buyShopList->InsertItem(row, lbl);
         m_buyShopList->SetItemData(row, kBuyHdrSentinel);
         m_buyShopList->SetItemTextColour(row, clrHdr);
         ++row;
-    };
+        };
 
     if (!m_buyTabSell)
     {
@@ -2489,7 +2632,7 @@ void StrategicLevelFrame::RefreshBuyShopList()
         if (m_spellData && m_spellData->units)
         {
             struct UE { int type_id; wxString name; int cost; };
-            const std::vector<std::string> catOrder = {"Infantry","Artillery","Transporters","Aerial guns","Other"};
+            const std::vector<std::string> catOrder = { "Infantry","Artillery","Transporters","Aerial guns","Other" };
             std::map<std::string, std::vector<UE>> byCat;
 
             for (const auto* unit : m_spellData->units->GetUnits())
@@ -2499,7 +2642,7 @@ void StrategicLevelFrame::RefreshBuyShopList()
                 if (cost <= 0) continue;
 
                 // Game mode filter
-                if (m_gameModeEnabled && !m_levelResearchFlags.empty()){
+                if (m_gameModeEnabled && !m_levelResearchFlags.empty()) {
                     if (m_levelResearchFlags.count(unit->type_id) == 0)
                         continue;
                 }
@@ -2508,14 +2651,14 @@ void StrategicLevelFrame::RefreshBuyShopList()
                 auto it = m_unitCategories.find(unit->type_id);
                 if (it != m_unitCategories.end() && !it->second.empty())
                     cat = it->second;
-                byCat[cat].push_back({unit->type_id, wxString(char2wstringCP895(unit->name)), cost});
+                byCat[cat].push_back({ unit->type_id, wxString(char2wstringCP895(unit->name)), cost });
             }
 
-            for (const auto& catName : catOrder){
+            for (const auto& catName : catOrder) {
                 auto it = byCat.find(catName);
                 if (it == byCat.end() || it->second.empty()) continue;
                 addHdr(wxString::FromUTF8(catName));
-                for (const auto& ue : it->second){
+                for (const auto& ue : it->second) {
                     m_buyShopList->InsertItem(row, wxString("  ") + ue.name);
                     m_buyShopList->SetItemData(row, static_cast<wxUIntPtr>(ue.type_id));
                     m_buyShopList->SetItemTextColour(row, m_money >= ue.cost ? clrNorm : clrGrey);
@@ -2525,9 +2668,9 @@ void StrategicLevelFrame::RefreshBuyShopList()
         }
 
         // Commanders
-        if (!m_availableCommanders.empty()){
+        if (!m_availableCommanders.empty()) {
             addHdr("Commanders");
-            for (int ci = 0; ci < (int)m_availableCommanders.size(); ++ci){
+            for (int ci = 0; ci < (int)m_availableCommanders.size(); ++ci) {
                 const auto& c = m_availableCommanders[ci];
                 m_buyShopList->InsertItem(row,
                     wxString("  ") + wxString::FromUTF8(c.name)
@@ -2542,26 +2685,26 @@ void StrategicLevelFrame::RefreshBuyShopList()
     else
     {
         // Sell mode - owned units list
-        if (!m_playerUnits.empty()){
+        if (!m_playerUnits.empty()) {
             struct SE { int idx; wxString name; int refund; };
-            const std::vector<std::string> catOrder = {"Infantry","Artillery","Transporters","Aerial guns","Other"};
+            const std::vector<std::string> catOrder = { "Infantry","Artillery","Transporters","Aerial guns","Other" };
             std::map<std::string, std::vector<SE>> byCat;
 
-            for (int i = 0; i < (int)m_playerUnits.size(); ++i){
+            for (int i = 0; i < (int)m_playerUnits.size(); ++i) {
                 const auto& u = m_playerUnits[i];
                 const int cost = GetUnitBuyCost(u.unit_id);
                 std::string cat = "Other";
                 auto it = m_unitCategories.find(u.unit_id);
                 if (it != m_unitCategories.end() && !it->second.empty())
                     cat = it->second;
-                byCat[cat].push_back({i, GetUnitDisplayName(u.unit_id), cost > 0 ? cost/2 : 0});
+                byCat[cat].push_back({ i, GetUnitDisplayName(u.unit_id), cost > 0 ? cost / 2 : 0 });
             }
 
-            for (const auto& catName : catOrder){
+            for (const auto& catName : catOrder) {
                 auto it = byCat.find(catName);
                 if (it == byCat.end() || it->second.empty()) continue;
                 addHdr(wxString::FromUTF8(catName));
-                for (const auto& se : it->second){
+                for (const auto& se : it->second) {
                     wxString lbl = wxString("  ") + se.name;
                     if (se.refund > 0) lbl += wxString::Format(" (%d)", se.refund);
                     m_buyShopList->InsertItem(row, lbl);
@@ -2571,7 +2714,7 @@ void StrategicLevelFrame::RefreshBuyShopList()
                 }
             }
         }
-        else{
+        else {
             m_buyShopList->InsertItem(row, "  No units to sell.");
             m_buyShopList->SetItemData(row, kBuyHdrSentinel);
             m_buyShopList->SetItemTextColour(row, clrGrey);
@@ -2600,8 +2743,8 @@ void StrategicLevelFrame::ShowBuyPanel(bool show)
     {
         wxSizer* sz = root->GetSizer();
         if (m_normalLayoutPanel) sz->Show(m_normalLayoutPanel, !show, true);
-        if (m_buyMainPanel)     sz->Show(m_buyMainPanel,     show, true);
-        if (m_unitsMainPanel)   sz->Show(m_unitsMainPanel,   false, true);
+        if (m_buyMainPanel)     sz->Show(m_buyMainPanel, show, true);
+        if (m_unitsMainPanel)   sz->Show(m_unitsMainPanel, false, true);
         root->Layout();
     }
     else
@@ -2692,7 +2835,7 @@ void StrategicLevelFrame::OnBuyShop(wxCommandEvent&)
 {
     if (m_buyModeActive)
         LeaveBuyMode();
-    else{
+    else {
         if (m_researchMode) LeaveResearchMode();
         if (m_unitsModeActive) LeaveUnitsMode();
         EnterBuyMode();
@@ -2712,23 +2855,23 @@ void StrategicLevelFrame::OnBuyAction(wxCommandEvent&)
     if (!m_buyTabSell)
     {
         // BUY
-        if (data >= kBuyCmdBase){
+        if (data >= kBuyCmdBase) {
             // Commander
             const int ci = (int)(data - kBuyCmdBase);
             if (ci >= (int)m_availableCommanders.size()) return;
-            if ((int)m_playerCommanders.size() >= 14){
+            if ((int)m_playerCommanders.size() >= 14) {
                 wxMessageBox("Commander limit reached (14).", "Buy", wxOK | wxICON_INFORMATION, this);
                 return;
             }
             m_playerCommanders.push_back(m_availableCommanders[(size_t)ci]);
             m_availableCommanders.clear();
         }
-        else{
+        else {
             // Unit
-            const int tid  = (int)data;
+            const int tid = (int)data;
             const int cost = GetUnitBuyCost(tid);
-            if (cost <= 0){ wxMessageBox("No price defined.", "Buy", wxOK | wxICON_WARNING, this); return; }
-            if (m_money < cost){
+            if (cost <= 0) { wxMessageBox("No price defined.", "Buy", wxOK | wxICON_WARNING, this); return; }
+            if (m_money < cost) {
                 wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
                     "Buy", wxOK | wxICON_WARNING, this);
                 return;
@@ -2744,9 +2887,9 @@ void StrategicLevelFrame::OnBuyAction(wxCommandEvent&)
         // SELL
         const int idx = (int)data;
         if (idx < 0 || idx >= (int)m_playerUnits.size()) return;
-        const auto& u  = m_playerUnits[idx];
+        const auto& u = m_playerUnits[idx];
         const int cost = GetUnitBuyCost(u.unit_id);
-        if (cost <= 0){ wxMessageBox("No price defined.", "Sell", wxOK | wxICON_WARNING, this); return; }
+        if (cost <= 0) { wxMessageBox("No price defined.", "Sell", wxOK | wxICON_WARNING, this); return; }
         m_money += cost / 2;
         m_playerUnits.erase(m_playerUnits.begin() + idx);
     }
@@ -2773,67 +2916,56 @@ void StrategicLevelFrame::BuildUnitsPage()
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     // ---------------------------------------------------------------------
-    // LEFT: Player Units roster (Spellcross-like list)
+    // LEFT: Player units (permanent + temporary lists)
     // ---------------------------------------------------------------------
     auto* leftPanel = new wxPanel(m_unitsMainPanel);
     leftPanel->SetBackgroundColour(m_palette.background);
     auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 
-    m_unitsRoster = new wxListCtrl(leftPanel, wxID_ANY,
-        wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_unitsRoster = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        wxLC_REPORT | wxLC_SINGLE_SEL);
     m_unitsRoster->SetFont(m_fontText);
     m_unitsRoster->SetBackgroundColour(m_palette.background);
     m_unitsRoster->SetForegroundColour(m_palette.text);
 
-    // Column layout mimics original: unit name + small numeric column (level) + status.
+    // Spellcross-like roster: Unit + Level + Status (NO HP column here; details are in the info panel).
     m_unitsRoster->InsertColumn(0, "Unit");
     m_unitsRoster->InsertColumn(1, "Lvl");
-    m_unitsRoster->InsertColumn(2, "HP");
-    m_unitsRoster->InsertColumn(3, "Status");
+    m_unitsRoster->InsertColumn(2, "Status");
 
     m_unitsRoster->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
         m_unitsSelectedUnit = (int)ev.GetIndex();
-        // Default selection for recruit quality / upgrade list.
+        m_unitsSelectedRearmUnitId = -1;
+
+        // Default selection for recruit quality.
         if (m_unitsCurrentTab == UNITS_TAB_RECRUIT) m_unitsSelectedUpgrade = 1;
         else m_unitsSelectedUpgrade = -1;
 
         RefreshUnitsShopList();
         RefreshUnitsInfo(m_unitsSelectedUnit);
         RefreshUnitsActionButton();
-    });
+        });
 
     leftSizer->Add(m_unitsRoster, 1, wxALL | wxEXPAND, 8);
 
-    // Unit icon (small glyph) under roster
-    m_unitsIconCanvas = new wxPanel(leftPanel, wxID_ANY, wxDefaultPosition, wxSize(-1, 86));
-    m_unitsIconCanvas->SetBackgroundColour(m_palette.background);
-    m_unitsIconCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_unitsIconCanvas->Bind(wxEVT_PAINT, [this](wxPaintEvent&) {
-        wxAutoBufferedPaintDC dc(m_unitsIconCanvas);
-        dc.SetBackground(wxBrush(m_palette.background));
-        dc.Clear();
+    // Temporary units list (same width, slightly lower) - will be filled once temporary units exist in data.
+    m_unitsTempRoster = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        wxLC_REPORT | wxLC_SINGLE_SEL);
+    m_unitsTempRoster->SetFont(m_fontText);
+    m_unitsTempRoster->SetBackgroundColour(m_palette.background);
+    m_unitsTempRoster->SetForegroundColour(m_palette.text);
 
-        if (m_unitsSelectedUnit < 0 || m_unitsSelectedUnit >= (int)m_playerUnits.size())
-            return;
+    m_unitsTempRoster->InsertColumn(0, "Temporary");
+    m_unitsTempRoster->InsertColumn(1, "Lvl");
+    m_unitsTempRoster->InsertColumn(2, "Status");
 
-        const auto& u = m_playerUnits[m_unitsSelectedUnit];
-        if (!m_spellData || !m_spellData->units) return;
+    // Keep selection logic simple for now (temporary units are not yet implemented).
+    m_unitsTempRoster->Enable(false);
 
-        auto* unitRec = m_spellData->units->GetUnit(u.unit_id);
-        if (!unitRec || !unitRec->icon_glyph) return;
-
-        wxBitmap* bmp = unitRec->icon_glyph->Render(
-            m_unitsIconCanvas->GetClientSize().GetWidth(),
-            m_unitsIconCanvas->GetClientSize().GetHeight());
-        if (bmp) {
-            dc.DrawBitmap(*bmp, wxPoint(0, 0));
-            delete bmp;
-        }
-    });
-    leftSizer->Add(m_unitsIconCanvas, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    leftSizer->Add(m_unitsTempRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     leftPanel->SetSizer(leftSizer);
-    mainSizer->Add(leftPanel, 1, wxEXPAND);
+    mainSizer->Add(leftPanel, 2, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // MIDDLE: Mode selector (Upgrade / Recruit / Info)
@@ -2850,41 +2982,54 @@ void StrategicLevelFrame::BuildUnitsPage()
     modeSizer->Add(modeTitle, 0, wxTOP | wxLEFT | wxRIGHT, 14);
 
     auto makeModeBtn = [&](const wxString& label, UnitsTab tab) -> wxButton*
-    {
-        auto* b = new wxButton(modePanel, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-        b->SetFont(m_fontText);
-        b->SetForegroundColour(m_palette.buttonText);
-        b->SetBackgroundColour(m_palette.buttonBackground);
-        b->Bind(wxEVT_BUTTON, [this, tab](wxCommandEvent&) { OnUnitsTabChange((int)tab); });
-        return b;
-    };
+        {
+            auto* b = new wxButton(modePanel, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+            b->SetFont(m_fontText);
+            b->SetForegroundColour(m_palette.buttonText);
+            b->SetBackgroundColour(m_palette.buttonBackground);
+            b->Bind(wxEVT_BUTTON, [this, tab](wxCommandEvent&) { OnUnitsTabChange((int)tab); });
+            return b;
+        };
 
     m_btnUnitsTabUpgrade = makeModeBtn("Upgrade", UNITS_TAB_UPGRADE);
     m_btnUnitsTabRecruit = makeModeBtn("Recruit", UNITS_TAB_RECRUIT);
-    m_btnUnitsTabInfo    = makeModeBtn("Info",    UNITS_TAB_INFO);
-
-    // Keep pointers but do not expose Disband as a separate mode (it is a button like in original).
-    m_btnUnitsTabDisband = nullptr;
+    m_btnUnitsTabInfo = makeModeBtn("Info", UNITS_TAB_INFO);
+    m_btnUnitsTabDisband = nullptr; // Disband is a dedicated button in the bottom bar.
 
     modeSizer->Add(m_btnUnitsTabUpgrade, 0, wxALL | wxEXPAND, 10);
     modeSizer->Add(m_btnUnitsTabRecruit, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
-    modeSizer->Add(m_btnUnitsTabInfo,    0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
+    modeSizer->Add(m_btnUnitsTabInfo, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10);
 
     modeSizer->AddStretchSpacer(1);
-
     modePanel->SetSizer(modeSizer);
     mainSizer->Add(modePanel, 0, wxEXPAND);
 
     // ---------------------------------------------------------------------
-    // RIGHT: Options list + unit info + buttons (Disband / OK, Time/Cost)
+    // CENTER: Upgrade panel (always visible) + Unit info panel + bottom controls
     // ---------------------------------------------------------------------
-    auto* rightPanel = new wxPanel(m_unitsMainPanel);
-    rightPanel->SetBackgroundColour(m_palette.background);
-    auto* rightSizer = new wxBoxSizer(wxVERTICAL);
+    auto* centerPanel = new wxPanel(m_unitsMainPanel);
+    centerPanel->SetBackgroundColour(m_palette.background);
+    auto* centerSizer = new wxBoxSizer(wxVERTICAL);
 
-    // Top: options / list area (upgrades / recruit choices / info stats list)
-    m_unitsShopList = new wxListCtrl(rightPanel, wxID_ANY,
-        wxDefaultPosition, wxDefaultSize,
+    // ── Upgrade panel (top) ───────────────────────────────────────────────
+    auto* upgradePanel = new wxPanel(centerPanel);
+    upgradePanel->SetBackgroundColour(m_palette.background);
+    auto* upgradeSizer = new wxBoxSizer(wxVERTICAL);
+
+    // Top: upgrade list with title/value (Armour/Weapon/Engine style)
+    auto* upgTop = new wxBoxSizer(wxVERTICAL);
+    m_unitsUpgradeTitle = new wxStaticText(upgradePanel, wxID_ANY, "Upgrade");
+    m_unitsUpgradeTitle->SetFont(m_fontHeading);
+    m_unitsUpgradeTitle->SetForegroundColour(m_palette.heading);
+
+    m_unitsUpgradeValue = new wxStaticText(upgradePanel, wxID_ANY, "--default--");
+    m_unitsUpgradeValue->SetFont(m_fontText);
+    m_unitsUpgradeValue->SetForegroundColour(m_palette.text);
+
+    upgTop->Add(m_unitsUpgradeTitle, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+    upgTop->Add(m_unitsUpgradeValue, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+
+    m_unitsShopList = new wxListCtrl(upgradePanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
         wxLC_REPORT | wxLC_NO_HEADER | wxLC_SINGLE_SEL);
     m_unitsShopList->SetFont(m_fontText);
     m_unitsShopList->SetBackgroundColour(m_palette.background);
@@ -2898,76 +3043,138 @@ void StrategicLevelFrame::BuildUnitsPage()
         }
         else if (m_unitsCurrentTab == UNITS_TAB_UPGRADE)
         {
-            // for upgrade list we store upgradeId as item data
             long idx = ev.GetIndex();
-            m_unitsSelectedUpgrade = (int)m_unitsShopList->GetItemData(idx);
+            m_unitsSelectedUpgrade = (int)m_unitsShopList->GetItemData(idx); // upgradeId
         }
+
+        // Selecting an upgrade clears re-arm selection.
+        m_unitsSelectedRearmUnitId = -1;
+        if (m_unitsRearmList) m_unitsRearmList->DeselectAll();
+
         RefreshUnitsInfo(m_unitsSelectedUnit);
         RefreshUnitsActionButton();
-    });
+        });
 
     m_unitsShopList->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev) {
         ev.Skip();
         if (!m_unitsShopList) return;
         const int w = m_unitsShopList->GetClientSize().GetWidth();
         if (w > 0) m_unitsShopList->SetColumnWidth(0, w);
-    });
+        });
 
-    rightSizer->Add(m_unitsShopList, 1, wxALL | wxEXPAND, 8);
+    upgTop->Add(m_unitsShopList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-    // Optional "re-arm" choice (only visible in Upgrade mode).
-    m_unitsUpgradeChoice = new wxChoice(rightPanel, wxID_ANY);
-    m_unitsUpgradeChoice->SetFont(m_fontText);
-    m_unitsUpgradeChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) {
+    // Bottom: unit types in same category (re-arm)
+    auto* upgBottom = new wxBoxSizer(wxVERTICAL);
+    m_unitsRearmTitle = new wxStaticText(upgradePanel, wxID_ANY, "Category");
+    m_unitsRearmTitle->SetFont(m_fontHeading);
+    m_unitsRearmTitle->SetForegroundColour(m_palette.heading);
+    upgBottom->Add(m_unitsRearmTitle, 0, wxLEFT | wxRIGHT | wxTOP, 8);
+
+    m_unitsRearmList = new wxListBox(upgradePanel, wxID_ANY);
+    m_unitsRearmList->SetFont(m_fontText);
+    m_unitsRearmList->SetBackgroundColour(m_palette.background);
+    m_unitsRearmList->SetForegroundColour(m_palette.text);
+    m_unitsRearmList->Bind(wxEVT_LISTBOX, [this](wxCommandEvent& ev) {
+        int sel = ev.GetSelection();
+        if (sel >= 0)
+        {
+            m_unitsSelectedRearmUnitId = (int)reinterpret_cast<intptr_t>(m_unitsRearmList->GetClientData(sel));
+            // Selecting re-arm clears tech upgrade selection.
+            m_unitsSelectedUpgrade = -1;
+        }
         RefreshUnitsInfo(m_unitsSelectedUnit);
         RefreshUnitsActionButton();
-    });
-    rightSizer->Add(m_unitsUpgradeChoice, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+        });
+    upgBottom->Add(m_unitsRearmList, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-    // Info text block (bottom like original)
-    m_unitsInfoText = new wxTextCtrl(rightPanel, wxID_ANY, "",
+    upgradeSizer->Add(upgTop, 3, wxEXPAND);
+    upgradeSizer->Add(upgBottom, 2, wxEXPAND);
+
+    upgradePanel->SetSizer(upgradeSizer);
+    centerSizer->Add(upgradePanel, 3, wxALL | wxEXPAND, 0);
+
+    // ── Unit info panel (bottom) ─────────────────────────────────────────
+    auto* infoPanel = new wxPanel(centerPanel);
+    infoPanel->SetBackgroundColour(m_palette.background);
+    auto* infoSizer = new wxBoxSizer(wxHORIZONTAL);
+
+    m_unitsInfoText = new wxTextCtrl(infoPanel, wxID_ANY, "",
         wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_WORDWRAP);
     m_unitsInfoText->SetFont(m_fontText);
     m_unitsInfoText->SetBackgroundColour(m_palette.background);
     m_unitsInfoText->SetForegroundColour(m_palette.text);
-    rightSizer->Add(m_unitsInfoText, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
-    // Bottom row: Disband / Time+Cost / OK
+    infoSizer->Add(m_unitsInfoText, 1, wxALL | wxEXPAND, 8);
+
+    // Unit icon on the right (Spellcross-style)
+    m_unitsIconCanvas = new wxPanel(infoPanel, wxID_ANY, wxDefaultPosition, wxSize(140, -1));
+    m_unitsIconCanvas->SetBackgroundColour(m_palette.background);
+    m_unitsIconCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_unitsIconCanvas->Bind(wxEVT_PAINT, [this](wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(m_unitsIconCanvas);
+        dc.SetBackground(wxBrush(m_palette.background));
+        dc.Clear();
+
+        if (m_unitsSelectedUnit < 0 || m_unitsSelectedUnit >= (int)m_playerUnits.size())
+            return;
+        if (!m_spellData || !m_spellData->units) return;
+
+        const auto& u = m_playerUnits[m_unitsSelectedUnit];
+        auto* unitRec = m_spellData->units->GetUnit(u.unit_id);
+        if (!unitRec || !unitRec->icon_glyph) return;
+
+        wxBitmap* bmp = unitRec->icon_glyph->Render(
+            m_unitsIconCanvas->GetClientSize().GetWidth(),
+            m_unitsIconCanvas->GetClientSize().GetHeight());
+        if (bmp) {
+            dc.DrawBitmap(*bmp, wxPoint(0, 0));
+            delete bmp;
+        }
+        });
+
+    infoSizer->Add(m_unitsIconCanvas, 0, wxTOP | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    infoPanel->SetSizer(infoSizer);
+    centerSizer->Add(infoPanel, 1, wxEXPAND);
+
+    // ── Bottom controls: Disband / Time+Cost / OK ────────────────────────
     auto* bottomRow = new wxBoxSizer(wxHORIZONTAL);
 
-    m_btnUnitsDisband = new wxButton(rightPanel, wxID_ANY, "Disband");
+    m_btnUnitsDisband = new wxButton(centerPanel, wxID_ANY, "Disband");
     m_btnUnitsDisband->SetFont(m_fontText);
     m_btnUnitsDisband->SetForegroundColour(m_palette.buttonText);
     m_btnUnitsDisband->SetBackgroundColour(m_palette.buttonBackground);
     m_btnUnitsDisband->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnUnitsDisband, this);
 
-    bottomRow->Add(m_btnUnitsDisband, 0, wxRIGHT, 10);
+    bottomRow->Add(m_btnUnitsDisband, 0, wxALL, 8);
 
     auto* timeCostCol = new wxBoxSizer(wxVERTICAL);
-    m_unitsTimeLabel = new wxStaticText(rightPanel, wxID_ANY, "Time: -");
+    m_unitsTimeLabel = new wxStaticText(centerPanel, wxID_ANY, "Time: -");
     m_unitsTimeLabel->SetFont(m_fontText);
     m_unitsTimeLabel->SetForegroundColour(m_palette.text);
-    m_unitsCostLabel = new wxStaticText(rightPanel, wxID_ANY, "Cost: -");
+    m_unitsCostLabel = new wxStaticText(centerPanel, wxID_ANY, "Cost: -");
     m_unitsCostLabel->SetFont(m_fontText);
     m_unitsCostLabel->SetForegroundColour(m_palette.heading);
+
     timeCostCol->Add(m_unitsTimeLabel, 0, wxBOTTOM, 2);
     timeCostCol->Add(m_unitsCostLabel, 0);
 
-    bottomRow->Add(timeCostCol, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
+    bottomRow->Add(timeCostCol, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
 
-    m_btnUnitsAction = new wxButton(rightPanel, ID_BTN_UNITS_ACTION, "OK");
+    m_btnUnitsAction = new wxButton(centerPanel, ID_BTN_UNITS_ACTION, "OK");
     m_btnUnitsAction->SetFont(m_fontText);
     m_btnUnitsAction->SetForegroundColour(m_palette.buttonText);
     m_btnUnitsAction->SetBackgroundColour(m_palette.buttonBackground);
     m_btnUnitsAction->Enable(false);
     m_btnUnitsAction->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnUnitsAction, this);
 
-    bottomRow->Add(m_btnUnitsAction, 0);
+    bottomRow->Add(m_btnUnitsAction, 0, wxALL, 8);
 
-    rightSizer->Add(bottomRow, 0, wxALL | wxEXPAND, 8);
+    centerSizer->Add(bottomRow, 0, wxEXPAND);
 
-    rightPanel->SetSizer(rightSizer);
-    mainSizer->Add(rightPanel, 1, wxEXPAND);
+    centerPanel->SetSizer(centerSizer);
+    mainSizer->Add(centerPanel, 2, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // FAR RIGHT: Sidebar (status + navigation buttons)
@@ -2984,47 +3191,47 @@ void StrategicLevelFrame::BuildUnitsPage()
         auto* statusSizer = new wxBoxSizer(wxVERTICAL);
 
         auto makeStatusRow = [&](const wxString& caption,
-                                 wxStaticText*& outCaption,
-                                 wxStaticText*& outValue)
-        {
-            auto* row = new wxBoxSizer(wxHORIZONTAL);
+            wxStaticText*& outCaption,
+            wxStaticText*& outValue)
+            {
+                auto* row = new wxBoxSizer(wxHORIZONTAL);
 
-            outCaption = new wxStaticText(status, wxID_ANY, caption);
-            outValue = new wxStaticText(status, wxID_ANY, "0");
+                outCaption = new wxStaticText(status, wxID_ANY, caption);
+                outValue = new wxStaticText(status, wxID_ANY, "0");
 
-            outCaption->SetFont(m_fontHeading);
-            outValue->SetFont(m_fontHeading);
+                outCaption->SetFont(m_fontHeading);
+                outValue->SetFont(m_fontHeading);
 
-            outCaption->SetForegroundColour(m_palette.statusHeading);
-            outValue->SetForegroundColour(m_palette.statusNumber);
+                outCaption->SetForegroundColour(m_palette.statusHeading);
+                outValue->SetForegroundColour(m_palette.statusNumber);
 
-            outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
-            outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+                outCaption->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+                outValue->SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
 
-            row->Add(outCaption, 0, wxRIGHT, 6);
-            row->Add(outValue, 0);
-            return row;
-        };
+                row->Add(outCaption, 0, wxRIGHT, 6);
+                row->Add(outValue, 0);
+                return row;
+            };
 
         statusSizer->Add(makeStatusRow("Money:", m_unitsLblMoneyCaption, m_unitsLblMoneyValue),
-                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+            0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
         statusSizer->Add(makeStatusRow("Research:", m_unitsLblResearchCaption, m_unitsLblResearchValue),
-                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+            0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
         statusSizer->Add(makeStatusRow("Turn:", m_unitsLblTurnCaption, m_unitsLblTurnValue),
-                         0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
+            0, wxALL | wxALIGN_CENTER_HORIZONTAL, 4);
 
         status->SetSizer(statusSizer);
         sideSizer->Add(status, 0, wxALL | wxEXPAND, 8);
     }
 
     auto makeBtn = [&](const wxString& label) -> wxButton*
-    {
-        return CreateStrategicButton(sidePanel, wxID_ANY, label,
-            m_fontText,
-            m_palette.buttonText,
-            m_palette.buttonBackground,
-            wxSize(-1, 44));
-    };
+        {
+            return CreateStrategicButton(sidePanel, wxID_ANY, label,
+                m_fontText,
+                m_palette.buttonText,
+                m_palette.buttonBackground,
+                wxSize(-1, 44));
+        };
 
     auto* btnSizer = new wxBoxSizer(wxVERTICAL);
 
@@ -3084,10 +3291,11 @@ void StrategicLevelFrame::ShowUnitsPanel(bool show)
     wxSizer* sz = root->GetSizer();
     if (sz) {
         if (m_normalLayoutPanel) sz->Show(m_normalLayoutPanel, !show, true);
-        if (m_buyMainPanel)      sz->Show(m_buyMainPanel,      false, true);
-        if (m_unitsMainPanel)    sz->Show(m_unitsMainPanel,    show, true);
+        if (m_buyMainPanel)      sz->Show(m_buyMainPanel, false, true);
+        if (m_unitsMainPanel)    sz->Show(m_unitsMainPanel, show, true);
         root->Layout();
-    } else {
+    }
+    else {
         if (m_normalLayoutPanel) m_normalLayoutPanel->Show(!show);
         if (m_buyMainPanel)      m_buyMainPanel->Show(false);
         if (m_unitsMainPanel)    m_unitsMainPanel->Show(show);
@@ -3153,58 +3361,84 @@ void StrategicLevelFrame::RefreshUnitsRoster()
         const auto& u = m_playerUnits[i];
         wxString name = GetUnitDisplayName(u.unit_id);
 
-        // Check for custom name in unit state
+        // Custom name if set
         if (i < m_unitStates.size() && !m_unitStates[i].custom_name.empty())
             name = wxString::FromUTF8(m_unitStates[i].custom_name);
 
-        long idx = m_unitsRoster->InsertItem(i, name);
-        m_unitsRoster->SetItem(idx, 1, wxString::Format("%d%%", u.health));
+        long idx = m_unitsRoster->InsertItem((long)i, name);
 
-        // XP/Level
-        int xp = (i < m_unitStates.size()) ? m_unitStates[i].experience : 0;
-        m_unitsRoster->SetItem(idx, 2, wxString::Format("L%d", xp / 100));
+        int lvl = (i < m_unitStates.size()) ? m_unitStates[i].level : 0;
+        if (lvl == 0 && i < m_unitStates.size())
+            lvl = m_unitStates[i].experience / 100;
+        m_unitsRoster->SetItem(idx, 1, wxString::Format("%d", lvl));
 
-        // Status (cooldown)
         int cooldown = (i < m_unitStates.size()) ? m_unitStates[i].cooldown_turns : 0;
-        if (cooldown > 0)
-            m_unitsRoster->SetItem(idx, 3, wxString::Format("-%dT", cooldown));
-        else
-            m_unitsRoster->SetItem(idx, 3, "Ready");
+        m_unitsRoster->SetItem(idx, 2, cooldown > 0 ? wxString::Format("-%dT", cooldown) : wxString("Ready"));
 
-        m_unitsRoster->SetItemData(idx, i);
+        m_unitsRoster->SetItemData(idx, (long)i);
     }
 
-    // Auto-size columns
-    for (int c = 0; c < 4; c++)
+    for (int c = 0; c < 3; c++)
         m_unitsRoster->SetColumnWidth(c, wxLIST_AUTOSIZE_USEHEADER);
 
     m_unitsRoster->Thaw();
+
+    // Temporary units list: keep empty until temporary units exist in data.
+    if (m_unitsTempRoster)
+    {
+        m_unitsTempRoster->Freeze();
+        m_unitsTempRoster->DeleteAllItems();
+        for (int c = 0; c < 3; c++)
+            m_unitsTempRoster->SetColumnWidth(c, wxLIST_AUTOSIZE_USEHEADER);
+        m_unitsTempRoster->Thaw();
+    }
 }
+
 
 void StrategicLevelFrame::RefreshUnitsShopList()
 {
     if (!m_unitsShopList) return;
 
+    // Ensure research database is loaded before checking for upgrades
+    EnsureResearchLoaded();
+
     m_unitsShopList->Freeze();
     m_unitsShopList->DeleteAllItems();
 
-    // Upgrade "re-arm" selector is only used in Upgrade mode.
-    if (m_unitsUpgradeChoice)
-        m_unitsUpgradeChoice->Show(m_unitsCurrentTab == UNITS_TAB_UPGRADE);
+    // Upgrade panel widgets are always present, but re-arm list is only used in Upgrade mode.
+    if (m_unitsRearmList)
+        m_unitsRearmList->Show(m_unitsCurrentTab == UNITS_TAB_UPGRADE);
+
+    if (m_unitsRearmTitle)
+        m_unitsRearmTitle->Show(m_unitsCurrentTab == UNITS_TAB_UPGRADE);
 
     // Default selection (used for Recruit mode).
     if (m_unitsCurrentTab == UNITS_TAB_RECRUIT && m_unitsSelectedUpgrade < 0)
         m_unitsSelectedUpgrade = 1;
 
+    // Update right-side title (category) for Upgrade mode.
+    if (m_unitsRearmTitle && m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+        m_unitsRearmTitle->SetLabel(GetUnitCategoryName(m_playerUnits[m_unitsSelectedUnit].unit_id));
+
+    // Clear re-arm list by default.
+    if (m_unitsRearmList)
+    {
+        m_unitsRearmList->Clear();
+        m_unitsSelectedRearmUnitId = -1;
+    }
+
     switch (m_unitsCurrentTab)
     {
     case UNITS_TAB_RECRUIT:
-        // Spellcross: list three recruitment qualities
+        if (m_unitsUpgradeTitle) m_unitsUpgradeTitle->SetLabel("Recruit");
+        if (m_unitsUpgradeValue) m_unitsUpgradeValue->SetLabel("");
+
         for (int q = 0; q < RECRUIT_QUALITY_COUNT; q++)
         {
             long idx = m_unitsShopList->InsertItem(q, RECRUIT_QUALITY_NAMES[q]);
             m_unitsShopList->SetItemData(idx, q);
         }
+
         if (m_unitsSelectedUpgrade >= 0 && m_unitsSelectedUpgrade < RECRUIT_QUALITY_COUNT)
         {
             m_unitsShopList->SetItemState(m_unitsSelectedUpgrade,
@@ -3215,24 +3449,26 @@ void StrategicLevelFrame::RefreshUnitsShopList()
         break;
 
     case UNITS_TAB_UPGRADE:
-        // 1) Re-arm targets in the drop-down
-        if (m_unitsUpgradeChoice)
+    {
+        if (m_unitsUpgradeTitle) m_unitsUpgradeTitle->SetLabel("Upgrade");
+        if (m_unitsUpgradeValue) m_unitsUpgradeValue->SetLabel("--default--");
+
+        // Right list: re-arm targets
+        if (m_unitsRearmList && m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
         {
-            m_unitsUpgradeChoice->Clear();
-            if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
+            const auto& u = m_playerUnits[m_unitsSelectedUnit];
+            auto targets = GetAvailableUnitTypesForUpgrade(u.unit_id);
+            for (int toId : targets)
             {
-                const auto& u = m_playerUnits[m_unitsSelectedUnit];
-                auto targets = GetAvailableUnitTypesForUpgrade(u.unit_id);
-                for (int toId : targets)
-                {
-                    m_unitsUpgradeChoice->Append(GetUnitDisplayName(toId), reinterpret_cast<void*>(static_cast<intptr_t>(toId)));
-                }
-                if (m_unitsUpgradeChoice->GetCount() > 0)
-                    m_unitsUpgradeChoice->SetSelection(0);
+                m_unitsRearmList->Append(GetUnitDisplayName(toId), reinterpret_cast<void*>(static_cast<intptr_t>(toId)));
             }
+            if (m_unitsRearmList->GetCount() > 0)
+                m_unitsRearmList->SetSelection(0);
+            if (m_unitsRearmList->GetSelection() >= 0)
+                m_unitsSelectedRearmUnitId = (int)reinterpret_cast<intptr_t>(m_unitsRearmList->GetClientData(m_unitsRearmList->GetSelection()));
         }
 
-        // 2) Tech upgrades list (engine/weapon/armour style upgrades). Uses research DB.
+        // Left list: tech upgrades (research-based)
         if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
         {
             const auto& u = m_playerUnits[m_unitsSelectedUnit];
@@ -3241,6 +3477,7 @@ void StrategicLevelFrame::RefreshUnitsShopList()
             if (itemUpgrades.empty())
             {
                 m_unitsShopList->InsertItem(0, "No researched upgrades available");
+                m_unitsSelectedUpgrade = -1;
             }
             else
             {
@@ -3254,12 +3491,23 @@ void StrategicLevelFrame::RefreshUnitsShopList()
                     long idx = m_unitsShopList->InsertItem((long)i, upgName);
                     m_unitsShopList->SetItemData(idx, (long)upgId);
                 }
+
+                // If a tech upgrade is selected, reflect it in the header.
+                if (m_unitsSelectedUpgrade > 0 && m_unitsUpgradeValue)
+                {
+                    for (const auto& r : m_researchDb) {
+                        if (r.id == m_unitsSelectedUpgrade) { m_unitsUpgradeValue->SetLabel(r.title); break; }
+                    }
+                }
             }
         }
-        break;
+    }
+    break;
 
     case UNITS_TAB_INFO:
-        // Info mode: show a compact stats list (more detailed text goes below)
+        if (m_unitsUpgradeTitle) m_unitsUpgradeTitle->SetLabel("Info");
+        if (m_unitsUpgradeValue) m_unitsUpgradeValue->SetLabel("");
+
         if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < (int)m_playerUnits.size())
         {
             const auto& u = m_playerUnits[m_unitsSelectedUnit];
@@ -3289,6 +3537,7 @@ void StrategicLevelFrame::RefreshUnitsShopList()
     if (m_unitsMainPanel)
         m_unitsMainPanel->Layout();
 }
+
 
 
 void StrategicLevelFrame::RefreshUnitsInfo(int unitIndex)
@@ -3356,19 +3605,27 @@ void StrategicLevelFrame::RefreshUnitsInfo(int unitIndex)
     case UNITS_TAB_UPGRADE:
         info += "\nUpgrade:\n";
         info += " - Select a researched upgrade in the list (Engine / Weapon / Armour style)\n";
-        info += " - Or use the drop-down to re-arm the unit within the same category.\n";
+        info += " - Or select a unit type in the category list to re-arm.\n";
 
-        if (m_unitsUpgradeChoice && m_unitsUpgradeChoice->GetCount() > 0)
+        // Reflect current selections into the upgrade header.
+        if (m_unitsUpgradeValue)
         {
-            int sel = m_unitsUpgradeChoice->GetSelection();
-            if (sel >= 0)
+            wxString upgLabel = "--default--";
+            if (m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0 && m_unitsSelectedUpgrade > 0)
             {
-                int toUnitId = static_cast<int>(reinterpret_cast<intptr_t>(m_unitsUpgradeChoice->GetClientData(sel)));
-                int cost = GetUpgradeCost(u.unit_id, toUnitId);
-                int time = GetUpgradeTime(toUnitId);
-                info += wxString::Format("\nRe-arm to: %s\nCost: %d\nTime: %d turns\n",
-                    GetUnitDisplayName(toUnitId), cost, time);
+                for (const auto& r : m_researchDb) {
+                    if (r.id == m_unitsSelectedUpgrade) { upgLabel = r.title; break; }
+                }
             }
+            m_unitsUpgradeValue->SetLabel(upgLabel);
+        }
+
+        if (m_unitsSelectedRearmUnitId > 0)
+        {
+            int cost = GetUpgradeCost(u.unit_id, m_unitsSelectedRearmUnitId);
+            int time = GetUpgradeTime(m_unitsSelectedRearmUnitId);
+            info += wxString::Format("\nRe-arm to: %s\nCost: %d\nTime: %d turns\n",
+                GetUnitDisplayName(m_unitsSelectedRearmUnitId), cost, time);
         }
         break;
 
@@ -3415,6 +3672,10 @@ void StrategicLevelFrame::RefreshUnitsActionButton()
 {
     if (!m_btnUnitsAction) return;
 
+    // Ensure unit costs and upgrade defs are loaded before calculating prices
+    EnsureUnitCostsLoaded();
+    EnsureUpgradeDefsLoaded();
+
     m_btnUnitsAction->Enable(false);
     m_btnUnitsAction->SetLabel("OK");
 
@@ -3430,7 +3691,7 @@ void StrategicLevelFrame::RefreshUnitsActionButton()
 
     // cooldown
     const bool hasCooldown = (m_unitsSelectedUnit < (int)m_unitStates.size() &&
-                             m_unitStates[m_unitsSelectedUnit].cooldown_turns > 0);
+        m_unitStates[m_unitsSelectedUnit].cooldown_turns > 0);
 
     if (m_btnUnitsDisband)
         m_btnUnitsDisband->Enable(!hasCooldown);
@@ -3476,27 +3737,23 @@ void StrategicLevelFrame::RefreshUnitsActionButton()
             if (m_unitsSelectedUpgrade > 0 && m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0)
             {
                 int upgId = m_unitsSelectedUpgrade;
-                // Tech upgrades are paid like "small upgrade" (for now: 10% of unit cost).
-                int base = GetUnitBuyCost(u.unit_id);
-                cost = (base > 0) ? (base / 10) : 0;
-                time = 1;
-                can = (cost > 0 && m_money >= cost);
+                // Tech upgrades use price/time from UPGRADES.DEF
+                cost = GetTechUpgradeCost(upgId);
+                time = GetTechUpgradeTime(upgId);
+                can = (m_money >= cost);
             }
-            else if (m_unitsUpgradeChoice && m_unitsUpgradeChoice->GetCount() > 0)
+            else if (m_unitsSelectedRearmUnitId > 0)
             {
-                int sel = m_unitsUpgradeChoice->GetSelection();
-                if (sel >= 0)
-                {
-                    int toUnitId = static_cast<int>(reinterpret_cast<intptr_t>(m_unitsUpgradeChoice->GetClientData(sel)));
-                    cost = GetUpgradeCost(u.unit_id, toUnitId);
-                    time = GetUpgradeTime(toUnitId);
-                    can = (cost > 0 && m_money >= cost);
-                }
+                int toUnitId = m_unitsSelectedRearmUnitId;
+                // Re-arm uses cost_upgrade from units.json
+                cost = GetUpgradeCost(u.unit_id, toUnitId);
+                time = GetUpgradeTime(toUnitId);
+                can = (cost >= 0 && m_money >= cost);  // allow cost 0 for same-tier re-arm
             }
 
             m_btnUnitsAction->Enable(can);
             m_unitsTimeLabel->SetLabel(time > 0 ? wxString::Format(wxS("Time: %d"), time) : wxString(wxS("Time: -")));
-            m_unitsCostLabel->SetLabel(cost > 0 ? wxString::Format(wxS("Cost: %d"), cost) : wxString(wxS("Cost: -")));
+            m_unitsCostLabel->SetLabel(cost >= 0 ? wxString::Format(wxS("Cost: %d"), cost) : wxString(wxS("Cost: -")));
         }
         break;
 
@@ -3517,6 +3774,7 @@ void StrategicLevelFrame::OnUnitsTabChange(int tab)
 {
     m_unitsCurrentTab = static_cast<UnitsTab>(tab);
     m_unitsSelectedUpgrade = (m_unitsCurrentTab == UNITS_TAB_RECRUIT) ? 1 : -1;
+    m_unitsSelectedRearmUnitId = -1;
 
     // Update tab button highlighting
     auto highlightTab = [this](wxButton* btn, bool active) {
@@ -3526,7 +3784,7 @@ void StrategicLevelFrame::OnUnitsTabChange(int tab)
         else
             btn->SetBackgroundColour(m_palette.buttonBackground);
         btn->Refresh();
-    };
+        };
 
     highlightTab(m_btnUnitsTabRecruit, tab == UNITS_TAB_RECRUIT);
     highlightTab(m_btnUnitsTabDisband, tab == UNITS_TAB_DISBAND);
@@ -3560,105 +3818,62 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
     switch (m_unitsCurrentTab)
     {
     case UNITS_TAB_RECRUIT:
+    {
+        if (u.health >= 100)
         {
-            if (u.health >= 100)
-            {
-                wxMessageBox("Unit is already at full strength.", "Recruit", wxOK | wxICON_INFORMATION, this);
-                return;
-            }
-
-            int q = (m_unitsSelectedUpgrade >= 0 && m_unitsSelectedUpgrade < RECRUIT_QUALITY_COUNT) ? m_unitsSelectedUpgrade : 1;
-
-            const int cost = GetRecruitCost(m_unitsSelectedUnit, q);
-            const int time = GetRecruitTime(q);
-
-            if (m_money < cost)
-            {
-                wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
-                    "Recruit", wxOK | wxICON_WARNING, this);
-                return;
-            }
-
-            // Experience impact: Rookie reduces XP most, Veteran moderately, Elite keeps XP.
-            const int missing = 100 - u.health;
-            const double kLossFactor[RECRUIT_QUALITY_COUNT] = { 1.0, 0.5, 0.0 };
-
-            int& xp = m_unitStates[m_unitsSelectedUnit].experience;
-            int xpLoss = (int)std::lround((double)xp * (double)missing / 100.0 * kLossFactor[q]);
-            if (xpLoss < 0) xpLoss = 0;
-            if (xpLoss > xp) xpLoss = xp;
-
-            xp -= xpLoss;
-            m_unitStates[m_unitsSelectedUnit].level = xp / 100;
-
-            // Restore to full strength, set cooldown.
-            u.health = 100;
-            m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
-
-            m_money -= cost;
-
-            wxMessageBox(wxString::Format("%s completed.\nExperience change: -%d\nUnit ready in %d turns.",
-                RECRUIT_QUALITY_NAMES[q], xpLoss, time), "Recruit", wxOK | wxICON_INFORMATION, this);
+            wxMessageBox("Unit is already at full strength.", "Recruit", wxOK | wxICON_INFORMATION, this);
+            return;
         }
-        break;
+
+        int q = (m_unitsSelectedUpgrade >= 0 && m_unitsSelectedUpgrade < RECRUIT_QUALITY_COUNT) ? m_unitsSelectedUpgrade : 1;
+
+        const int cost = GetRecruitCost(m_unitsSelectedUnit, q);
+        const int time = GetRecruitTime(q);
+
+        if (m_money < cost)
+        {
+            wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
+                "Recruit", wxOK | wxICON_WARNING, this);
+            return;
+        }
+
+        // Experience impact: Rookie reduces XP most, Veteran moderately, Elite keeps XP.
+        const int missing = 100 - u.health;
+        const double kLossFactor[RECRUIT_QUALITY_COUNT] = { 1.0, 0.5, 0.0 };
+
+        int& xp = m_unitStates[m_unitsSelectedUnit].experience;
+        int xpLoss = (int)std::lround((double)xp * (double)missing / 100.0 * kLossFactor[q]);
+        if (xpLoss < 0) xpLoss = 0;
+        if (xpLoss > xp) xpLoss = xp;
+
+        xp -= xpLoss;
+        m_unitStates[m_unitsSelectedUnit].level = xp / 100;
+
+        // Restore to full strength, set cooldown.
+        u.health = 100;
+        m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
+
+        m_money -= cost;
+
+        wxMessageBox(wxString::Format("%s completed.\nExperience change: -%d\nUnit ready in %d turns.",
+            RECRUIT_QUALITY_NAMES[q], xpLoss, time), "Recruit", wxOK | wxICON_INFORMATION, this);
+    }
+    break;
 
     case UNITS_TAB_UPGRADE:
+    {
+        // Two options:
+        // 1) Tech upgrade from the list (stored in m_unitsSelectedUpgrade when list item selected)
+        // 2) Re-arm to another unit type from the drop-down
+
+        // Option 1: tech upgrade selected
+        if (m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0 && m_unitsSelectedUpgrade > 0)
         {
-            // Two options:
-            // 1) Tech upgrade from the list (stored in m_unitsSelectedUpgrade when list item selected)
-            // 2) Re-arm to another unit type from the drop-down
+            const int upgId = m_unitsSelectedUpgrade;
 
-            // Option 1: tech upgrade selected
-            if (m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0 && m_unitsSelectedUpgrade > 0)
-            {
-                const int upgId = m_unitsSelectedUpgrade;
-
-                // Simple price/time model (can be refined once research->upgrade metadata is available).
-                const int base = GetUnitBuyCost(u.unit_id);
-                const int cost = (base > 0) ? (base / 10) : 0;
-                const int time = 1;
-
-                if (cost <= 0)
-                {
-                    wxMessageBox("Upgrade cost is not available for this unit.", "Upgrade", wxOK | wxICON_WARNING, this);
-                    return;
-                }
-                if (m_money < cost)
-                {
-                    wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
-                        "Upgrade", wxOK | wxICON_WARNING, this);
-                    return;
-                }
-
-                // Prevent duplicates
-                auto& ups = m_unitStates[m_unitsSelectedUnit].upgrades;
-                if (std::find(ups.begin(), ups.end(), upgId) != ups.end())
-                {
-                    wxMessageBox("This upgrade is already installed on this unit.", "Upgrade", wxOK | wxICON_INFORMATION, this);
-                    return;
-                }
-
-                m_money -= cost;
-                ups.push_back(upgId);
-                m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
-
-                wxMessageBox(wxString::Format("Upgrade installed.\nReady in %d turns.", time),
-                    "Upgrade", wxOK | wxICON_INFORMATION, this);
-                break;
-            }
-
-            // Option 2: re-arm to a different unit type in the same category
-            if (!m_unitsUpgradeChoice || m_unitsUpgradeChoice->GetCount() == 0)
-                return;
-
-            int sel = m_unitsUpgradeChoice->GetSelection();
-            if (sel < 0) return;
-
-            int toUnitId = static_cast<int>(reinterpret_cast<intptr_t>(
-                m_unitsUpgradeChoice->GetClientData(sel)));
-
-            int cost = GetUpgradeCost(u.unit_id, toUnitId);
-            int time = GetUpgradeTime(toUnitId);
+            // Use price/time from UPGRADES.DEF
+            const int cost = GetTechUpgradeCost(upgId);
+            const int time = GetTechUpgradeTime(upgId);
 
             if (m_money < cost)
             {
@@ -3667,35 +3882,69 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
                 return;
             }
 
-            wxString fromName = GetUnitDisplayName(u.unit_id);
-            wxString toName = GetUnitDisplayName(toUnitId);
-
-            int result = wxMessageBox(
-                wxString::Format("Re-arm %s to %s for %d credits?\nAll tech upgrades will be lost.\nReady in %d turns.",
-                    fromName, toName, cost, time),
-                "Re-arm", wxYES_NO | wxICON_QUESTION, this);
-
-            if (result != wxYES)
+            // Prevent duplicates
+            auto& ups = m_unitStates[m_unitsSelectedUnit].upgrades;
+            if (std::find(ups.begin(), ups.end(), upgId) != ups.end())
+            {
+                wxMessageBox("This upgrade is already installed on this unit.", "Upgrade", wxOK | wxICON_INFORMATION, this);
                 return;
+            }
 
             m_money -= cost;
-
-            // Re-arm: change unit type, drop all installed upgrades, reduce experience moderately.
-            u.unit_id = toUnitId;
-            m_unitStates[m_unitsSelectedUnit].upgrades.clear();
-
-            int& xp = m_unitStates[m_unitsSelectedUnit].experience;
-            int xpLoss = xp / 5; // -20%
-            xp -= xpLoss;
-            if (xp < 0) xp = 0;
-            m_unitStates[m_unitsSelectedUnit].level = xp / 100;
-
+            ups.push_back(upgId);
             m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
 
-            wxMessageBox(wxString::Format("Unit re-armed to %s.\nExperience change: -%d\nReady in %d turns.",
-                toName, xpLoss, time), "Re-arm", wxOK | wxICON_INFORMATION, this);
+            wxMessageBox(wxString::Format("Upgrade installed.\nCost: %d\nReady in %d turns.", cost, time),
+                "Upgrade", wxOK | wxICON_INFORMATION, this);
+            break;
         }
-        break;
+
+        // Option 2: re-arm to a different unit type in the same category
+        if (m_unitsSelectedRearmUnitId <= 0)
+            return;
+
+        int toUnitId = m_unitsSelectedRearmUnitId;
+
+        // Re-arm uses cost_upgrade from units.json
+        int cost = GetUpgradeCost(u.unit_id, toUnitId);
+        int time = GetUpgradeTime(toUnitId);
+
+        if (m_money < cost)
+        {
+            wxMessageBox(wxString::Format("Not enough money. Need %d, have %d.", cost, m_money),
+                "Upgrade", wxOK | wxICON_WARNING, this);
+            return;
+        }
+
+        wxString fromName = GetUnitDisplayName(u.unit_id);
+        wxString toName = GetUnitDisplayName(toUnitId);
+
+        int result = wxMessageBox(
+            wxString::Format("Re-arm %s to %s for %d credits?\nAll tech upgrades will be lost.\nReady in %d turns.",
+                fromName, toName, cost, time),
+            "Re-arm", wxYES_NO | wxICON_QUESTION, this);
+
+        if (result != wxYES)
+            return;
+
+        m_money -= cost;
+
+        // Re-arm: change unit type, drop all installed upgrades, reduce experience moderately.
+        u.unit_id = toUnitId;
+        m_unitStates[m_unitsSelectedUnit].upgrades.clear();
+
+        int& xp = m_unitStates[m_unitsSelectedUnit].experience;
+        int xpLoss = xp / 5; // -20%
+        xp -= xpLoss;
+        if (xp < 0) xp = 0;
+        m_unitStates[m_unitsSelectedUnit].level = xp / 100;
+
+        m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
+
+        wxMessageBox(wxString::Format("Unit re-armed to %s.\nExperience change: -%d\nReady in %d turns.",
+            toName, xpLoss, time), "Re-arm", wxOK | wxICON_INFORMATION, this);
+    }
+    break;
 
     case UNITS_TAB_INFO:
         LeaveUnitsMode();
@@ -3746,6 +3995,7 @@ void StrategicLevelFrame::OnUnitsDisband(wxCommandEvent&)
 
     m_unitsSelectedUnit = -1;
     m_unitsSelectedUpgrade = (m_unitsCurrentTab == UNITS_TAB_RECRUIT) ? 1 : -1;
+    m_unitsSelectedRearmUnitId = -1;
 
     SaveStrategicState();
     RefreshUI();
@@ -3790,47 +4040,98 @@ int StrategicLevelFrame::GetRecruitTime(int quality) const
     return RECRUIT_QUALITY_TIME[quality];
 }
 
-int StrategicLevelFrame::GetUpgradeCost(int unitId, int upgradeId) const
+int StrategicLevelFrame::GetUpgradeCost(int unitId, int toUnitId) const
 {
+    // Re-arm cost: use cost_upgrade from units.json for the TARGET unit type
+    // This is the cost to change unit type within same category
+    auto it = m_unitUpgradeCosts.find(toUnitId);
+    if (it != m_unitUpgradeCosts.end() && it->second > 0)
+        return it->second;
+
+    // Fallback: if cost_upgrade not defined, use difference in buy costs
     int fromCost = GetUnitBuyCost(unitId);
-    int toCost = GetUnitBuyCost(upgradeId);
+    int toCost = GetUnitBuyCost(toUnitId);
 
     if (fromCost <= 0 || toCost <= 0)
         return 0;
 
-    // Upgrade cost is the difference plus 20%
     int diff = toCost - fromCost;
     if (diff < 0) diff = 0;
-    return diff + (diff / 5);
+    return diff;
 }
 
-int StrategicLevelFrame::GetUpgradeTime(int upgradeId) const
+int StrategicLevelFrame::GetUpgradeTime(int toUnitId) const
 {
-    // Default upgrade time
-    return 2;
+    // Re-arm time: default is 1 turn for unit type change
+    (void)toUnitId;
+    return 1;
+}
+
+int StrategicLevelFrame::GetTechUpgradeCost(int upgradeId) const
+{
+    // Tech upgrade cost from UPGRADES.DEF (Engine/Weapon/Armour style)
+    auto it = m_upgradeDefs.find(upgradeId);
+    if (it != m_upgradeDefs.end())
+        return it->second.price;
+
+    // Fallback: default cost
+    return 10;
+}
+
+int StrategicLevelFrame::GetTechUpgradeTime(int upgradeId) const
+{
+    // Tech upgrade time from UPGRADES.DEF
+    auto it = m_upgradeDefs.find(upgradeId);
+    if (it != m_upgradeDefs.end())
+        return std::max(1, it->second.time);
+
+    // Fallback: default time
+    return 1;
+}
+
+// Helper: get unit class category from JEDNOTKY.DEF (utype field)
+// Returns: 0=air, 1=light, 2=armored, -1=unknown
+// Uses the built-in SpellUnitRec methods for correct interpretation.
+static int GetUnitTypeClassFromDef(SpellUnitRec* unitRec)
+{
+    if (!unitRec)
+        return -1;
+    // Use the canonical methods from SpellUnitRec which correctly interpret utype
+    if (unitRec->isAir())
+        return 0;
+    if (unitRec->isLight())
+        return 1;
+    if (unitRec->isArmored())
+        return 2;
+    return -1;
 }
 
 wxString StrategicLevelFrame::GetUnitCategoryName(int unitId) const
 {
+    // PRIORITY 1: Use category from units.json (most accurate, user-defined)
+    // This is the primary source for both Game mode and Editor mode.
     auto it = m_unitCategories.find(unitId);
-    if (it != m_unitCategories.end())
+    if (it != m_unitCategories.end() && !it->second.empty())
         return wxString::FromUTF8(it->second);
 
-    // Try to determine from unit type
+    // PRIORITY 2: Fallback to JEDNOTKY.DEF utype field
     if (m_spellData && m_spellData->units)
     {
         auto* unitRec = m_spellData->units->GetUnit(unitId);
         if (unitRec)
         {
-            // Simple category detection based on unit properties
-            if (unitRec->attack_air > 0 && unitRec->attack_air > unitRec->attack_light)
-                return "Air Defense";
-            if (unitRec->attack_armored > unitRec->attack_light)
-                return "Heavy";
-            return "Light";
+            const int cls = GetUnitTypeClassFromDef(unitRec);
+            switch (cls)
+            {
+            case 0: return "Aerial guns";  // Air units
+            case 1: return "Infantry";     // Light units
+            case 2: return "Artillery";    // Armored units
+            default: break;
+            }
         }
     }
-    return "Unknown";
+
+    return "Other";
 }
 
 bool StrategicLevelFrame::CanUpgradeUnitTo(int fromUnitId, int toUnitId) const
@@ -3854,11 +4155,16 @@ std::vector<int> StrategicLevelFrame::GetAvailableUpgradesForUnit(int unitId) co
     // Find upgrades from research database that apply to this unit
     for (const auto& r : m_researchDb)
     {
-        if (r.flags.Contains("UpgradeItem") && m_researchCompleted.count(r.id))
+        if (r.flags.Contains("UpgradeItem"))
         {
-            // Check if this upgrade applies to the unit type
-            // For now, include all completed UpgradeItem research
-            result.push_back(r.id);
+            // In editor/debug mode (game mode disabled): show ALL upgrade items
+            // In game mode: only show completed research
+            if (!m_gameModeEnabled || m_researchCompleted.count(r.id))
+            {
+                // Check if this upgrade applies to the unit type
+                // For now, include all UpgradeItem research
+                result.push_back(r.id);
+            }
         }
     }
 
@@ -3872,7 +4178,11 @@ std::vector<int> StrategicLevelFrame::GetAvailableUnitTypesForUpgrade(int unitId
     if (!m_spellData || !m_spellData->units)
         return result;
 
+    // Use GetUnitCategoryName() which now prefers units.json categories
+    // This works correctly in both Game mode and Editor mode.
     wxString currentCat = GetUnitCategoryName(unitId);
+    if (currentCat.empty() || currentCat == "Other" || currentCat == "Unknown")
+        return result;
 
     // Find all units in the same category that are different
     for (int i = 0; i < m_spellData->units->Count(); i++)
@@ -3881,12 +4191,17 @@ std::vector<int> StrategicLevelFrame::GetAvailableUnitTypesForUpgrade(int unitId
             continue;
 
         wxString cat = GetUnitCategoryName(i);
-        if (cat == currentCat)
+        if (cat != currentCat)
+            continue;
+
+        // In Game mode: also check if unit is unlocked via research flags
+        if (m_gameModeEnabled && !m_levelResearchFlags.empty())
         {
-            // Check if upgrade to this unit is unlocked via research
-            // For now, include all same-category units
-            result.push_back(i);
+            if (m_levelResearchFlags.count(i) == 0)
+                continue;
         }
+
+        result.push_back(i);
     }
 
     return result;
@@ -5086,16 +5401,16 @@ void StrategicLevelFrame::BuildResourcesPage()
     m_resourcesCanvas->SetBackgroundColour(m_palette.background);
     m_resourcesCanvas->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_resourcesCanvas->SetMinSize(wxSize(1, 1));
-    m_resourcesCanvas->Bind(wxEVT_PAINT,     &StrategicLevelFrame::OnMapPaint,     this);
-    m_resourcesCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown,  this);
-    m_resourcesCanvas->Bind(wxEVT_MOTION,    &StrategicLevelFrame::OnMapMouseMove, this);
+    m_resourcesCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
+    m_resourcesCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
+    m_resourcesCanvas->Bind(wxEVT_MOTION, &StrategicLevelFrame::OnMapMouseMove, this);
     // When canvas first gets a real size, mark overlay dirty and repaint
     m_resourcesCanvas->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev)
-    {
-        ev.Skip();
-        m_overlayDirty = true;
-        if (m_resourcesCanvas) m_resourcesCanvas->Refresh();
-    });
+        {
+            ev.Skip();
+            m_overlayDirty = true;
+            if (m_resourcesCanvas) m_resourcesCanvas->Refresh();
+        });
     s->Add(m_resourcesCanvas, 3, wxALL | wxEXPAND, 8);
 
     // ── Bottom controls ──
@@ -5135,42 +5450,42 @@ void StrategicLevelFrame::BuildResourcesPage()
     m_resourcesTable->SetBackgroundColour(m_palette.background);
     m_resourcesTable->SetForegroundColour(m_palette.text);
     m_resourcesTable->SetMinSize(wxSize(1, 1));
-    m_resourcesTable->InsertColumn(0, "Territory",  wxLIST_FORMAT_LEFT,   -1);
-    m_resourcesTable->InsertColumn(1, "Resources",  wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(0, "Territory", wxLIST_FORMAT_LEFT, -1);
+    m_resourcesTable->InsertColumn(1, "Resources", wxLIST_FORMAT_CENTER, -1);
     m_resourcesTable->InsertColumn(2, "Money/turn", wxLIST_FORMAT_CENTER, -1);
-    m_resourcesTable->InsertColumn(3, "Res./turn",  wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(3, "Res./turn", wxLIST_FORMAT_CENTER, -1);
     // Stretch columns after first layout
     m_resourcesTable->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev)
-    {
-        ev.Skip();
-        if (!m_resourcesTable) return;
-        const int w = m_resourcesTable->GetClientSize().GetWidth();
-        if (w <= 0) return;
-        m_resourcesTable->SetColumnWidth(0, w * 25 / 100);
-        m_resourcesTable->SetColumnWidth(1, w * 30 / 100);
-        m_resourcesTable->SetColumnWidth(2, w * 25 / 100);
-        m_resourcesTable->SetColumnWidth(3, w * 20 / 100);
-    });
+        {
+            ev.Skip();
+            if (!m_resourcesTable) return;
+            const int w = m_resourcesTable->GetClientSize().GetWidth();
+            if (w <= 0) return;
+            m_resourcesTable->SetColumnWidth(0, w * 25 / 100);
+            m_resourcesTable->SetColumnWidth(1, w * 30 / 100);
+            m_resourcesTable->SetColumnWidth(2, w * 25 / 100);
+            m_resourcesTable->SetColumnWidth(3, w * 20 / 100);
+        });
     // Click in table also selects territory
     m_resourcesTable->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev)
-    {
-        const long row = ev.GetIndex();
-        if (!m_resourcesTable || row < 0) return;
-        const long tid = m_resourcesTable->GetItemData(row);
-        if (tid <= 0) return;
-        m_selectedTerritory = (int)tid;
-        RefreshResourcesPage();
-    });
+        {
+            const long row = ev.GetIndex();
+            if (!m_resourcesTable || row < 0) return;
+            const long tid = m_resourcesTable->GetItemData(row);
+            if (tid <= 0) return;
+            m_selectedTerritory = (int)tid;
+            RefreshResourcesPage();
+        });
     us->Add(m_resourcesTable, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     m_resourcesSlider->Bind(wxEVT_SLIDER, [this](wxCommandEvent&)
-    {
-        if (!m_resourcesSlider) return;
-        m_resourcesGlobalResearch = ClampGlobalResearch(m_resourcesSlider->GetValue());
-        m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
-        SaveStrategicState();
-        RefreshResourcesPage();
-    });
+        {
+            if (!m_resourcesSlider) return;
+            m_resourcesGlobalResearch = ClampGlobalResearch(m_resourcesSlider->GetValue());
+            m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
+            SaveStrategicState();
+            RefreshResourcesPage();
+        });
 
     under->SetSizer(us);
     s->Add(under, 2, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
@@ -5203,7 +5518,7 @@ void StrategicLevelFrame::RefreshResourcesPage()
     {
         const bool ownedSel = (m_selectedTerritory > 0 &&
             std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(),
-                      m_selectedTerritory) != m_ownedTerritories.end());
+                m_selectedTerritory) != m_ownedTerritories.end());
         if (ownedSel)
         {
             const auto& st = m_territoryResources[m_selectedTerritory];
@@ -5231,7 +5546,7 @@ void StrategicLevelFrame::RefreshResourcesPage()
         m_resourcesTable->Freeze();
         m_resourcesTable->DeleteAllItems();
 
-        const wxColour clrOwned   = m_palette.text;
+        const wxColour clrOwned = m_palette.text;
         const wxColour clrDepleted(0x88, 0x44, 0x44);
         const wxColour clrSelected = m_palette.heading;
 
@@ -5239,10 +5554,10 @@ void StrategicLevelFrame::RefreshResourcesPage()
         {
             if (tid <= 0) continue;
             const auto& st = m_territoryResources.count(tid)
-                             ? m_territoryResources.at(tid) : TerritoryResourceState{};
+                ? m_territoryResources.at(tid) : TerritoryResourceState{};
 
-            const wxString resStr  = wxString::Format("%d / %d", st.remaining, st.total);
-            const wxString monStr  = wxString::Format("%.1f", (double)M / 20.0);
+            const wxString resStr = wxString::Format("%d / %d", st.remaining, st.total);
+            const wxString monStr = wxString::Format("%.1f", (double)M / 20.0);
             const wxString resRStr = (R > 0)
                 ? wxString::Format("1/%d", 20 / R)
                 : wxString("-");
@@ -5300,7 +5615,7 @@ void StrategicLevelFrame::ApplyResourceTickEndTurn()
 
         if (toResearch)
         {
-            st.researchCarry += 1;
+            st.researchCarry += 2;  // doubled research income
             if (st.researchCarry >= 4)
             {
                 m_research += 1;
@@ -5395,14 +5710,14 @@ void StrategicLevelFrame::EnsureResearchLoaded()
 
     const fs::path base = GetStableBaseDir();
     const fs::path researchDir = base / "temp" / "RESEARCH";
-    const fs::path commonDir   = base / "temp" / "COMMON";
+    const fs::path commonDir = base / "temp" / "COMMON";
 
     auto loadFileBin = [&](const fs::path& p) -> std::string
-    {
-        std::ifstream f(p, std::ios::binary);
-        if (!f) return {};
-        return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    };
+        {
+            std::ifstream f(p, std::ios::binary);
+            if (!f) return {};
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        };
 
     // ----------------------------------------------------------------
     // 1.  Parse RESEARCH.DEF → group, level, cost (Time), flags, prereqs per item
@@ -5411,7 +5726,7 @@ void StrategicLevelFrame::EnsureResearchLoaded()
     {
         wxString group;
         int level = 0;
-        int time  = 0;
+        int time = 0;
         wxString flags;
         std::vector<int> prereqs;
     };
@@ -5454,13 +5769,13 @@ void StrategicLevelFrame::EnsureResearchLoaded()
                 static const std::regex rxGroup(R"(Group\((\w+)\))");
                 static const std::regex rxFlags(R"(Flags\((\w+)\))");
                 static const std::regex rxLevel(R"(Level\((\d+)\))");
-                static const std::regex rxTime (R"(Time\((\d+)\))");
-                static const std::regex rxOr   (R"(ORconnections\(([^)]+)\))");
+                static const std::regex rxTime(R"(Time\((\d+)\))");
+                static const std::regex rxOr(R"(ORconnections\(([^)]+)\))");
 
                 if (std::regex_search(line, m, rxGroup)) cur.group = wxString::FromUTF8(m[1].str());
                 if (std::regex_search(line, m, rxFlags)) cur.flags = wxString::FromUTF8(m[1].str());
                 if (std::regex_search(line, m, rxLevel)) cur.level = std::stoi(m[1].str());
-                if (std::regex_search(line, m, rxTime))  cur.time  = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxTime))  cur.time = std::stoi(m[1].str());
                 if (std::regex_search(line, m, rxOr))
                 {
                     std::istringstream argss(m[1].str());
@@ -5483,7 +5798,7 @@ void StrategicLevelFrame::EnsureResearchLoaded()
     std::vector<wxString> titleByIndex;
     {
         std::string raw;
-        for (const char* name : {"RESEARCH.CZ", "RESEARCH.ENG"})
+        for (const char* name : { "RESEARCH.CZ", "RESEARCH.ENG" })
         {
             raw = loadFileBin(commonDir / name);
             if (!raw.empty()) break;
@@ -5512,9 +5827,9 @@ void StrategicLevelFrame::EnsureResearchLoaded()
     if (fs::exists(researchDir, ec) && fs::is_directory(researchDir, ec))
     {
         static const std::regex rxFile(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)",
-                                       std::regex_constants::icase);
+            std::regex_constants::icase);
         for (auto it = fs::directory_iterator(researchDir, ec);
-             it != fs::directory_iterator(); ++it)
+            it != fs::directory_iterator(); ++it)
         {
             if (ec) break;
             if (!it->is_regular_file(ec)) continue;
@@ -5523,7 +5838,7 @@ void StrategicLevelFrame::EnsureResearchLoaded()
             if (!std::regex_match(fn, m, rxFile)) continue;
 
             std::string idStr = m[2].matched ? m[2].str() : "";
-            std::string ext   = m[3].str();
+            std::string ext = m[3].str();
             for (auto& ch : ext) ch = (char)std::toupper((unsigned char)ch);
 
             if (idStr.empty()) continue; // skip RACES.* for now
@@ -5550,8 +5865,8 @@ void StrategicLevelFrame::EnsureResearchLoaded()
 
     for (int id : allIds)
     {
-        const DefRec*  def  = defById.count(id)  ? &defById[id]  : nullptr;
-        const TextRec* text = textById.count(id)  ? &textById[id] : nullptr;
+        const DefRec* def = defById.count(id) ? &defById[id] : nullptr;
+        const TextRec* text = textById.count(id) ? &textById[id] : nullptr;
 
         // Special items are internal game triggers, not player-researchable
         if (def && def->flags == "Special")
@@ -5563,19 +5878,19 @@ void StrategicLevelFrame::EnsureResearchLoaded()
             continue;
 
         ResearchItem item;
-        item.id    = id;
-        item.code  = wxString::Format("R%03d", id);
+        item.id = id;
+        item.code = wxString::Format("R%03d", id);
         item.title = (id >= 0 && id < (int)titleByIndex.size() && !titleByIndex[id].empty())
-                     ? titleByIndex[id] : item.code;
+            ? titleByIndex[id] : item.code;
 
         if (text) { item.brief = text->brf; item.info = text->inf; }
 
         if (def)
         {
-            item.group        = def->group;
-            item.level        = def->level;
-            item.cost         = std::max(1, def->time);
-            item.flags        = def->flags;
+            item.group = def->group;
+            item.level = def->level;
+            item.cost = std::max(1, def->time);
+            item.flags = def->flags;
             item.prerequisites = def->prereqs;
         }
         else
@@ -5593,7 +5908,7 @@ void StrategicLevelFrame::EnsureResearchLoaded()
         if (g == "Upgrades")     return 2;
         if (g == "Races")        return 3;
         return 4;
-    };
+        };
     std::sort(m_researchDb.begin(), m_researchDb.end(),
         [&](const ResearchItem& a, const ResearchItem& b)
         {
@@ -5677,7 +5992,7 @@ void StrategicLevelFrame::OnResearchStartStop(wxCommandEvent&)
         if (m_researchBrowseIndex >= 0 && m_researchBrowseIndex < (int)m_researchDb.size())
         {
             m_researchActiveIndex = m_researchBrowseIndex;
-            m_researchActiveId    = m_researchDb[m_researchActiveIndex].id;
+            m_researchActiveId = m_researchDb[m_researchActiveIndex].id;
         }
         if (m_researchActiveIndex >= 0)
             m_researchAllocPerTurn = 1;
@@ -5696,7 +6011,7 @@ void StrategicLevelFrame::RefreshResearchUI()
     if (m_researchRefreshing)
         return;
     m_researchRefreshing = true;
-    struct RGuard { bool& f; ~RGuard(){ f = false; } } _rg{m_researchRefreshing};
+    struct RGuard { bool& f; ~RGuard() { f = false; } } _rg{ m_researchRefreshing };
 
     EnsureResearchLoaded();
 
@@ -5708,7 +6023,7 @@ void StrategicLevelFrame::RefreshResearchUI()
         for (int pre : it.prerequisites)
             if (m_researchCompleted.count(pre)) return true;
         return false;
-    };
+        };
 
     // ----------------------------------------------------------------
     // Categorized list (wxListCtrl)
@@ -5724,7 +6039,7 @@ void StrategicLevelFrame::RefreshResearchUI()
 
         const wxColour clrHeader = m_palette.heading;
         const wxColour clrNormal = m_palette.text;
-        const wxColour clrDone  (0x4A, 0x7A, 0x4A);
+        const wxColour clrDone(0x4A, 0x7A, 0x4A);
         const wxColour clrLocked(0x60, 0x60, 0x60);
 
         wxString lastGroup;
@@ -5749,7 +6064,7 @@ void StrategicLevelFrame::RefreshResearchUI()
                 }
             }
 
-            const bool done   = (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
+            const bool done = (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
             const bool locked = !isUnlocked(it);
             const bool active = (it.id == m_researchActiveId && m_researchAllocPerTurn > 0);
 
@@ -5822,7 +6137,7 @@ void StrategicLevelFrame::RefreshResearchUI()
             const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
             const int cost = std::max(1, cur.cost);
             const int prog = m_researchProgressById.count(cur.id)
-                             ? m_researchProgressById.at(cur.id) : 0;
+                ? m_researchProgressById.at(cur.id) : 0;
             m_researchGauge->SetRange(cost);
             m_researchGauge->SetValue(std::min(prog, cost));
             m_researchGaugeLabel->SetLabel(
@@ -5909,7 +6224,7 @@ void StrategicLevelFrame::RefreshInfoUI()
     if (m_infoRefreshing)
         return;
     m_infoRefreshing = true;
-    struct RGuard { bool& f; ~RGuard(){ f = false; } } _rg{m_infoRefreshing};
+    struct RGuard { bool& f; ~RGuard() { f = false; } } _rg{ m_infoRefreshing };
 
     EnsureResearchLoaded();
 
@@ -5920,7 +6235,7 @@ void StrategicLevelFrame::RefreshInfoUI()
             return true;  // Show all in sandbox mode
         // In game mode: only show completed items
         return (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
-    };
+        };
 
     // ----------------------------------------------------------------
     // Categorized list (wxListCtrl)
@@ -5941,7 +6256,7 @@ void StrategicLevelFrame::RefreshInfoUI()
         for (int i = 0; i < (int)m_researchDb.size(); ++i)
         {
             const ResearchItem& it = m_researchDb[i];
-            
+
             // Filter: only show items that pass visibility check
             if (!isVisible(it))
                 continue;
@@ -6050,8 +6365,8 @@ void StrategicLevelFrame::ApplyResearchTickEndTurn()
     const int cost = std::max(1, cur.cost);
     int& prog = m_researchProgressById[cur.id];
 
-    // Spend all available points this turn
-    const int spend = m_research;
+    // Spend all available points this turn (doubled research speed)
+    const int spend = m_research * 2;
     m_research = 0;
     prog += spend;
 
@@ -6271,13 +6586,13 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
     int chosenTerritoryId = (int)tid;
 
     auto isVisible = [&](int tid2) -> bool
-    {
-        if (!m_gameModeEnabled)
-            return true;
-        if (tid2 <= 0 || tid2 >= (int)m_visibleTerritory.size())
-            return false;
-        return m_visibleTerritory[tid2] != 0;
-    };
+        {
+            if (!m_gameModeEnabled)
+                return true;
+            if (tid2 <= 0 || tid2 >= (int)m_visibleTerritory.size())
+                return false;
+            return m_visibleTerritory[tid2] != 0;
+        };
 
     // 1) Try direct match by id
     bool idFound = false;
@@ -7218,92 +7533,92 @@ static bool LoadStrategicStateFile(
             ownedTerritories.push_back(id);
         }
 
-    
-    // research_state (optional)
-    if (g_researchPersistLoad && g_researchPersistLoad->progressById && g_researchPersistLoad->completed)
-    {
-        // defaults
-        if (g_researchPersistLoad->activeId) *g_researchPersistLoad->activeId = -1;
-        if (g_researchPersistLoad->activeIndex) *g_researchPersistLoad->activeIndex = -1;
-        if (g_researchPersistLoad->allocPerTurn) *g_researchPersistLoad->allocPerTurn = 0;
-        g_researchPersistLoad->progressById->clear();
-        g_researchPersistLoad->completed->clear();
 
-        // capture "research_state": { ... }  (or null)
-        std::smatch mmRS;
-                std::regex rs_re(R"("research_state"\s*:\s*(null|\{.*?\}))", std::regex_constants::ECMAScript | std::regex_constants::icase);
-        if (std::regex_search(data, mmRS, rs_re) && mmRS.size() > 1)
+        // research_state (optional)
+        if (g_researchPersistLoad && g_researchPersistLoad->progressById && g_researchPersistLoad->completed)
         {
-            const std::string rsVal = mmRS[1].str();
-            if (!rsVal.empty() && rsVal[0] == '{')
+            // defaults
+            if (g_researchPersistLoad->activeId) *g_researchPersistLoad->activeId = -1;
+            if (g_researchPersistLoad->activeIndex) *g_researchPersistLoad->activeIndex = -1;
+            if (g_researchPersistLoad->allocPerTurn) *g_researchPersistLoad->allocPerTurn = 0;
+            g_researchPersistLoad->progressById->clear();
+            g_researchPersistLoad->completed->clear();
+
+            // capture "research_state": { ... }  (or null)
+            std::smatch mmRS;
+            std::regex rs_re(R"("research_state"\s*:\s*(null|\{.*?\}))", std::regex_constants::ECMAScript | std::regex_constants::icase);
+            if (std::regex_search(data, mmRS, rs_re) && mmRS.size() > 1)
             {
-                (void)ParseJsonIntField(rsVal, "active_id", *g_researchPersistLoad->activeId);
-                (void)ParseJsonIntField(rsVal, "active_index", *g_researchPersistLoad->activeIndex);
-                (void)ParseJsonIntField(rsVal, "alloc_per_turn", *g_researchPersistLoad->allocPerTurn);
-
-                // progress object
-                std::smatch mmProg;
-                                std::regex prog_re(R"("progress"\s*:\s*\{(.*?)\})", std::regex_constants::ECMAScript | std::regex_constants::icase);
-                if (std::regex_search(rsVal, mmProg, prog_re) && mmProg.size() > 1)
+                const std::string rsVal = mmRS[1].str();
+                if (!rsVal.empty() && rsVal[0] == '{')
                 {
-                    const std::string pobj = mmProg[1].str();
-                    // match pairs like "12": 3
-                    std::regex pair_re("\\\\\"(\\\\d+)\\\\\"\\\\s*:\\\\s*(-?\\\\d+)");
-                    for (auto it = std::sregex_iterator(pobj.begin(), pobj.end(), pair_re); it != std::sregex_iterator(); ++it)
+                    (void)ParseJsonIntField(rsVal, "active_id", *g_researchPersistLoad->activeId);
+                    (void)ParseJsonIntField(rsVal, "active_index", *g_researchPersistLoad->activeIndex);
+                    (void)ParseJsonIntField(rsVal, "alloc_per_turn", *g_researchPersistLoad->allocPerTurn);
+
+                    // progress object
+                    std::smatch mmProg;
+                    std::regex prog_re(R"("progress"\s*:\s*\{(.*?)\})", std::regex_constants::ECMAScript | std::regex_constants::icase);
+                    if (std::regex_search(rsVal, mmProg, prog_re) && mmProg.size() > 1)
                     {
-                        const int id = std::atoi((*it)[1].str().c_str());
-                        const int val = std::atoi((*it)[2].str().c_str());
-                        (*g_researchPersistLoad->progressById)[id] = val;
+                        const std::string pobj = mmProg[1].str();
+                        // match pairs like "12": 3
+                        std::regex pair_re("\\\\\"(\\\\d+)\\\\\"\\\\s*:\\\\s*(-?\\\\d+)");
+                        for (auto it = std::sregex_iterator(pobj.begin(), pobj.end(), pair_re); it != std::sregex_iterator(); ++it)
+                        {
+                            const int id = std::atoi((*it)[1].str().c_str());
+                            const int val = std::atoi((*it)[2].str().c_str());
+                            (*g_researchPersistLoad->progressById)[id] = val;
+                        }
                     }
-                }
 
-                // completed array
-                std::smatch mmComp;
-                                std::regex comp_re(R"("completed"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
-                if (std::regex_search(rsVal, mmComp, comp_re) && mmComp.size() > 1)
-                {
-                    const std::string carr = mmComp[1].str();
-                    std::regex num_re("(-?\\\\d+)");
-                    for (auto it = std::sregex_iterator(carr.begin(), carr.end(), num_re); it != std::sregex_iterator(); ++it)
+                    // completed array
+                    std::smatch mmComp;
+                    std::regex comp_re(R"("completed"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
+                    if (std::regex_search(rsVal, mmComp, comp_re) && mmComp.size() > 1)
                     {
-                        const int id = std::atoi((*it)[1].str().c_str());
-                        g_researchPersistLoad->completed->insert(id);
+                        const std::string carr = mmComp[1].str();
+                        std::regex num_re("(-?\\\\d+)");
+                        for (auto it = std::sregex_iterator(carr.begin(), carr.end(), num_re); it != std::sregex_iterator(); ++it)
+                        {
+                            const int id = std::atoi((*it)[1].str().c_str());
+                            g_researchPersistLoad->completed->insert(id);
+                        }
                     }
                 }
             }
         }
-    }
 
-// resources (optional)
-    std::smatch mmRes;
+        // resources (optional)
+        std::smatch mmRes;
         std::regex res_arr_re(R"("resources"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
-    if (std::regex_search(data, mmRes, res_arr_re) && mmRes.size() > 1)
-    {
-        const std::string arr = mmRes[1].str();
-        // match objects like {"id": 1, "total": 20, ...}
-        std::regex obj_re("\\{[^\\}]*\\}");
-        for (auto it = std::sregex_iterator(arr.begin(), arr.end(), obj_re); it != std::sregex_iterator(); ++it)
+        if (std::regex_search(data, mmRes, res_arr_re) && mmRes.size() > 1)
         {
-            const std::string obj = (*it)[0].str();
-            std::smatch mo;
-            int id = -1;
-            StrategicLevelFrame::TerritoryResourceState st;
-            if (std::regex_search(obj, mo, std::regex("\\\"id\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                id = std::stoi(mo[1].str());
-            if (id <= 0) continue;
-            if (std::regex_search(obj, mo, std::regex("\\\"total\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                st.total = std::max(0, std::stoi(mo[1].str()));
-            if (std::regex_search(obj, mo, std::regex("\\\"remaining\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                st.remaining = std::max(0, std::stoi(mo[1].str()));
-            if (std::regex_search(obj, mo, std::regex("\\\"research_percent\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                st.researchPercent = std::clamp(std::stoi(mo[1].str()), 0, 100);
-            if (std::regex_search(obj, mo, std::regex("\\\"alloc_accum\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                st.allocAccum = std::clamp(std::stoi(mo[1].str()), 0, 99);
-            if (std::regex_search(obj, mo, std::regex("\\\"research_carry\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                st.researchCarry = std::clamp(std::stoi(mo[1].str()), 0, 3);
-            territoryResources[id] = st;
+            const std::string arr = mmRes[1].str();
+            // match objects like {"id": 1, "total": 20, ...}
+            std::regex obj_re("\\{[^\\}]*\\}");
+            for (auto it = std::sregex_iterator(arr.begin(), arr.end(), obj_re); it != std::sregex_iterator(); ++it)
+            {
+                const std::string obj = (*it)[0].str();
+                std::smatch mo;
+                int id = -1;
+                StrategicLevelFrame::TerritoryResourceState st;
+                if (std::regex_search(obj, mo, std::regex("\\\"id\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                    id = std::stoi(mo[1].str());
+                if (id <= 0) continue;
+                if (std::regex_search(obj, mo, std::regex("\\\"total\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                    st.total = std::max(0, std::stoi(mo[1].str()));
+                if (std::regex_search(obj, mo, std::regex("\\\"remaining\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                    st.remaining = std::max(0, std::stoi(mo[1].str()));
+                if (std::regex_search(obj, mo, std::regex("\\\"research_percent\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                    st.researchPercent = std::clamp(std::stoi(mo[1].str()), 0, 100);
+                if (std::regex_search(obj, mo, std::regex("\\\"alloc_accum\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                    st.allocAccum = std::clamp(std::stoi(mo[1].str()), 0, 99);
+                if (std::regex_search(obj, mo, std::regex("\\\"research_carry\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
+                    st.researchCarry = std::clamp(std::stoi(mo[1].str()), 0, 3);
+                territoryResources[id] = st;
+            }
         }
-    }
     }
 
     // player object optional (backward compatible)
@@ -7429,7 +7744,7 @@ static void SaveStrategicStateFile(
     }
     f << "],\n";
 
-    
+
     // Research (optional; driven by g_researchPersistSave)
     if (g_researchPersistSave && g_researchPersistSave->progressById && g_researchPersistSave->completed)
     {
@@ -7466,7 +7781,7 @@ static void SaveStrategicStateFile(
         f << "  \"research_state\": null,\n";
     }
 
-// Resources per-territory state (optional on load, defaults to 20/20)
+    // Resources per-territory state (optional on load, defaults to 20/20)
     f << "  \"resources\": [\n";
     for (size_t i = 0; i < level.territories.size(); ++i)
     {
@@ -7474,12 +7789,12 @@ static void SaveStrategicStateFile(
         auto it = territoryResources.find(tid);
         const auto st = (it != territoryResources.end()) ? it->second : StrategicLevelFrame::TerritoryResourceState{};
         f << "    {\"id\": " << tid
-          << ", \"total\": " << st.total
-          << ", \"remaining\": " << st.remaining
-          << ", \"research_percent\": " << st.researchPercent
-          << ", \"alloc_accum\": " << st.allocAccum
-          << ", \"research_carry\": " << st.researchCarry
-          << "}";
+            << ", \"total\": " << st.total
+            << ", \"remaining\": " << st.remaining
+            << ", \"research_percent\": " << st.researchPercent
+            << ", \"alloc_accum\": " << st.allocAccum
+            << ", \"research_carry\": " << st.researchCarry
+            << "}";
         if (i + 1 < level.territories.size())
             f << ",";
         f << "\n";
@@ -8375,21 +8690,21 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                 wxImage ovImg(bw, bh, true);
                 ovImg.InitAlpha();
                 // Start fully black – covers background AND areas outside all territories
-                std::memset(ovImg.GetData(),  0,    (size_t)bw * (size_t)bh * 3);
-                std::memset(ovImg.GetAlpha(), 255,  (size_t)bw * (size_t)bh);
+                std::memset(ovImg.GetData(), 0, (size_t)bw * (size_t)bh * 3);
+                std::memset(ovImg.GetAlpha(), 255, (size_t)bw * (size_t)bh);
 
                 auto isOwned = [&](int tid) -> bool {
                     return std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end();
-                };
+                    };
 
                 auto decodeTid = [&](uint8_t v, bool& isBorder) -> int
-                {
-                    isBorder = false;
-                    if (v == 0) return 0;
-                    if (v >= 1 && v <= 128) return (int)v;
-                    if (v >= 129) { isBorder = true; return (int)(v - 128); }
-                    return 0;
-                };
+                    {
+                        isBorder = false;
+                        if (v == 0) return 0;
+                        if (v >= 1 && v <= 128) return (int)v;
+                        if (v >= 129) { isBorder = true; return (int)(v - 128); }
+                        return 0;
+                    };
 
                 for (int py = 0; py < bh; ++py)
                 {
@@ -8414,11 +8729,17 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                             const bool selected = (tid == m_selectedTerritory);
 
                             if (selected)
-                            { r = 0xFF; g = 0xF6; b = 0x04; a = 130; }  // yellow highlight
+                            {
+                                r = 0xFF; g = 0xF6; b = 0x04; a = 130;
+                            }  // yellow highlight
                             else if (depleted)
-                            { r = 0x88; g = 0x44; b = 0x44; a = 160; }  // red-grey
+                            {
+                                r = 0x88; g = 0x44; b = 0x44; a = 160;
+                            }  // red-grey
                             else
-                            { r = 0x10; g = 0xD0; b = 0x10; a = 120; }  // green
+                            {
+                                r = 0x10; g = 0xD0; b = 0x10; a = 120;
+                            }  // green
                         }
 
                         ovImg.SetRGB(px, py, r, g, b);

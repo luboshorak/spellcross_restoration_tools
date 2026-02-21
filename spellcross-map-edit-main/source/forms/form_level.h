@@ -87,28 +87,31 @@ public:
     void ApplyUnitsCooldownTick();  // Called at end of turn
     int GetRecruitCost(int unitIndex, int quality) const;
     int GetRecruitTime(int quality) const;
-    int GetUpgradeCost(int unitId, int upgradeId) const;
-    int GetUpgradeTime(int upgradeId) const;
+    int GetUpgradeCost(int unitId, int upgradeId) const;  // re-arm cost (uses cost_upgrade from units.json)
+    int GetUpgradeTime(int upgradeId) const;              // re-arm time
+    int GetTechUpgradeCost(int upgradeId) const;          // tech upgrade cost (from UPGRADES.DEF)
+    int GetTechUpgradeTime(int upgradeId) const;          // tech upgrade time (from UPGRADES.DEF)
+    bool EnsureUpgradeDefsLoaded();                       // load UPGRADES.DEF
     wxString GetUnitCategoryName(int unitId) const;
     bool CanUpgradeUnitTo(int fromUnitId, int toUnitId) const;
     std::vector<int> GetAvailableUpgradesForUnit(int unitId) const;
     std::vector<int> GetAvailableUnitTypesForUpgrade(int unitId) const;
 
 
-// menu (Strategic Level saves)
-void BuildMenu();
-void OnSaveGame(wxCommandEvent& ev);
-void OnLoadGame(wxCommandEvent& ev);
+    // menu (Strategic Level saves)
+    void BuildMenu();
+    void OnSaveGame(wxCommandEvent& ev);
+    void OnLoadGame(wxCommandEvent& ev);
 
-void OnOptionsAudio(wxCommandEvent& ev);
+    void OnOptionsAudio(wxCommandEvent& ev);
 
-struct PlayerProgress
-{
-    std::string name = "John Alexander";
-    int rank = 0;
-    int experience = 0;
-    int actions = 0;
-};
+    struct PlayerProgress
+    {
+        std::string name = "John Alexander";
+        int rank = 0;
+        int experience = 0;
+        int actions = 0;
+    };
 
     struct CommanderRankRec
     {
@@ -197,17 +200,17 @@ public:
     void BuildHierarchyPage(wxPanel* parent);
     wxWindow* BuildHierarchyBookPage(wxWindow* parent, int brigadeIndex);
     wxPanel* BuildHierarchyFormation(wxWindow* parent,
-                                     const wxString& label,
-                                     const wxColour& color,
-                                     wxSizer* contents);
+        const wxString& label,
+        const wxColour& color,
+        wxSizer* contents);
     wxPanel* BuildHierarchySlot(wxWindow* parent,
-                                const wxString& placeholder,
-                                const std::string& slotId,
-                                const std::string& type);
+        const wxString& placeholder,
+        const std::string& slotId,
+        const std::string& type);
     void RegisterHierarchySlot(const std::string& slotId,
-                               const std::string& type,
-                               wxStaticText* label,
-                               const wxString& placeholder);
+        const std::string& type,
+        wxStaticText* label,
+        const wxString& placeholder);
     void ApplyHierarchyDrop(const std::string& slotId, const wxString& data);
     void ChooseUnitForHierarchySlot(const std::string& unitSlotId);
     void ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId);
@@ -254,8 +257,20 @@ public:
     // Per-roster-row unique IDs (session-stable). Used for hierarchy assignment.
     mutable std::vector<uint32_t> m_rosterRowUids;
     mutable uint32_t m_nextRosterUid = 1;
-    std::unordered_map<int, int> m_unitCosts;
+    std::unordered_map<int, int> m_unitCosts;        // unit_id -> cost_buy
+    std::unordered_map<int, int> m_unitUpgradeCosts; // unit_id -> cost_upgrade (re-arm cost)
     bool m_unitCostsLoaded = false;
+
+    // Tech upgrades from UPGRADES.DEF (Engine/Weapon/Armour style)
+    struct UpgradeDefRec
+    {
+        int id = -1;
+        int price = 0;
+        int time = 1;
+        std::set<int> suitableTypes; // unit type_ids this upgrade applies to
+    };
+    std::unordered_map<int, UpgradeDefRec> m_upgradeDefs;
+    bool m_upgradeDefsLoaded = false;
 
     // Game mode (campaign progression)
     bool m_gameModeEnabled = false;
@@ -343,34 +358,34 @@ public:
     void ApplyTerritoryVisibility();
     void MarkOverlayDirty();
 
-struct CommanderRec
-{
-    // Unique commander instance id (session-stable). Used to prevent the same commander
-    // being assigned into multiple hierarchy slots.
-    uint32_t uid = 0;
-    std::string name;
-    int rank = 0;
-};
+    struct CommanderRec
+    {
+        // Unique commander instance id (session-stable). Used to prevent the same commander
+        // being assigned into multiple hierarchy slots.
+        uint32_t uid = 0;
+        std::string name;
+        int rank = 0;
+    };
 
-// owned commanders (max 14)
-std::vector<CommanderRec> m_playerCommanders;
+    // owned commanders (max 14)
+    std::vector<CommanderRec> m_playerCommanders;
 
-// session-stable commander UID generator (used when uid==0)
-mutable uint32_t m_nextCommanderUid = 1;
+    // session-stable commander UID generator (used when uid==0)
+    mutable uint32_t m_nextCommanderUid = 1;
 
-// runtime helpers (uid -> rank) for drag payload construction
-mutable std::unordered_map<uint32_t, int> m_commanderRankByUid;
+    // runtime helpers (uid -> rank) for drag payload construction
+    mutable std::unordered_map<uint32_t, int> m_commanderRankByUid;
 
-// available commanders to buy in current turn (usually 0 or 1)
-std::vector<CommanderRec> m_availableCommanders;
+    // available commanders to buy in current turn (usually 0 or 1)
+    std::vector<CommanderRec> m_availableCommanders;
 
-// generation limits: max 2 commanders per 25 turns window
-int m_cmdGenWindowStartTurn = 1;
-int m_cmdGenCountInWindow = 0;
+    // generation limits: max 2 commanders per 25 turns window
+    int m_cmdGenWindowStartTurn = 1;
+    int m_cmdGenCountInWindow = 0;
 
-// commander names source
-std::vector<std::string> m_commanderNames;
-bool m_commanderNamesLoaded = false;
+    // commander names source
+    std::vector<std::string> m_commanderNames;
+    bool m_commanderNamesLoaded = false;
 
     // decoded CLK territory map for click-detection
     std::vector<unsigned char> m_clkValues;
@@ -489,7 +504,7 @@ bool m_commanderNamesLoaded = false;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnInfo = nullptr;       // NEW: Info/encyclopedia button
-    wxButton* m_btnBuyShop  = nullptr;   // single "Buy / Sell" toggle
+    wxButton* m_btnBuyShop = nullptr;   // single "Buy / Sell" toggle
     wxButton* m_btnEndTurn = nullptr;
     wxButton* m_btnLaunch = nullptr;
     wxButton* m_btnStrategicMap = nullptr;
@@ -506,17 +521,17 @@ bool m_commanderNamesLoaded = false;
     wxStaticText* m_buyLblTurnCaption = nullptr;
     wxStaticText* m_buyLblTurnValue = nullptr;
 
-    wxPanel*      m_normalLayoutPanel = nullptr;  // container for left+mid+right
-    wxPanel*      m_buyMainPanel     = nullptr;  // root buy panel
-    wxListCtrl*   m_buyShopList      = nullptr;  // shop list (right top)
-    wxListCtrl*   m_buyUnitRoster    = nullptr;  // left top (cloned roster)
-    wxListCtrl*   m_buyCmdRoster     = nullptr;  // left bottom (cloned cmd roster)
-    wxTextCtrl*   m_buyInfoText      = nullptr;  // selected item info (right bottom)
-    wxStaticText* m_buyTimeLabel     = nullptr;  // "Time: N"
-    wxStaticText* m_buyCostLabel     = nullptr;  // "Cost: N"
-    wxButton*     m_btnBuyAction     = nullptr;  // Buy/Sell button
-    bool          m_buyModeActive    = false;
-    bool          m_buyTabSell       = false;    // true = sell mode
+    wxPanel* m_normalLayoutPanel = nullptr;  // container for left+mid+right
+    wxPanel* m_buyMainPanel = nullptr;  // root buy panel
+    wxListCtrl* m_buyShopList = nullptr;  // shop list (right top)
+    wxListCtrl* m_buyUnitRoster = nullptr;  // left top (cloned roster)
+    wxListCtrl* m_buyCmdRoster = nullptr;  // left bottom (cloned cmd roster)
+    wxTextCtrl* m_buyInfoText = nullptr;  // selected item info (right bottom)
+    wxStaticText* m_buyTimeLabel = nullptr;  // "Time: N"
+    wxStaticText* m_buyCostLabel = nullptr;  // "Cost: N"
+    wxButton* m_btnBuyAction = nullptr;  // Buy/Sell button
+    bool          m_buyModeActive = false;
+    bool          m_buyTabSell = false;    // true = sell mode
 
     std::set<int> m_levelResearchFlags;  // from LEVEL_XX.DEF SetResearchFlag(N)
     std::unordered_map<int, std::string> m_unitCategories;
@@ -534,35 +549,41 @@ bool m_commanderNamesLoaded = false;
     wxStaticText* m_unitsLblTurnCaption = nullptr;
     wxStaticText* m_unitsLblTurnValue = nullptr;
 
-    wxPanel*      m_unitsMainPanel     = nullptr;  // root units panel
-    wxListCtrl*   m_unitsRoster        = nullptr;  // player units list (left)
-    wxListCtrl*   m_unitsShopList      = nullptr;  // shop/options list (middle top)
-    wxTextCtrl*   m_unitsInfoText      = nullptr;  // unit info (middle bottom)
-    wxPanel*      m_unitsIconCanvas    = nullptr;  // unit icon display
-    wxPanel*      m_unitsArtCanvas     = nullptr;  // unit art display (for Info mode)
-    wxStaticText* m_unitsTimeLabel     = nullptr;  // "Time: N"
-    wxStaticText* m_unitsCostLabel     = nullptr;  // "Cost: N"
-    wxButton*     m_btnUnitsAction     = nullptr;  // action button
-    wxButton*     m_btnUnitsDisband   = nullptr;  // disband button (always visible)
-    wxButton*     m_btnUnitsShop       = nullptr;  // Units button in sidebar
-    wxButton*     m_btnUnitsTabRecruit = nullptr;
-    wxButton*     m_btnUnitsTabDisband = nullptr;
-    wxButton*     m_btnUnitsTabUpgrade = nullptr;
-    wxButton*     m_btnUnitsTabInfo    = nullptr;
-    wxChoice*     m_unitsQualityChoice = nullptr;  // recruit quality selector
-    wxChoice*     m_unitsUpgradeChoice = nullptr;  // upgrade type selector
+    wxPanel* m_unitsMainPanel = nullptr;  // root units panel
+    wxListCtrl* m_unitsRoster = nullptr;  // player units list (left)
+    wxListCtrl* m_unitsTempRoster = nullptr;  // temporary units list (left bottom)
+    wxListCtrl* m_unitsShopList = nullptr;  // shop/options list (middle top)
+    wxTextCtrl* m_unitsInfoText = nullptr;  // unit info (middle bottom)
+    wxPanel* m_unitsIconCanvas = nullptr;  // unit icon display
+    wxPanel* m_unitsArtCanvas = nullptr;  // unit art display (for Info mode)
+    wxStaticText* m_unitsTimeLabel = nullptr;  // "Time: N"
+    wxStaticText* m_unitsCostLabel = nullptr;  // "Cost: N"
+    wxButton* m_btnUnitsAction = nullptr;  // action button
+    wxButton* m_btnUnitsDisband = nullptr;  // disband button (always visible)
+    wxButton* m_btnUnitsShop = nullptr;  // Units button in sidebar
+    wxButton* m_btnUnitsTabRecruit = nullptr;
+    wxButton* m_btnUnitsTabDisband = nullptr;
+    wxButton* m_btnUnitsTabUpgrade = nullptr;
+    wxButton* m_btnUnitsTabInfo = nullptr;
+    wxChoice* m_unitsQualityChoice = nullptr;  // recruit quality selector
+    // Upgrade panel widgets (Upgrade tab)
+    wxStaticText* m_unitsUpgradeTitle = nullptr;
+    wxStaticText* m_unitsUpgradeValue = nullptr;
+    wxStaticText* m_unitsRearmTitle = nullptr;
+    wxListBox*    m_unitsRearmList = nullptr;  // unit types in same category (re-arm)
 
-    bool          m_unitsModeActive    = false;
+    bool          m_unitsModeActive = false;
 
     enum UnitsTab : int {
         UNITS_TAB_RECRUIT = 0,
         UNITS_TAB_DISBAND = 1,
         UNITS_TAB_UPGRADE = 2,
-        UNITS_TAB_INFO    = 3
+        UNITS_TAB_INFO = 3
     };
-    UnitsTab      m_unitsCurrentTab    = UNITS_TAB_RECRUIT;
-    int           m_unitsSelectedUnit  = -1;  // index in m_playerUnits
+    UnitsTab      m_unitsCurrentTab = UNITS_TAB_RECRUIT;
+    int           m_unitsSelectedUnit = -1;  // index in m_playerUnits
     int           m_unitsSelectedUpgrade = -1;  // selected upgrade item
+    int           m_unitsSelectedRearmUnitId = -1;  // unit_id selected in re-arm list (Upgrade tab)
 
     // Per-unit instance state for cooldowns and upgrades
     struct UnitInstanceState
