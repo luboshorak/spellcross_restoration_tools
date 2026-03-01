@@ -7945,6 +7945,9 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     m_pendingMission.valid = true;
     m_pendingMission.territory_id = terr_id;
     m_pendingMission.mission_token = token;
+    
+    wxLogMessage("[LAUNCH] Set m_pendingMission: valid=true, territory_id=%d, token='%s'",
+        m_pendingMission.territory_id, m_pendingMission.mission_token.c_str());
 
     // Record which roster indices are being sent to the mission
     m_pendingMission.sent_unit_indices.clear();
@@ -8017,10 +8020,12 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     SaveStrategicState();
 
     // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
+    wxLogMessage("[LAUNCH] Entering game mode and hiding strategic level window");
     m_main->SetGameModeUI(true);
     m_main->Raise();
 
     Hide();
+    wxLogMessage("[LAUNCH] Strategic level hidden, tactical map should now be active");
 }
 
 
@@ -10154,6 +10159,8 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
     SaveMissionStats();
     SaveStrategicState();
     RefreshUI();
+    
+    wxLogMessage("[STRATEGIC] HandleMissionResult completed, UI refreshed");
 }
 
 StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults(bool success)
@@ -10619,7 +10626,7 @@ void StrategicLevelFrame::PlayVideo(const std::string& video_file)
     if (video_file.empty())
         return;
     
-    wxLogMessage("[STRATEGIC] Playing video: %s", video_file.c_str());
+    wxLogMessage("[STRATEGIC] PlayVideo requested: %s", video_file.c_str());
     
     namespace fs = std::filesystem;
     fs::path base = fs::path(m_level.source_path).parent_path();
@@ -10628,7 +10635,9 @@ void StrategicLevelFrame::PlayVideo(const std::string& video_file)
         base / video_file,
         base / to_upper(video_file),
         base / ".." / "VIDEO" / video_file,
-        base / ".." / "VIDEO" / to_upper(video_file)
+        base / ".." / "VIDEO" / to_upper(video_file),
+        fs::current_path() / "temp" / "VIDEO" / video_file,
+        fs::current_path() / "temp" / "VIDEO" / to_upper(video_file)
     };
     
     std::string videoPath;
@@ -10644,15 +10653,19 @@ void StrategicLevelFrame::PlayVideo(const std::string& video_file)
     
     if (videoPath.empty())
     {
-        wxLogMessage("[STRATEGIC] Video file not found: %s", video_file.c_str());
+        wxLogMessage("[STRATEGIC] Video file not found in any search path: %s", video_file.c_str());
         return;
     }
     
-    // Use FormVideoBox if available through main frame
+    wxLogMessage("[STRATEGIC] Video file found: %s", videoPath.c_str());
+    
+    // TODO: Implement actual video playback through FormVideoBox
+    // For now, videos defined in mission end_ok_video/end_bad_video are logged but not played
+    // The main cutscene video (movie_path in MissionEndRequest) IS played through StartMissionEndFlow
     if (m_main && m_spellData && m_spellData->videos)
     {
-        // The video will be played through the existing system
-        wxLogMessage("[STRATEGIC] Video playback: %s", videoPath.c_str());
+        wxLogMessage("[STRATEGIC] Video playback system available but not yet implemented for strategic level videos");
+        // Future: could use m_main to trigger video playback
     }
 }
 

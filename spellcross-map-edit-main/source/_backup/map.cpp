@@ -45,32 +45,68 @@ namespace
 {
     // For enemy movement: update ONLY the enemy unit's visibility based on the player's current view mask,
     // without overwriting unit_view->view (which would reveal the map).
-    static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
-    {
-        if (!map || !unit_view || !enemy)
-            return;
+    //static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
+    //{
+    //    if (!map || !unit_view || !enemy)
+    //        return;
 
-        int mxy = map->ConvXY(enemy->coor);
-        if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
-            return;
+    //    int mxy = map->ConvXY(enemy->coor);
+    //    if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
+    //        return;
 
-        const bool currently_visible = (unit_view->view[mxy] == 2);
+    //    const bool currently_visible = (unit_view->view[mxy] == 2);
 
-        if (currently_visible)
-        {
-            if (enemy->is_visible < 2 && new_contact)
-                *new_contact = 1;
+    //    if (currently_visible)
+    //    {
+    //        if (enemy->is_visible < 2 && new_contact)
+    //            *new_contact = 1;
 
-            enemy->is_visible = 2;
-            enemy->was_seen = true;
-        }
-        else
-        {
-            // was visible -> degrade to "known but not currently visible"
-            if (enemy->is_visible > 1)
-                enemy->is_visible = 1;
-        }
-    }
+    //        enemy->is_visible = 2;
+    //        enemy->was_seen = true;
+    //    }
+    //    else
+    //    {
+    //        // was visible -> degrade to "known but not currently visible"
+    //        if (enemy->is_visible > 1)
+    //            enemy->is_visible = 1;
+    //    }
+    //}
+
+	static void UpdateEnemyVisibilityFromPlayerView(SpellMap* map, SpellMap::ViewRange* unit_view, MapUnit* enemy, int* new_contact)
+	{
+		if (!map || !unit_view || !enemy)
+			return;
+
+		int mxy = map->ConvXY(enemy->coor);
+		if (mxy < 0 || (size_t)mxy >= unit_view->view.size())
+			return;
+
+		const bool currently_visible = (unit_view->view[mxy] == 2);
+
+		if (currently_visible)
+		{
+			// právě se stala viditelnou => vynutit refresh vykreslení
+			if (enemy->is_visible < 2)
+			{
+				enemy->was_moved = true;       // <-- DŮLEŽITÉ
+				if (new_contact)
+					*new_contact = 1;
+			}
+
+			enemy->is_visible = 2;
+			enemy->was_seen = true;
+		}
+		else
+		{
+			// was visible -> degrade to "known but not currently visible"
+			if (enemy->is_visible > 1)
+			{
+				enemy->is_visible = 1;
+				enemy->was_moved = true;       // <-- taky dobré, aby hned zmizela
+			}
+		}
+	}
+
 
 	static void HideEnemiesOutsidePlayerView(SpellMap* map, SpellMap::ViewRange* unit_view)
 	{
@@ -706,6 +742,70 @@ bool SpellMap::AreAllObjectivesDone() const
 	return any_objective; // pokud nejsou objectives, neskončíme automaticky
 }
 
+void SpellMap::CheckObjectiveNotifications()
+{
+	if (!isGameMode())
+		return;
+
+	// If a notification is currently displayed, wait until dismissed
+	if (m_objective_notify_active)
+	{
+		if (m_msg_checker && m_msg_checker())
+			return; // still showing
+		// Dismissed - pop the front message
+		m_objective_notify_active = false;
+		if (!m_objective_notify_queue.empty())
+			m_objective_notify_queue.erase(m_objective_notify_queue.begin());
+	}
+
+	// Show next queued notification
+	if (!m_objective_notify_queue.empty() && m_msg_creator)
+	{
+		if (!m_msg_checker || !m_msg_checker())
+		{
+			m_msg_creator(m_objective_notify_queue.front().get(), false, NULL);
+			m_objective_notify_active = true;
+		}
+		return;
+	}
+
+	// Scan objectives for newly completed ones
+	for (auto* e : events->GetEvents())
+	{
+		if (!e) continue;
+		if (!e->is_objective) continue;
+		if (e->objective_notified) continue;
+
+		if (e->isDone())
+		{
+			e->objective_notified = true;
+
+			// Build notification text from the objective label
+			std::wstring msg = L"*** ";
+			if (!e->label.empty())
+				msg += e->label;
+			else
+				msg += L"Objective completed";
+			msg += L" ***";
+
+			auto text_rec = std::make_unique<SpellTextRec>(
+				std::string(msg.begin(), msg.end()), SpellLang::CZE, "OBJ_DONE");
+			text_rec->text = msg;
+			m_objective_notify_queue.push_back(std::move(text_rec));
+		}
+	}
+
+	// Show first if just enqueued
+	if (!m_objective_notify_queue.empty() && !m_objective_notify_active && m_msg_creator)
+	{
+		if (!m_msg_checker || !m_msg_checker())
+		{
+			m_msg_creator(m_objective_notify_queue.front().get(), false, NULL);
+			m_objective_notify_active = true;
+		}
+	}
+}
+
 SpellMap::SpellMap()
 {
 	is_valid = false;
@@ -861,12 +961,15 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (!isGameMode())
 		return;
 
+	// HARD LATCH: mission end smí proběhnout jen jednou pro aktuálně nahranou misi
+	if (m_mission_end_fired)
+		return;
+
 	// už jsme to ukázali
 	if (m_mission_end_shown)
 	{
 		// čekáme až hráč zavře okno; jakmile UI není "busy", tak to bereme jako ACK.
-		// POZOR: v některých bězích (podle toho, jak je UI hooknuté) může být m_msg_checker == nullptr.
-		// V takovém případě se flow nesmí zaseknout navždy – bereme to jako okamžitý ACK.
+		// Pozor: m_msg_checker může být null -> v takovém případě nesmí flow viset.
 		if (!m_mission_end_ack)
 		{
 			if (!m_msg_checker)
@@ -877,8 +980,6 @@ void SpellMap::CheckAndTriggerMissionEnd()
 			else if (!m_msg_checker())
 			{
 				m_mission_end_ack = true;
-
-				// od této chvíle může UI vrstva provést přechod (video / strategic)
 				m_mission_end_req.pending = true;
 			}
 		}
@@ -889,16 +990,16 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (m_msg_checker && m_msg_checker())
 		return;
 
-	// Special: po první misi – video + load LEVEL_02.DEF
+	// --- success condition ---
+	bool success = AreAllObjectivesDone();
+
+	// Special: po první misi dovol success i bez objective, když velitel dojede na EscapeSquare (transport)
 	std::wstring stem = std::filesystem::path(map_path).stem().wstring();
 	for (auto& ch : stem) ch = (wchar_t)towupper(ch);
 
 	const bool is_first =
 		(stem == L"M01_01") || (stem == L"LEVEL_01") || (stem == L"LEVEL1_1") || (stem == L"LEVEL_01_01");
 
-	bool success = AreAllObjectivesDone();
-
-	// První mise: dovol success i bez objective – když velitel dojede na EscapeSquare (transport)
 	if (!success && is_first)
 	{
 		MapUnit* commander = nullptr;
@@ -909,7 +1010,6 @@ void SpellMap::CheckAndTriggerMissionEnd()
 			if (u->is_enemy) continue;
 			if (u->is_commander) { commander = u; break; }
 		}
-		// fallback: první hráčská jednotka (pokud zatím is_commander není spolehlivě nastavené)
 		if (!commander)
 		{
 			for (auto* u : units)
@@ -935,47 +1035,78 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		}
 	}
 
+	// --- failure condition: all alliance units dead ---
+	bool failure = false;
 	if (!success)
+	{
+		bool any_alive = false;
+		for (auto* u : units)
+		{
+			if (!u) continue;
+			if (u->is_enemy) continue;
+			if (!u->isDead()) { any_alive = true; break; }
+		}
+		if (!any_alive)
+			failure = true;
+	}
+
+	if (!success && !failure)
 		return;
 
-	// SUCCESS (zatím jen success, fail si můžeš dodělat podobně při "player defeated")
-	m_mission_end_req.success = true;
+	// !!! KLÍČ:
+	m_mission_end_fired = true;
 
-	// Text pro okno: params.end_ok_text je ID/klíč do texts
+	m_mission_end_req.success = success;
+
 	SpellTextRec* txt = nullptr;
-	if (!params.end_ok_text.empty())
-		txt = spelldata->texts->GetText(params.end_ok_text);
-
-	// fallback, kdyby klíč neexistoval
-	if (!txt)
-		txt = spelldata->texts->GetText("MISSION_COMPLETE"); // pokud něco takového máš, jinak nech NULL
+	if (success)
+	{
+		if (!params.end_ok_text.empty())
+			txt = spelldata->texts->GetText(params.end_ok_text);
+		if (!txt)
+			txt = spelldata->texts->GetText("MISSION_COMPLETE");
+	}
+	else
+	{
+		if (!params.end_bad_text.empty())
+			txt = spelldata->texts->GetText(params.end_bad_text);
+		if (!txt)
+			txt = spelldata->texts->GetText("MISSION_FAILED");
+	}
 
 	m_mission_end_req.text = txt;
 
-	if (is_first)
+	// Fallback: if no text resource found, create a simple one so the message always shows
+	if (!txt)
 	{
-		// DŮLEŽITÉ: do FormVideoBox posíláme název entry v MOVIE.FS (ne filesystem cestu)
+		std::wstring msg = success ? L"*** Mission Complete ***" : L"*** Mission Failed ***";
+		m_mission_end_fallback_text = std::make_unique<SpellTextRec>(
+			std::string(msg.begin(), msg.end()), SpellLang::CZE, success ? "MISSION_COMPLETE" : "MISSION_FAILED");
+		m_mission_end_fallback_text->text = msg;
+		m_mission_end_req.text = m_mission_end_fallback_text.get();
+		txt = m_mission_end_req.text;
+	}
+
+	if (is_first && success)
+	{
+		// DŮLEŽITÉ: posílej název entry v MOVIE.FS, ne filesystem cestu
 		m_mission_end_req.movie_path = L"LEVEL1_1.DPK";
 		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
 	}
 
-	// Tady se to okno opravdu zobrazí (HUD message)
 	if (m_msg_creator && m_mission_end_req.text)
 	{
-		// druhý parametr: dej TRUE pokud to má čekat na OK od hráče
-		// třetí parametr: nech NULL – ACK si hlídáme přes m_msg_checker()
 		m_msg_creator(m_mission_end_req.text, true, NULL);
 		m_mission_end_shown = true;
-		// pending se nastaví až po ACK v horní větvi (nebo okamžitě, pokud m_msg_checker není napojen)
 	}
 	else
 	{
-		// Nemáme text nebo UI message hook → nenech to “potichu” spadnout.
-		// Pusť přechod rovnou.
+		// bez UI hooku -> pusť přechod rovnou
 		m_mission_end_ack = true;
 		m_mission_end_req.pending = true;
 	}
 }
+
 
 
 static bool ExtractQuotedField(const std::string& text, const char* key, std::string& out)
@@ -1142,6 +1273,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 			e->is_objective = (is_obj != 0);
 			e->probability = prob;
 			e->is_done = (is_done != 0);
+			e->objective_notified = (is_done != 0); // suppress re-notification for already done objectives
 			e->hide = (hide != 0);
 			e->trig_unit = NULL;
 			e->trig_unit_id = trig_uid;
@@ -1448,6 +1580,12 @@ void SpellMap::Close()
 
 	// default mission parameters
 	params.Clear();
+
+	// reset mission-end flow state
+	m_mission_end_shown = false;
+	m_mission_end_ack = false;
+	m_mission_end_req = MissionEndRequest();
+	m_mission_end_fired = false;
 
 	SetDefaultRenderFilter(NULL);
 	SetRenderFilter(NULL);
@@ -7955,6 +8093,18 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 			memset(&buf[hud_left + px_ref + 118 + (hud_top + y + 54) * buf_x_size], 235, health_pix);
 		}
 
+		// render the 3 HUD numbers: total / active / wounded (or HP-style for single-man)
+		font->Render(buf, buf_end, buf_x_size,
+			hud_left + px_ref + 133, hud_top + 61,
+			string_format("%02d", men_max), 216, 254, SpellFont::RIGHT_DOWN);
+
+		font->Render(buf, buf_end, buf_x_size,
+			hud_left + px_ref + 168, hud_top + 61,
+			string_format("%02d", men_active), 235, 254, SpellFont::RIGHT_DOWN);
+
+		font->Render(buf, buf_end, buf_x_size,
+			hud_left + px_ref + 204, hud_top + 61,
+			string_format("%02d", men_wound), 216, 254, SpellFont::RIGHT_DOWN);
 
 		// pos a: 109,83
 		int attack_light = unit->GetAttack(MapUnit::TARGET_TYPE::LIGHT);
@@ -9251,6 +9401,8 @@ void SpellMap::ViewRange::Worker()
 			ref_view = target->unit->fire_range;
 		else
 			ref_view = target->unit->sdir;
+		if (is_fire && ref_view < 1)
+			ref_view = 1; // melee/adjacent attacks: minimum range 1 tile
 
 		// reference position
 		MapXY ref_pos = target->coor;
@@ -9343,7 +9495,17 @@ void SpellMap::ViewRange::Worker()
 
 			// next tile elevation
 			int next_alt = map->tiles[next_mxy].elev;
-			int view = ref_view + max(ref_alt - next_alt, 0); // expand if terget lower than ref
+			int view;
+			if (is_fire)
+			{
+				// fire/attack range must NOT expand with elevation difference
+				view = ref_view;
+			}
+			else
+			{
+				// sight range can expand when looking downhill
+				view = ref_view + max(ref_alt - next_alt, 0);
+			}
 
 			// visible?
 			if ((next_pos.Distance(ref_pos) - 0.5) > view)
@@ -9522,8 +9684,12 @@ void SpellMap::ViewRange::Worker()
 											events_list.push_back(trig_event);
 									}
 									// set unit seen flag
+									if (unit->is_visible < 2)  // právě se stala viditelnou
+										unit->was_moved = true; // vynutí překreslení sprite
+
 									unit->is_visible = 2;
 									unit->was_seen = true;
+
 									unit = unit->next;
 								}
 							}
@@ -9581,42 +9747,46 @@ void SpellMap::ViewRange::Worker()
 							continue;
 
 						// mark as seen
-						units_view[hnext_mxy] = 5;
-						this_unit_view[next_mxy] = 5;
+							units_view[hnext_mxy] = 5;
+							this_unit_view[hnext_mxy] = 5;
 
-						// check new enemy contact
-						// check new unit contact
-						if (!map->Lunit.empty())
-						{
-							MapUnit* unit = map->Lunit[next_mxy];
-							while (unit)
+							// check new enemy contact
+							// check new unit contact
+							if (!map->Lunit.empty())
 							{
-								// new oponent contact?
-								if (unit->is_visible < 2 && unit->is_enemy != target->is_enemy)
+								MapUnit* unit = map->Lunit[hnext_mxy];
+								while (unit)
 								{
-									// add seen oponents to list
-									seen_units.push_back(unit->id);
+									// new oponent contact?
+									if (unit->is_visible < 2 && unit->is_enemy != target->is_enemy)
+									{
+										// add seen oponents to list
+										seen_units.push_back(unit->id);
+										if (detect_events)
+											new_contact = true;
+									}
+									// check linked SeeUnit() event?
 									if (detect_events)
-										new_contact = true;
+									{
+										for (auto& trig_event : unit->trig_events)
+											events_list.push_back(trig_event);
+									}
+									// mark unit as seen
+									if (unit->is_visible < 2)  // právě se stala viditelnou
+										unit->was_moved = true; // vynutí překreslení sprite
+
+									unit->is_visible = 2;
+									unit->was_seen = true;
+
+									unit = unit->next;
 								}
-								// check linked SeeUnit() event?
-								if (detect_events)
-								{
-									for (auto& trig_event : unit->trig_events)
-										events_list.push_back(trig_event);
-								}
-								// mark unit as seen
-								unit->is_visible = 2;
-								unit->was_seen = true;
-								unit = unit->next;
 							}
-						}
-						if (detect_events && map->events->CheckEventMap(next_mxy))
-						{
-							// possibly some event here: get all undone events
-							auto list = map->events->GetEvents(next_mxy, true);
-							events_list.insert(events_list.end(), list.begin(), list.end());
-						}
+							if (detect_events && map->events->CheckEventMap(hnext_mxy))
+							{
+								// possibly some event here: get all undone events
+								auto list = map->events->GetEvents(hnext_mxy, true);
+								events_list.insert(events_list.end(), list.begin(), list.end());
+							}
 
 						// proceed to next position
 						hdir.push_back(0);
@@ -11406,6 +11576,7 @@ int SpellMap::Tick()
 
 	// try process pending events
 	ProcEventsList(event_list);
+	CheckObjectiveNotifications();
 	CheckAndTriggerMissionEnd();
 
 	// repaint
@@ -11652,6 +11823,39 @@ int SpellMap::PlaceUnit(MapUnit* unit)
 
 	// store new unit
 	units.push_back(unit);
+
+	// Assign unique ID if unit has no valid unique ID.
+	// Event-spawned units have id == -1, freshly created units have id == 0.
+	// Both need unique IDs for group selection and other runtime features.
+	if (unit->id <= 0)
+	{
+		// Check if the current ID is truly unique among all map units
+		bool need_id = (unit->id < 0);
+		if (!need_id)
+		{
+			// id == 0: check if another unit already has this ID
+			for (auto* u : units)
+				if (u != unit && u->id == unit->id)
+				{
+					need_id = true;
+					break;
+				}
+		}
+		if (need_id)
+		{
+			// Find max existing ID and assign next
+			int max_id = 49; // start above reserved range (0-49 used by DEF/events)
+			for (auto* u : units)
+				if (u != unit && u->id > max_id)
+					max_id = u->id;
+			if (events)
+				for (auto* ev : events->GetEvents())
+					for (auto& eu : ev->units)
+						if (eu.unit->id > max_id)
+							max_id = eu.unit->id;
+			unit->id = max_id + 1;
+		}
+	}
 
 		// v10: units placed during game mode should be immediately active & playable
 	if (isGameMode())

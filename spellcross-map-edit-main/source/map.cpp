@@ -1096,7 +1096,13 @@ void SpellMap::CheckAndTriggerMissionEnd()
 
 	if (m_msg_creator && m_mission_end_req.text)
 	{
-		m_msg_creator(m_mission_end_req.text, true, NULL);
+		// OPRAVA: Použij callback který nastaví pending flag když uživatel zavře message box
+		// Toto je spolehlivější než polling přes m_msg_checker
+		m_msg_creator(m_mission_end_req.text, true, [this](bool /*result*/) {
+			m_mission_end_ack = true;
+			m_mission_end_req.pending = true;
+			// Note: wxLogMessage není dostupný v map.cpp, ale pending flag je teď nastaven
+		});
 		m_mission_end_shown = true;
 	}
 	else

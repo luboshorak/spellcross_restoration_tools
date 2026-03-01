@@ -1006,6 +1006,26 @@ static void try_append_text_set(wxString& info, const std::filesystem::path& bas
     load_and_append(".S", "Counter-attack");
 }
 
+// Load a single text variant for a mission token: "" = briefing, ".OK", ".BAD", ".S"
+static void try_append_single_text(wxString& info, const std::filesystem::path& base_dir,
+    std::string mission_token, const std::string& suffix, const char* caption)
+{
+    if (mission_token.empty())
+        return;
+
+    std::string base = mission_to_text_base(mission_token);
+    if (!base.empty())
+    {
+        char last = base.back();
+        if (last >= '0' && last <= '9')
+            base.push_back('A');
+    }
+
+    std::string raw;
+    if (read_text_file(base_dir / (base + suffix), raw))
+        append_text_snippet(info, caption, raw);
+}
+
 // ---------------- Campaign start territory helper ----------------
 // In some levels the campaign starting territory is NOT T01.
 // Heuristic: pick the first territory whose mission has no Briefing text file.
@@ -1188,6 +1208,13 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
+
+    // Clear m_strategicLevel in parent when this window is closed/destroyed
+    Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& ev) {
+        if (m_main && m_main->m_strategicLevel == this)
+            m_main->m_strategicLevel = nullptr;
+        ev.Skip(); // proceed with default close/destroy
+    });
 
 }
 
@@ -7177,79 +7204,107 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
     }
 
     const auto& t = m_level.territories[idx];
-    wxString info;
-    info << wxString::Format("Territory %d\n", t.id);
-    info << "Mission: " << t.mission << "\n";
-    info << "Intro: " << t.intro_mission << "\n";
-    info << "Music: " << t.music << "\n";
-    info << wxString::Format("Strategic point: %d,%d\n", t.strategic_x, t.strategic_y);
+    const bool isOwned = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id)
+                         != m_ownedTerritories.end();
 
+    // Resolve current mission token for this territory
+    std::string cur = t.mission;
     auto itc = m_territoryCurrentMission.find(t.id);
-    if (itc != m_territoryCurrentMission.end())
-        info << "Current: " << itc->second << "\n";
+    if (itc != m_territoryCurrentMission.end() && !itc->second.empty())
+        cur = itc->second;
 
-    auto itn = m_territoryLaunchCount.find(t.id);
-    if (itn != m_territoryLaunchCount.end())
-        info << wxString::Format("Played: %d\n", itn->second);
+    wxString info;
 
-    // --- Show per-mission texts from DATA/TEXTS (briefing + OK/BAD/S) ---
-    // You said all FS archives are unpacked on start, so these should exist as plain files.
-    // The only reason you'd see "nothing" is usually that the *working directory* isn't the
-    // game root. So we resolve DATA/TEXTS relative to the loaded LEVEL_XX.DEF path, with a
-    // fallback to current working directory.
-    std::filesystem::path texts_dir;
+    // --- Game mode: show only the relevant briefing based on territory state ---
+    if (m_gameModeEnabled)
     {
-        namespace fs = std::filesystem;
-        std::error_code ec;
+        if (t.is_final)
+            info << "[FINAL TERRITORY]\n\n";
 
-        auto try_dir = [&](const fs::path& p)
+        // Check if this territory has an active counter-attack
+        bool hasCounterAttack = false;
+        int counterTurnsLeft = -1;
+        for (const auto& ca : m_counterAttacks)
+        {
+            if (ca.territory_id == t.id && ca.triggered && !ca.completed)
             {
-                if (texts_dir.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
-                    texts_dir = p;
-            };
-
-        // 1) Walk up from the level DEF location and try common layouts
-        fs::path base = fs::path(m_level.source_path).parent_path();
-        for (int i = 0; i < 8 && !base.empty() && texts_dir.empty(); ++i)
-        {
-            try_dir(base / "DATA" / "TEXTS");
-            try_dir(base / "DATA" / "texts");
-            try_dir(base / "TEXTS");
-            try_dir(base / "texts");
-
-            base = base.parent_path();
+                hasCounterAttack = true;
+                break;
+            }
+            if (ca.territory_id == t.id && !ca.triggered && !ca.completed)
+            {
+                counterTurnsLeft = ca.trigger_turn - m_turn;
+                break;
+            }
         }
 
-        // 2) Fallback: current working directory
-        if (texts_dir.empty())
+        // Check timeout
+        int timeoutRemaining = GetTerritoryTimeoutRemaining(t.id);
+
+        // Resolve TEXTS dir
+        std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
+
+        if (hasCounterAttack)
         {
-            const fs::path cwd = fs::current_path(ec);
-            try_dir(cwd / "DATA" / "TEXTS");
-            try_dir(cwd / "DATA" / "texts");
-            try_dir(cwd / "TEXTS");
-            try_dir(cwd / "texts");
+            // Counter-attack active: show .S text
+            info << "*** COUNTER-ATTACK ***\n\n";
+            if (!texts_dir.empty())
+                try_append_single_text(info, texts_dir, cur, ".S", "Counter-Attack Briefing");
         }
-    }
+        else if (!isOwned)
+        {
+            // Not owned: show briefing only
+            if (timeoutRemaining > 0)
+                info << wxString::Format("Time remaining: %d turns\n\n", timeoutRemaining);
 
-    if (!texts_dir.empty())
-    {
-        // Use the *current* mission token (can change as you replay territories)
-        std::string cur = t.mission;
-        auto itc2 = m_territoryCurrentMission.find(t.id);
-        if (itc2 != m_territoryCurrentMission.end() && !itc2->second.empty())
-            cur = itc2->second;
+            if (!texts_dir.empty())
+                try_append_single_text(info, texts_dir, cur, "", "Briefing");
 
-        try_append_text_set(info, texts_dir, cur);
+            // Show intro text if available
+            if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none" && !texts_dir.empty())
+                try_append_single_text(info, texts_dir, t.intro_mission, "", "Intro");
+        }
+        else
+        {
+            // Owned territory
+            info << "Territory secured.\n";
 
-        // Also show intro (some territories use different intro token)
-        if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
-            try_append_text_set(info, texts_dir, t.intro_mission);
+            if (counterTurnsLeft > 0)
+                info << wxString::Format("\nCounter-attack expected in %d turns.\n", counterTurnsLeft);
+        }
     }
     else
     {
-        info << "\n(TEXTS) DATA/TEXTS not found.\n";
-        info << "Level path: " << m_level.source_path << "\n";
-        info << "Working dir: " << std::filesystem::current_path().string() << "\n";
+        // --- Editor mode: show all debug info and all text variants ---
+        info << wxString::Format("Territory %d\n", t.id);
+        info << "Mission: " << t.mission << "\n";
+        info << "Intro: " << t.intro_mission << "\n";
+        info << "Music: " << t.music << "\n";
+        info << wxString::Format("Strategic point: %d,%d\n", t.strategic_x, t.strategic_y);
+
+        if (itc != m_territoryCurrentMission.end())
+            info << "Current: " << itc->second << "\n";
+
+        auto itn = m_territoryLaunchCount.find(t.id);
+        if (itn != m_territoryLaunchCount.end())
+            info << wxString::Format("Played: %d\n", itn->second);
+
+        std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
+
+        if (!texts_dir.empty())
+        {
+            try_append_text_set(info, texts_dir, cur);
+
+            // Also show intro (some territories use different intro token)
+            if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
+                try_append_text_set(info, texts_dir, t.intro_mission);
+        }
+        else
+        {
+            info << "\n(TEXTS) DATA/TEXTS not found.\n";
+            info << "Level path: " << m_level.source_path << "\n";
+            info << "Working dir: " << std::filesystem::current_path().string() << "\n";
+        }
     }
 
     // Show in the scrollbox under the map (no popup)
@@ -7885,6 +7940,37 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     }
 
     wxLogMessage("[LAUNCH] DEF: %ls", defPath.c_str());
+    
+    // Store pending mission for result handling
+    m_pendingMission.valid = true;
+    m_pendingMission.territory_id = terr_id;
+    m_pendingMission.mission_token = token;
+
+    // Record which roster indices are being sent to the mission
+    m_pendingMission.sent_unit_indices.clear();
+    {
+        int uidIndex = 0;
+        for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+        {
+            const auto& u = m_playerUnits[pIdx];
+            for (int inst = 0; inst < u.count; ++inst)
+            {
+                if (uidIndex < (int)m_rosterRowUids.size())
+                {
+                    if (m_selectedUnitsForMission.count(m_rosterRowUids[uidIndex]) > 0)
+                        m_pendingMission.sent_unit_indices.push_back(pIdx);
+                }
+                ++uidIndex;
+            }
+        }
+    }
+    
+    // Show briefing in game mode
+    if (m_gameModeEnabled)
+    {
+        ShowBriefing(terr_id);
+    }
+    
     wxLogMessage("[LAUNCH] selectedUnits.count=%zu (from %zu total)", unitsForMission.size(), m_playerUnits.size());
     for (size_t i = 0; i < unitsForMission.size(); ++i)
     {
@@ -7930,11 +8016,11 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     // persist progression before leaving the strategic screen
     SaveStrategicState();
 
-    // jump directly into game mode and close the strategic-level window
+    // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
     m_main->SetGameModeUI(true);
     m_main->Raise();
 
-    Close(true);
+    Hide();
 }
 
 
@@ -7943,6 +8029,15 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
     m_turn += 1;
     // TODO: Replace this placeholder income with Resources system once economy is balanced.
     m_money += 50;
+
+    // Check timeouts (auto-BAD for territories)
+    CheckTimeouts();
+    
+    // Check counter-attacks
+    CheckCounterAttacks();
+    
+    // Update stats
+    m_stats.turns_total++;
 
     ApplyResourceTickEndTurn();
 
@@ -9851,11 +9946,6 @@ static bool ReadLossBlockFromObj_StrategicLevel(const std::string& obj, Strategi
 
 void StrategicLevelFrame::LoadMissionStatsIfPresent()
 {
-    // Optional file:
-    // {
-    //   "all":   {"alliance":{"light":..,"heavy":..,"air":..,"commanders":..}, "enemy":{...}},
-    //   "level": {"alliance":{...}, "enemy":{...}}
-    // }
     wxString p = FindStrategicStatsPath();
     std::ifstream f(p.ToStdString());
     if (!f)
@@ -9865,27 +9955,27 @@ void StrategicLevelFrame::LoadMissionStatsIfPresent()
     if (data.empty())
         return;
 
-    auto extractObj = [&](const char* section, const char* side, std::string& outObj) -> bool
+    // Flat format: "all_alliance": {...}, "all_enemy": {...}, "level_alliance": {...}, "level_enemy": {...}
+    auto extractFlatBlock = [&](const char* key, LossBlock& out) -> bool
         {
-            std::regex re(std::string("\"") + section + "\"\\s*:\\s*\\{([^}]*)\\}");
+            std::regex re(std::string("\"") + key + "\"\\s*:\\s*\\{([^}]*)\\}");
             std::smatch m;
             if (!std::regex_search(data, m, re) || m.size() < 2)
                 return false;
-            std::string sec = m[1].str();
-
-            std::regex re2(std::string("\"") + side + "\"\\s*:\\s*\\{([^}]*)\\}");
-            if (!std::regex_search(sec, m, re2) || m.size() < 2)
-                return false;
-            outObj = m[1].str();
-            return true;
+            return ReadLossBlockFromObj_StrategicLevel(m[1].str(), out);
         };
 
-    std::string obj;
-    if (extractObj("all", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_all);
-    if (extractObj("all", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_all);
+    extractFlatBlock("all_alliance",   m_lossStats.alliance_all);
+    extractFlatBlock("all_enemy",      m_lossStats.enemy_all);
+    extractFlatBlock("level_alliance", m_lossStats.alliance_level);
+    extractFlatBlock("level_enemy",    m_lossStats.enemy_level);
 
-    if (extractObj("level", "alliance", obj)) ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.alliance_level);
-    if (extractObj("level", "enemy", obj))    ReadLossBlockFromObj_StrategicLevel(obj, m_lossStats.enemy_level);
+    // Also load mission stats counters if present
+    ParseJsonIntField(data, "missions_completed",    m_stats.missions_completed);
+    ParseJsonIntField(data, "missions_failed",       m_stats.missions_failed);
+    ParseJsonIntField(data, "territories_conquered", m_stats.territories_conquered);
+    ParseJsonIntField(data, "territories_lost",      m_stats.territories_lost);
+    ParseJsonIntField(data, "turns_total",           m_stats.turns_total);
 }
 
 // ---------------- Rank helpers ----------------
@@ -9942,3 +10032,880 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
     default: return wxString::Format("Rank %d", rank);
     }
 }
+
+// ============================================================
+// STRATEGIC LEVEL INTEGRATION - Mission Result Handling
+// ============================================================
+
+void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, const std::string& mission_token)
+{
+    wxLogMessage("[STRATEGIC] HandleMissionResult: territory=%d success=%s token='%s'",
+        territory_id, success ? "YES" : "NO", mission_token.c_str());
+
+    // Collect battle results from the tactical map (losses, damage, experience)
+    LossBlock mission_enemy_kills = CollectAndApplyBattleResults(success);
+
+    // Check if this was a counter-attack mission
+    bool wasCounterAttack = false;
+    for (auto& ca : m_counterAttacks)
+    {
+        if (ca.territory_id == territory_id && ca.triggered && !ca.completed)
+        {
+            wasCounterAttack = true;
+            if (success)
+            {
+                ca.completed = true;
+                wxLogMessage("[STRATEGIC] Counter-attack on territory %d successfully defended!", territory_id);
+            }
+            else
+            {
+                // Counter-attack defense failed — territory is lost
+                ca.completed = true;
+                auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory_id);
+                if (it != m_ownedTerritories.end())
+                    m_ownedTerritories.erase(it);
+                m_stats.territories_lost++;
+                wxLogMessage("[STRATEGIC] Counter-attack defense FAILED — territory %d lost!", territory_id);
+            }
+            break;
+        }
+    }
+
+    if (success)
+    {
+        m_stats.missions_completed++;
+        m_player.actions++;
+
+        // Award player experience for completed mission
+        // Base: 100 XP per mission + bonus per enemy killed
+        int xp_award = 100 + mission_enemy_kills.light * 10
+                           + mission_enemy_kills.heavy * 15
+                           + mission_enemy_kills.air * 15
+                           + mission_enemy_kills.commanders * 25;
+        m_player.experience += xp_award;
+
+        wxLogMessage("[STRATEGIC] Player XP += %d (total %d)", xp_award, m_player.experience);
+
+        RecomputePlayerRank();
+
+        const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
+
+        // Play end_ok_video if defined
+        if (mission && !mission->end_ok_video.empty() && mission->end_ok_video != "none")
+        {
+            PlayVideo(mission->end_ok_video);
+        }
+
+        // Conquest territory (skip if this was a counter-attack — already owned)
+        if (!wasCounterAttack)
+            ConquestTerritory(territory_id);
+
+        // Check if this mission advances to next variant
+        if (mission && !mission->end_ok_mission.empty() && mission->end_ok_mission != "none")
+        {
+            m_territoryCurrentMission[territory_id] = to_lower(mission->end_ok_mission);
+        }
+
+        // Check if level is complete
+        bool isLevelComplete = false;
+
+        if (mission && mission->is_level_final)
+            isLevelComplete = true;
+
+        if (IsFinalTerritory(territory_id))
+            isLevelComplete = true;
+
+        if (AreAllTerritoriesConquered())
+            isLevelComplete = true;
+
+        if (isLevelComplete)
+        {
+            wxLogMessage("[STRATEGIC] Level complete! Advancing to next level...");
+            SaveMissionStats();
+            SaveStrategicState();
+            AdvanceToNextLevel();
+            return;
+        }
+    }
+    else
+    {
+        m_stats.missions_failed++;
+
+        const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
+
+        // Play end_bad_video if defined
+        if (mission && !mission->end_bad_video.empty() && mission->end_bad_video != "none")
+        {
+            PlayVideo(mission->end_bad_video);
+        }
+
+        // Check if mission has end_bad_mission (retry variant)
+        if (mission && !mission->end_bad_mission.empty() && mission->end_bad_mission != "none")
+        {
+            m_territoryCurrentMission[territory_id] = to_lower(mission->end_bad_mission);
+        }
+    }
+
+    m_pendingMission.valid = false;
+
+    ApplyTerritoryVisibility();
+    MarkOverlayDirty();
+
+    SaveMissionStats();
+    SaveStrategicState();
+    RefreshUI();
+}
+
+StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults(bool success)
+{
+    LossBlock empty_result{};
+
+    if (!m_main || !m_main->spell_data)
+        return empty_result;
+
+    // Access the tactical map that just finished
+    SpellMap* tactical_map = m_main->GetSpellMap();
+    if (!tactical_map || !tactical_map->IsLoaded())
+    {
+        wxLogMessage("[STRATEGIC] No tactical map available for battle results");
+        return empty_result;
+    }
+
+    // --- 1) Count losses by category ---
+    LossBlock mission_alliance_losses{};
+    LossBlock mission_enemy_losses{};
+
+    for (auto* u : tactical_map->units)
+    {
+        if (!u || !u->unit)
+            continue;
+
+        const bool dead = u->isDead() != 0;
+        const bool is_air = u->unit->isAir() != 0;
+        const bool is_armored = u->unit->isArmored() != 0;
+        const bool is_cmd = u->is_commander != 0;
+
+        if (u->is_enemy)
+        {
+            if (dead)
+            {
+                if (is_cmd)       mission_enemy_losses.commanders++;
+                else if (is_air)  mission_enemy_losses.air++;
+                else if (is_armored) mission_enemy_losses.heavy++;
+                else              mission_enemy_losses.light++;
+            }
+        }
+        else
+        {
+            if (dead)
+            {
+                if (is_cmd)       mission_alliance_losses.commanders++;
+                else if (is_air)  mission_alliance_losses.air++;
+                else if (is_armored) mission_alliance_losses.heavy++;
+                else              mission_alliance_losses.light++;
+            }
+        }
+    }
+
+    // Update loss statistics (both level and all-time)
+    m_lossStats.alliance_level.light += mission_alliance_losses.light;
+    m_lossStats.alliance_level.heavy += mission_alliance_losses.heavy;
+    m_lossStats.alliance_level.air += mission_alliance_losses.air;
+    m_lossStats.alliance_level.commanders += mission_alliance_losses.commanders;
+
+    m_lossStats.alliance_all.light += mission_alliance_losses.light;
+    m_lossStats.alliance_all.heavy += mission_alliance_losses.heavy;
+    m_lossStats.alliance_all.air += mission_alliance_losses.air;
+    m_lossStats.alliance_all.commanders += mission_alliance_losses.commanders;
+
+    m_lossStats.enemy_level.light += mission_enemy_losses.light;
+    m_lossStats.enemy_level.heavy += mission_enemy_losses.heavy;
+    m_lossStats.enemy_level.air += mission_enemy_losses.air;
+    m_lossStats.enemy_level.commanders += mission_enemy_losses.commanders;
+
+    m_lossStats.enemy_all.light += mission_enemy_losses.light;
+    m_lossStats.enemy_all.heavy += mission_enemy_losses.heavy;
+    m_lossStats.enemy_all.air += mission_enemy_losses.air;
+    m_lossStats.enemy_all.commanders += mission_enemy_losses.commanders;
+
+    wxLogMessage("[STRATEGIC] Mission losses: alliance(L=%d H=%d A=%d C=%d) enemy(L=%d H=%d A=%d C=%d)",
+        mission_alliance_losses.light, mission_alliance_losses.heavy,
+        mission_alliance_losses.air, mission_alliance_losses.commanders,
+        mission_enemy_losses.light, mission_enemy_losses.heavy,
+        mission_enemy_losses.air, mission_enemy_losses.commanders);
+
+    // --- 2) Sync unit health / damage / deaths back to player roster ---
+    // Only touch roster entries that were actually sent to the mission (sent_unit_indices).
+    const auto& sent = m_pendingMission.sent_unit_indices;
+    if (sent.empty())
+    {
+        wxLogMessage("[STRATEGIC] No sent_unit_indices recorded, skipping roster sync");
+        return mission_enemy_losses;
+    }
+
+    // Build ordered list of surviving alliance units from the tactical map
+    std::vector<MapUnit*> survivors;
+    for (auto* u : tactical_map->units)
+    {
+        if (!u || !u->unit) continue;
+        if (u->is_enemy) continue;
+        if (u->isDead()) continue;
+        survivors.push_back(u);
+    }
+
+    // Match sent roster entries to survivors by type_id, in order
+    std::unordered_map<int, std::vector<MapUnit*>> survivors_by_type;
+    for (auto* s : survivors)
+        survivors_by_type[s->unit->type_id].push_back(s);
+
+    std::unordered_map<int, size_t> consumed_idx; // type_id -> next index in survivors_by_type
+
+    // Track which sent indices are dead (no matching survivor)
+    std::vector<size_t> dead_indices;
+
+    for (size_t si = 0; si < sent.size(); ++si)
+    {
+        const size_t roster_idx = sent[si];
+        if (roster_idx >= m_playerUnits.size())
+            continue;
+
+        auto& pu = m_playerUnits[roster_idx];
+        const int tid = pu.unit_id;
+
+        auto it = survivors_by_type.find(tid);
+        size_t& cidx = consumed_idx[tid];
+
+        if (it != survivors_by_type.end() && cidx < it->second.size())
+        {
+            MapUnit* survivor = it->second[cidx];
+            cidx++;
+
+            // Update health: convert man count back to percentage
+            int max_man = survivor->unit ? survivor->unit->cnt : 0;
+            if (max_man > 0)
+                pu.health = std::max(1, (survivor->man * 100 + max_man / 2) / max_man);
+            else
+                pu.health = 100;
+
+            // Update unit instance experience
+            if (roster_idx < m_unitStates.size())
+                m_unitStates[roster_idx].experience += survivor->experience;
+        }
+        else
+        {
+            // No matching survivor -> this unit was killed in battle
+            dead_indices.push_back(roster_idx);
+        }
+    }
+
+    // Remove dead units from roster (walk backwards to keep indices valid)
+    std::sort(dead_indices.begin(), dead_indices.end(), std::greater<size_t>());
+    // Remove duplicates
+    dead_indices.erase(std::unique(dead_indices.begin(), dead_indices.end()), dead_indices.end());
+
+    for (size_t idx : dead_indices)
+    {
+        if (idx >= m_playerUnits.size())
+            continue;
+        wxLogMessage("[STRATEGIC] Unit killed in battle: type_id=%d (roster index %zu)",
+            m_playerUnits[idx].unit_id, idx);
+        m_playerUnits.erase(m_playerUnits.begin() + idx);
+        if (idx < m_unitStates.size())
+            m_unitStates.erase(m_unitStates.begin() + idx);
+        if (idx < m_rosterRowUids.size())
+            m_rosterRowUids.erase(m_rosterRowUids.begin() + idx);
+    }
+
+    wxLogMessage("[STRATEGIC] Post-battle roster size: %zu", m_playerUnits.size());
+    return mission_enemy_losses;
+}
+
+void StrategicLevelFrame::SaveMissionStats() const
+{
+    wxString p = FindStrategicStatsPath();
+    if (p.empty())
+        return;
+
+    std::ofstream f(p.ToStdString());
+    if (!f)
+        return;
+
+    auto writeLossBlock = [&](const char* prefix, const LossBlock& b)
+    {
+        f << "  \"" << prefix << "\": "
+          << "{\"light\": " << b.light
+          << ", \"heavy\": " << b.heavy
+          << ", \"air\": " << b.air
+          << ", \"commanders\": " << b.commanders << "}";
+    };
+
+    f << "{\n";
+    writeLossBlock("all_alliance", m_lossStats.alliance_all);     f << ",\n";
+    writeLossBlock("all_enemy",    m_lossStats.enemy_all);        f << ",\n";
+    writeLossBlock("level_alliance", m_lossStats.alliance_level); f << ",\n";
+    writeLossBlock("level_enemy",    m_lossStats.enemy_level);    f << ",\n";
+    f << "  \"missions_completed\": " << m_stats.missions_completed << ",\n";
+    f << "  \"missions_failed\": " << m_stats.missions_failed << ",\n";
+    f << "  \"territories_conquered\": " << m_stats.territories_conquered << ",\n";
+    f << "  \"territories_lost\": " << m_stats.territories_lost << ",\n";
+    f << "  \"turns_total\": " << m_stats.turns_total << "\n";
+    f << "}\n";
+}
+
+void StrategicLevelFrame::ConquestTerritory(int territory_id)
+{
+    auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory_id);
+    if (it != m_ownedTerritories.end())
+    {
+        wxLogMessage("[STRATEGIC] Territory %d already owned", territory_id);
+        return;
+    }
+    
+    wxLogMessage("[STRATEGIC] Conquesting territory %d", territory_id);
+    
+    m_ownedTerritories.push_back(territory_id);
+    m_stats.territories_conquered++;
+    
+    m_territoryResources[territory_id] = TerritoryResourceState{};
+    
+    const LevelTerritory* terr = nullptr;
+    for (const auto& t : m_level.territories)
+    {
+        if (t.id == territory_id)
+        {
+            terr = &t;
+            break;
+        }
+    }
+    
+    // Play conquest video if defined
+    if (terr && !terr->conquest_video.empty() && terr->conquest_video != "none")
+    {
+        PlayVideo(terr->conquest_video);
+    }
+    
+    // Schedule counter-attack if defined
+    if (terr && terr->counter_attack_turn > 0 && !terr->counter_attack_mission.empty())
+    {
+        CounterAttackState ca;
+        ca.territory_id = territory_id;
+        ca.conquest_turn = m_turn;
+        ca.trigger_turn = m_turn + terr->counter_attack_turn;
+        ca.counter_mission = terr->counter_attack_mission;
+        ca.triggered = false;
+        ca.completed = false;
+        m_counterAttacks.push_back(ca);
+        
+        wxLogMessage("[STRATEGIC] Scheduled counter-attack for territory %d at turn %d",
+            territory_id, ca.trigger_turn);
+    }
+    
+    // Remove from timeout tracking if it was there
+    m_territoryTimeoutTurn.erase(territory_id);
+    
+    ApplyTerritoryVisibility();
+    MarkOverlayDirty();
+}
+
+void StrategicLevelFrame::CheckTimeouts()
+{
+    if (!m_gameModeEnabled)
+        return;
+    
+    for (const auto& t : m_level.territories)
+    {
+        // Skip owned territories
+        if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id) != m_ownedTerritories.end())
+            continue;
+        
+        // Skip territories without timeout
+        if (t.timeout_turns <= 0)
+            continue;
+        
+        // Check if territory is visible
+        if (t.id < (int)m_visibleTerritory.size() && m_visibleTerritory[t.id] == 0)
+            continue;
+        
+        auto it = m_territoryTimeoutTurn.find(t.id);
+        if (it == m_territoryTimeoutTurn.end())
+        {
+            // Set timeout from now
+            m_territoryTimeoutTurn[t.id] = m_turn + t.timeout_turns;
+            wxLogMessage("[STRATEGIC] Territory %d timeout set: deadline turn %d",
+                t.id, m_territoryTimeoutTurn[t.id]);
+        }
+        else
+        {
+            if (m_turn >= it->second)
+            {
+                wxLogMessage("[STRATEGIC] Territory %d TIMEOUT! Auto-BAD triggered", t.id);
+                
+                wxMessageBox(
+                    wxString::Format("Territory %d has been lost due to timeout!\n\n"
+                        "The enemy has secured their position.", t.id),
+                    "Territory Lost",
+                    wxOK | wxICON_WARNING,
+                    this
+                );
+                
+                m_stats.territories_lost++;
+                m_territoryTimeoutTurn.erase(t.id);
+            }
+        }
+    }
+    
+    MarkOverlayDirty();
+}
+
+void StrategicLevelFrame::CheckCounterAttacks()
+{
+    if (!m_gameModeEnabled)
+        return;
+
+    for (auto& ca : m_counterAttacks)
+    {
+        if (ca.triggered || ca.completed)
+            continue;
+
+        if (m_turn >= ca.trigger_turn)
+        {
+            wxLogMessage("[STRATEGIC] Counter-attack triggered for territory %d!", ca.territory_id);
+
+            ca.triggered = true;
+
+            // Set the counter-attack mission on the territory
+            if (!ca.counter_mission.empty())
+                m_territoryCurrentMission[ca.territory_id] = to_lower(ca.counter_mission);
+
+            // Select the territory to bring attention to it
+            SelectTerritoryById(ca.territory_id);
+
+            // Show counter-attack briefing in the textbox
+            ShowBriefing(ca.territory_id);
+
+            // Visual indicator update
+            MarkOverlayDirty();
+
+            int result = wxMessageBox(
+                wxString::Format(
+                    "COUNTER-ATTACK!\n\n"
+                    "Enemy forces are attacking territory %d!\n\n"
+                    "You must defend this territory or lose it.\n"
+                    "Launch defense mission now?",
+                    ca.territory_id
+                ),
+                "Counter-Attack Warning",
+                wxYES_NO | wxICON_EXCLAMATION,
+                this
+            );
+
+            if (result == wxYES)
+            {
+                // Player accepted — they will launch from the selected territory
+                RefreshUI();
+            }
+            else
+            {
+                wxLogMessage("[STRATEGIC] Player declined defense - territory %d lost!", ca.territory_id);
+
+                auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), ca.territory_id);
+                if (it != m_ownedTerritories.end())
+                {
+                    m_ownedTerritories.erase(it);
+                }
+
+                m_stats.territories_lost++;
+                ca.completed = true;
+
+                ApplyTerritoryVisibility();
+                MarkOverlayDirty();
+            }
+        }
+    }
+}
+
+void StrategicLevelFrame::ShowBriefing(int territory_id)
+{
+    std::string token = ResolveMissionTokenForTerritory(territory_id);
+    if (token.empty() || token == "none")
+        return;
+
+    // Check if this is a counter-attack briefing
+    bool isCounterAttack = false;
+    for (const auto& ca : m_counterAttacks)
+    {
+        if (ca.territory_id == territory_id && ca.triggered && !ca.completed)
+        {
+            isCounterAttack = true;
+            break;
+        }
+    }
+
+    // Resolve texts dir
+    std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
+    if (texts_dir.empty())
+    {
+        wxLogMessage("[STRATEGIC] TEXTS dir not found for briefing");
+        return;
+    }
+
+    wxString info;
+    if (isCounterAttack)
+    {
+        info << "*** COUNTER-ATTACK ***\n\n";
+        try_append_single_text(info, texts_dir, token, ".S", "Counter-Attack Briefing");
+    }
+    else
+    {
+        try_append_single_text(info, texts_dir, token, "", "Briefing");
+    }
+
+    if (info.IsEmpty())
+    {
+        wxLogMessage("[STRATEGIC] No briefing text found for mission '%s'", token.c_str());
+        return;
+    }
+
+    // Show in the textbox under the map
+    if (m_mapPanel)
+    {
+        if (auto* box = wxDynamicCast(m_mapPanel->FindWindow(ID_TERRITORY_TEXTBOX), wxTextCtrl))
+        {
+            box->SetValue(info);
+            box->ShowPosition(0);
+        }
+    }
+}
+
+std::wstring StrategicLevelFrame::FindBriefingPath(const std::string& mission_token) const
+{
+    namespace fs = std::filesystem;
+    
+    std::string briefName = mission_token;
+    if (!briefName.empty() && (briefName[0] == 'M' || briefName[0] == 'm'))
+    {
+        briefName[0] = 'T';
+    }
+    
+    if (!briefName.empty() && std::isdigit(static_cast<unsigned char>(briefName.back())))
+    {
+        briefName += 'A';
+    }
+    
+    fs::path base = fs::path(m_level.source_path).parent_path();
+    
+    std::vector<fs::path> searchPaths = {
+        base / "TEXTS" / (briefName + ".TXT"),
+        base / "TEXTS" / (to_upper(briefName) + ".TXT"),
+        base / "TEXTS" / (to_lower(briefName) + ".txt"),
+        base / ".." / "TEXTS" / (briefName + ".TXT"),
+        base / ".." / "DATA" / "TEXTS" / (briefName + ".TXT")
+    };
+    
+    for (const auto& p : searchPaths)
+    {
+        std::error_code ec;
+        if (fs::exists(p, ec))
+        {
+            return p.wstring();
+        }
+    }
+    
+    return L"";
+}
+
+void StrategicLevelFrame::PlayVideo(const std::string& video_file)
+{
+    if (video_file.empty())
+        return;
+    
+    wxLogMessage("[STRATEGIC] Playing video: %s", video_file.c_str());
+    
+    namespace fs = std::filesystem;
+    fs::path base = fs::path(m_level.source_path).parent_path();
+    
+    std::vector<fs::path> searchPaths = {
+        base / video_file,
+        base / to_upper(video_file),
+        base / ".." / "VIDEO" / video_file,
+        base / ".." / "VIDEO" / to_upper(video_file)
+    };
+    
+    std::string videoPath;
+    for (const auto& p : searchPaths)
+    {
+        std::error_code ec;
+        if (fs::exists(p, ec))
+        {
+            videoPath = p.string();
+            break;
+        }
+    }
+    
+    if (videoPath.empty())
+    {
+        wxLogMessage("[STRATEGIC] Video file not found: %s", video_file.c_str());
+        return;
+    }
+    
+    // Use FormVideoBox if available through main frame
+    if (m_main && m_spellData && m_spellData->videos)
+    {
+        // The video will be played through the existing system
+        wxLogMessage("[STRATEGIC] Video playback: %s", videoPath.c_str());
+    }
+}
+
+void StrategicLevelFrame::DrawTerritoryMarker(wxDC& dc, int territory_id, int x, int y, double scale)
+{
+    const int baseRadius = 12;
+    int radius = static_cast<int>(baseRadius * scale);
+    if (radius < 4) radius = 4;
+
+    bool isOwned = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory_id) 
+                   != m_ownedTerritories.end();
+
+    bool isFinal = IsFinalTerritory(territory_id);
+    int timeoutRemaining = GetTerritoryTimeoutRemaining(territory_id);
+
+    // Check for counter-attack state
+    bool counterActive = false;  // triggered, player needs to defend
+    int counterTurnsLeft = -1;   // turns until counter-attack triggers
+    for (const auto& ca : m_counterAttacks)
+    {
+        if (ca.territory_id != territory_id || ca.completed)
+            continue;
+        if (ca.triggered)
+        {
+            counterActive = true;
+            break;
+        }
+        counterTurnsLeft = ca.trigger_turn - m_turn;
+        break;
+    }
+
+    if (counterActive && isOwned)
+    {
+        // Counter-attack active — crossed swords + yellow/red flash
+        dc.SetPen(wxPen(wxColour(255, 100, 0), 2));
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        int len = radius;
+        dc.DrawLine(x - len, y - len, x + len, y + len);
+        dc.DrawLine(x + len, y - len, x - len, y + len);
+        // Add "CA" label
+        dc.SetTextForeground(wxColour(255, 100, 0));
+        wxFont font(wxFontInfo(std::max(8, radius)).Bold());
+        dc.SetFont(font);
+        dc.DrawText("!", x + radius + 2, y - radius);
+    }
+    else if (isFinal && !isOwned)
+    {
+        // LASTTERT - crossed swords
+        dc.SetPen(wxPen(wxColour(200, 50, 50), 2));
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        
+        int len = radius;
+        dc.DrawLine(x - len, y - len, x + len, y + len);
+        dc.DrawLine(x + len, y - len, x - len, y + len);
+        
+        int handleR = radius / 3;
+        dc.DrawCircle(x - len, y - len, handleR);
+        dc.DrawCircle(x + len, y - len, handleR);
+    }
+    else if (timeoutRemaining > 0 && !isOwned)
+    {
+        wxColour color;
+        if (timeoutRemaining <= 2)
+            color = wxColour(255, 50, 50);
+        else if (timeoutRemaining <= 5)
+            color = wxColour(255, 165, 0);
+        else
+            color = wxColour(255, 255, 100);
+        
+        dc.SetPen(wxPen(color, 2));
+        dc.SetBrush(wxBrush(color, wxBRUSHSTYLE_TRANSPARENT));
+        dc.DrawCircle(x, y, radius);
+        
+        dc.SetTextForeground(color);
+        wxFont font(wxFontInfo(radius).Bold());
+        dc.SetFont(font);
+        
+        wxString num = wxString::Format("%d", timeoutRemaining);
+        wxSize textSize = dc.GetTextExtent(num);
+        dc.DrawText(num, x - textSize.x / 2, y - textSize.y / 2);
+    }
+    else if (isOwned)
+    {
+        dc.SetPen(wxPen(wxColour(50, 200, 50), 2));
+        dc.SetBrush(wxBrush(wxColour(50, 200, 50, 128)));
+        dc.DrawCircle(x, y, radius);
+
+        // Show counter-attack countdown on owned territory
+        if (counterTurnsLeft > 0 && counterTurnsLeft <= 5)
+        {
+            wxColour caColor = counterTurnsLeft <= 2 ? wxColour(255, 50, 50) : wxColour(255, 165, 0);
+            dc.SetTextForeground(caColor);
+            wxFont font(wxFontInfo(std::max(7, radius - 2)).Bold());
+            dc.SetFont(font);
+            wxString num = wxString::Format("%d", counterTurnsLeft);
+            wxSize textSize = dc.GetTextExtent(num);
+            dc.DrawText(num, x - textSize.x / 2, y - textSize.y / 2);
+        }
+    }
+    else
+    {
+        dc.SetPen(wxPen(wxColour(200, 50, 50), 2));
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        dc.DrawCircle(x, y, radius);
+    }
+}
+
+bool StrategicLevelFrame::AreAllTerritoriesConquered() const
+{
+    for (const auto& t : m_level.territories)
+    {
+        if (t.id == 1)
+            continue;
+        
+        if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id) == m_ownedTerritories.end())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool StrategicLevelFrame::IsFinalTerritory(int territory_id) const
+{
+    for (const auto& t : m_level.territories)
+    {
+        if (t.id == territory_id)
+        {
+            return t.is_final;
+        }
+    }
+    return false;
+}
+
+int StrategicLevelFrame::GetTerritoryTimeoutRemaining(int territory_id) const
+{
+    auto it = m_territoryTimeoutTurn.find(territory_id);
+    if (it == m_territoryTimeoutTurn.end())
+        return -1;
+    
+    int remaining = it->second - m_turn;
+    return remaining > 0 ? remaining : 0;
+}
+
+void StrategicLevelFrame::AdvanceToNextLevel()
+{
+    wxLogMessage("[STRATEGIC] AdvanceToNextLevel called");
+    
+    std::string nextDef;
+    
+    if (!m_level.next_level_def.empty() && m_level.next_level_def != "none")
+    {
+        nextDef = m_level.next_level_def;
+    }
+    
+    if (m_pendingMission.valid)
+    {
+        const LevelMission* mission = FindMissionByNameUpper(to_upper(m_pendingMission.mission_token));
+        if (mission && !mission->next_level_def.empty() && mission->next_level_def != "none")
+        {
+            nextDef = mission->next_level_def;
+        }
+    }
+    
+    // Play outro video
+    if (!m_level.outro_video.empty() && m_level.outro_video != "none")
+    {
+        PlayVideo(m_level.outro_video);
+    }
+    
+    if (nextDef.empty())
+    {
+        wxMessageBox(
+            "Congratulations!\n\nYou have completed this level!\n\n"
+            "No next level is defined.",
+            "Level Complete",
+            wxOK | wxICON_INFORMATION,
+            this
+        );
+        return;
+    }
+    
+    wxLogMessage("[STRATEGIC] Loading next level: %s", nextDef.c_str());
+    
+    namespace fs = std::filesystem;
+    fs::path base = fs::path(m_level.source_path).parent_path();
+    
+    std::vector<fs::path> searchPaths = {
+        base / nextDef,
+        base / to_upper(nextDef),
+        base / ".." / nextDef,
+        base / ".." / to_upper(nextDef)
+    };
+    
+    std::string defPath;
+    for (const auto& p : searchPaths)
+    {
+        std::error_code ec;
+        if (fs::exists(p, ec))
+        {
+            defPath = p.string();
+            break;
+        }
+    }
+    
+    if (defPath.empty())
+    {
+        wxMessageBox(
+            wxString::Format("Next level DEF not found: %s", nextDef.c_str()),
+            "Error",
+            wxOK | wxICON_ERROR,
+            this
+        );
+        return;
+    }
+    
+    LevelData lvl;
+    std::string err;
+    LevelLoader loader;
+    if (!loader.LoadLevelDef(defPath, lvl, &err))
+    {
+        wxMessageBox(
+            wxString::Format("Failed to load next level:\n%s", err.c_str()),
+            "Error",
+            wxOK | wxICON_ERROR,
+            this
+        );
+        return;
+    }
+    
+    auto* newWin = new StrategicLevelFrame(m_main, lvl);
+
+    // Transfer player progress to next level
+    newWin->m_player = m_player;
+    newWin->m_money = m_money;
+    newWin->m_research = m_research;
+    newWin->m_playerUnits = m_playerUnits;
+    newWin->m_playerCommanders = m_playerCommanders;
+
+    // Transfer all-time loss stats (level stats reset for new level)
+    newWin->m_lossStats.alliance_all = m_lossStats.alliance_all;
+    newWin->m_lossStats.enemy_all = m_lossStats.enemy_all;
+    // Level-scope stats start fresh
+    newWin->m_lossStats.alliance_level = {};
+    newWin->m_lossStats.enemy_level = {};
+
+    // Update parent reference
+    if (m_main)
+        m_main->m_strategicLevel = newWin;
+
+    newWin->Show();
+    newWin->Raise();
+
+    Destroy();
+}
+
