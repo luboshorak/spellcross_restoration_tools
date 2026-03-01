@@ -150,6 +150,96 @@ public:
     std::wstring ResolveMapDefPathForMissionToken(const std::string& mission_token) const;
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
+    // ============================================================
+    // Mission Result Handling & Campaign Progression
+    // ============================================================
+    
+    // Mission statistics tracking
+    struct MissionStats
+    {
+        int missions_completed = 0;
+        int missions_failed = 0;
+        int territories_conquered = 0;
+        int territories_lost = 0;
+        int turns_total = 0;
+    };
+    
+    // Pending mission result (set before launch, consumed after return)
+    struct PendingMissionResult
+    {
+        bool valid = false;
+        int territory_id = -1;
+        std::string mission_token;
+        // Indices into m_playerUnits of units sent to this mission
+        std::vector<size_t> sent_unit_indices;
+    };
+    
+    // Counter-attack state for owned territories
+    struct CounterAttackState
+    {
+        int territory_id = 0;
+        int conquest_turn = 0;
+        int trigger_turn = 0;
+        std::string counter_mission;
+        bool triggered = false;
+        bool completed = false;
+    };
+    
+    // Handle mission completion (called from main.cpp after returning from tactical map)
+    void HandleMissionResult(int territory_id, bool success, const std::string& mission_token);
+
+    // Collect battle results from tactical map and apply to strategic state
+    // Returns the per-mission enemy losses for XP calculation
+    LossBlock CollectAndApplyBattleResults(bool success);
+
+    // Save mission/loss stats to strategic_stats.json
+    void SaveMissionStats() const;
+
+    // Conquest a territory (add to owned, apply visibility, play video)
+    void ConquestTerritory(int territory_id);
+    
+    // Check and trigger timeouts (called in OnEndTurn)
+    void CheckTimeouts();
+    
+    // Check and trigger counter-attacks (called in OnEndTurn)
+    void CheckCounterAttacks();
+    
+    // Show briefing for territory before mission launch
+    void ShowBriefing(int territory_id);
+    
+    // Play video file (DPK)
+    void PlayVideo(const std::string& video_file);
+    
+    // Draw territory marker on map (LASTTERT, timeout countdown, owned/enemy)
+    void DrawTerritoryMarker(wxDC& dc, int territory_id, int x, int y, double scale);
+    
+    // Check if all territories are conquered
+    bool AreAllTerritoriesConquered() const;
+    
+    // Check if territory is the final one
+    bool IsFinalTerritory(int territory_id) const;
+    
+    // Advance to next level (load next DEF)
+    void AdvanceToNextLevel();
+    
+    // Get remaining turns until timeout for territory (-1 if no timeout)
+    int GetTerritoryTimeoutRemaining(int territory_id) const;
+    
+    // Find briefing text file for mission
+    std::wstring FindBriefingPath(const std::string& mission_token) const;
+    
+    // Statistics
+    MissionStats m_stats;
+    
+    // Pending mission (for result tracking)
+    PendingMissionResult m_pendingMission;
+    
+    // Counter-attack tracking
+    std::vector<CounterAttackState> m_counterAttacks;
+    
+    // Territory timeouts (territory_id -> deadline turn)
+    std::unordered_map<int, int> m_territoryTimeoutTurn;
+
 private:
     struct HierarchySlot
     {

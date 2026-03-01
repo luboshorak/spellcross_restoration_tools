@@ -109,9 +109,14 @@ public:
     bool LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units);
     // Switch between editor/game mode (also updates UI + resets game state when entering).
     void SetGameModeUI(bool enable_game_mode);
+    // Access the current tactical map (used by strategic level for battle results)
+    SpellMap* GetSpellMap() const { return spell_map; }
 
     bool m_mission_end_flow = false;
     SpellMap::MissionEndRequest m_mission_end_req;
+    
+    // Strategic level reference for mission result callback
+    class StrategicLevelFrame* m_strategicLevel = nullptr;
 
     void StartMissionEndFlow();
     void OnCutsceneClosed(wxCloseEvent& ev);

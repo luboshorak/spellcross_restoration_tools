@@ -173,7 +173,11 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             unit->experience_init = 0;
             unit->experience_level = 1;
             unit->ResetAP();
-            unit->man = entry.health > 0 ? entry.health : unit_rec->cnt;
+            // entry.health is percentage (0-100), convert to actual man count based on unit_rec->cnt
+            if (entry.health > 0 && entry.health <= 100)
+                unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+            else
+                unit->man = unit_rec->cnt;
             unit->wounded = 0;
 
             if (spell_map->PlaceUnit(unit))
@@ -1003,10 +1007,15 @@ void MainFrame::OnClose(wxCloseEvent& ev)
         delete form_units_list;
         form_units_list = NULL;
     }
-    else if(ev.GetId() == ID_MMENU_WIN && form_mmenu)
+    else if(ev.GetId() == ID_MMENU_WIN)
     {
-        delete form_mmenu;
-        form_mmenu = NULL;
+        // Menu may already be deleted by OnMainMenuAction CallAfter;
+        // guard against double-free.
+        if(form_mmenu)
+        {
+            delete form_mmenu;
+            form_mmenu = NULL;
+        }
     }
     else
         ev.Skip();
@@ -1070,70 +1079,72 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
 
 void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 {
-    auto close_menu = [this]() {
+    // Defer the actual work so that the mouse-click event handler in
+    // FormMainMenu finishes before we destroy the menu (avoids use-after-free).
+    CallAfter([this, action]() {
+
+        // Close the menu first (triggers ID_MMENU_WIN close handler which does delete).
         if(form_mmenu)
         {
             delete form_mmenu;
             form_mmenu = NULL;
         }
-    };
 
-    switch(action)
-    {
-        case FormMainMenuAction::NewGame:
+        switch(action)
         {
-            if(!spell_data)
-                break;
-            std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
-            auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
-            if(def_path.empty())
+            case FormMainMenuAction::NewGame:
             {
-                wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                if(!spell_data)
+                    break;
+                std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
+                auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
+                if(def_path.empty())
+                {
+                    wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                    break;
+                }
+                if(LoadMapFromDefPath(def_path.wstring(), {}))
+                    SetGameModeUI(true);
                 break;
             }
-            if(LoadMapFromDefPath(def_path.wstring(), {}))
-                SetGameModeUI(true);
-            break;
-        }
-        case FormMainMenuAction::Continue:
-        {
-            if(!spell_map || !spell_map->IsLoaded())
+            case FormMainMenuAction::Continue:
             {
-                wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                if(!spell_map || !spell_map->IsLoaded())
+                {
+                    wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                    break;
+                }
+                wstring path = spell_map->GetTopPath();
+                if(path.empty())
+                {
+                    wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
+                    break;
+                }
+                if(LoadMapFromDefPath(path, {}))
+                    SetGameModeUI(true);
                 break;
             }
-            wstring path = spell_map->GetTopPath();
-            if(path.empty())
+            case FormMainMenuAction::LoadGame:
             {
-                wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
+                if(LoadGameStateFromDialog())
+                    SetGameModeUI(true);
                 break;
             }
-            if(LoadMapFromDefPath(path, {}))
-                SetGameModeUI(true);
-            break;
+            case FormMainMenuAction::Credits:
+                wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+                break;
+            case FormMainMenuAction::Intro:
+                wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+                break;
+            case FormMainMenuAction::Exit:
+                if(spell_map)
+                    spell_map->Close();
+                Close(true);
+                break;
+            default:
+                break;
         }
-        case FormMainMenuAction::LoadGame:
-        {
-            if(LoadGameStateFromDialog())
-                SetGameModeUI(true);
-            break;
-        }
-        case FormMainMenuAction::Credits:
-            wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
-            break;
-        case FormMainMenuAction::Intro:
-            wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
-            break;
-        case FormMainMenuAction::Exit:
-            if(spell_map)
-                spell_map->Close();
-            Close(true);
-            break;
-        default:
-            break;
-    }
-
-    close_menu();
+    });
 }
 
 // on reset view range in game mode
@@ -1161,6 +1172,9 @@ void MainFrame::OnSelectUnitView(wxCommandEvent& event)
     }
 }
 
+static bool g_cutscene_handled = false;
+
+
 void MainFrame::StartMissionEndFlow()
 {
     // 1) Pokud je video, přehraj ho a až pak pokračuj
@@ -1185,6 +1199,9 @@ void MainFrame::StartMissionEndFlow()
                 2
             );
         }
+
+        g_cutscene_handled = false;
+        canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
 
         // až se video okno zavře, dojde CLOSE event na parent (viz FormVideoBox::OnClose)
         // takže pokračování dáme do handleru:
@@ -1221,11 +1238,36 @@ void MainFrame::OnTimer(wxTimerEvent& event)
     }
 }
 
+//// on cutscene closed (after mission end)
+//void MainFrame::OnCutsceneClosed(wxCloseEvent& ev)
+//{
+//    ev.Skip(); // neblokuj zavření
+//
+//    // pokračuj na strategickou
+//    OpenStrategicAndLoadNext();
+//}
+
 void MainFrame::OnCutsceneClosed(wxCloseEvent& ev)
 {
-    ev.Skip(); // neblokuj zavření
+    if (g_cutscene_handled)
+    {
+        ev.Skip(false);
+        return;
+    }
+    g_cutscene_handled = true;
 
-    // pokračuj na strategickou
+    ev.Skip(false);
+
+    // Odpoj handler – ať se po otevření LEVEL_02 nechytá další close eventy
+    canvas->Unbind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+
+    // Teprve teď smaž video box (destruktor udělá form->Destroy())
+    if (form_video_box)
+    {
+        delete form_video_box;
+        form_video_box = NULL;
+    }
+
     OpenStrategicAndLoadNext();
 }
 

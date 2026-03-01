@@ -18,6 +18,7 @@ SpellMapEventRec::SpellMapEventRec(SpellMap* parent_map)
 	probability = 100;
 	type_name = EvtNames[evt_type];
 	is_done = false;
+	objective_notified = false;
 	next = NULL;
 	hide = false;
 	in_placement = false;
@@ -125,6 +126,19 @@ int SpellMapEventRec::isDone()
 {
 	if(is_done)
 		return(is_done);
+
+	// EVT_DESTROY_ALL: check if all enemy units on the map are dead/removed
+	if(evt_type == EVT_DESTROY_ALL && map)
+	{
+		for(auto* u : map->units)
+		{
+			if(u && u->is_enemy && !u->isDead())
+				return(false);
+		}
+		is_done = true;
+		return(is_done);
+	}
+
 	for(auto & unit : units)
 		if(!unit.is_placed)
 			return(false);

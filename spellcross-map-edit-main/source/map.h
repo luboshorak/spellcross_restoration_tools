@@ -16,6 +16,7 @@
 #include <queue>
 #include <thread>
 #include <mutex>
+#include <memory>
 #include <list>
 #include <string>
 #include <tuple>
@@ -247,6 +248,10 @@ public:
 	MissionEndRequest m_mission_end_req;
 	bool m_mission_end_fired = false;   // jednorázová pojistka: mission end už byl vyvolán
 
+	// Objective completion notification queue
+	std::vector<std::unique_ptr<SpellTextRec>> m_objective_notify_queue;
+	bool m_objective_notify_active = false; // a notification message is currently displayed
+
 	private:
 		// enemy turn state
 		bool enemy_turn_running = false;
@@ -411,6 +416,7 @@ public:
 		bool ConsumeMissionEndRequest(MissionEndRequest& out);
 		bool AreAllObjectivesDone() const;
 		void CheckAndTriggerMissionEnd();
+		void CheckObjectiveNotifications();
 
 		static constexpr int SELECT_ADD = 1;
 		static constexpr int SELECT_CLEAR = 2;

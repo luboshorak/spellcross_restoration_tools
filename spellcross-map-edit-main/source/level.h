@@ -10,6 +10,18 @@ struct LevelTerritory {
     std::string music;          // "mus05" / "none"
     int strategic_x = 0;
     int strategic_y = 0;
+    // Finální území (LASTTERT) - ikona zkøížených meèù
+    bool is_final = false;
+
+    // Video pøi dobytí území
+    std::string conquest_video;
+
+    // Timeout v tazích (0 = bez timeoutu)
+    int timeout_turns = 0;
+
+    // Counter-attack: nepøítel útoèí po N tazích od dobytí
+    int counter_attack_turn = 0;
+    std::string counter_attack_mission;
 };
 
 struct LevelMission {
@@ -23,6 +35,16 @@ struct LevelMission {
     int freq_random_b = -1;
 
     int end_bad_event = -1;     // EndBadEvent(n) (viz M02_05A)
+
+    // Videa po dokonèení mise
+    std::string end_ok_video;
+    std::string end_bad_video;
+
+    // Dokonèení této mise dokonèí level
+    bool is_level_final = false;
+
+    // Další level DEF
+    std::string next_level_def;
 };
 
 struct LevelEventArmy {
@@ -65,6 +87,13 @@ struct LevelData {
     std::vector<LevelEvent> events;
 
     std::vector<std::string> unknown_lines; // pro debug
+
+    // Intro/outro videa levelu
+    std::string intro_video;
+    std::string outro_video;
+
+    // Výchozí další level
+    std::string next_level_def;
 };
 
 class LevelLoader {

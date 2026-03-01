@@ -80,6 +80,8 @@ public:
     int hide;
     // event executed?
     int is_done;
+    // objective completion was already notified to player?
+    bool objective_notified;
 
     // next event at the same position (used for chaining in events map)
     SpellMapEventRec *next;

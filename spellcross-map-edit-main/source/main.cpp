@@ -285,6 +285,7 @@ void MainFrame::OnOpenLevelDef(wxCommandEvent& ev)
 
     // otevøi strategické UI (window si žije samo, wxWidgets ho znièí po zavøení)
     auto* win = new StrategicLevelFrame(this, lvl);
+    m_strategicLevel = win;  // Store reference for mission results
     win->Show();
     win->Raise();
 }
@@ -665,6 +666,7 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
 
     // Open Strategic Level (it will load strategic_state.json from lvl.source_path folder).
     auto* win = new StrategicLevelFrame(this, lvl);
+    m_strategicLevel = win;  // Store reference for mission results
     win->Show();
     win->Raise();
 }, miLoadStrategic->GetId());
@@ -1292,6 +1294,42 @@ static std::string find_def_candidate(const std::string& name)
 void MainFrame::OpenStrategicAndLoadNext()
 {
     const std::wstring nextW = m_mission_end_req.next_level_def;
+    
+    // Return to existing strategic level with mission result
+    if (m_strategicLevel)
+    {
+        // Check if strategic level window still exists
+        wxWindow* win = wxWindow::FindWindowById(m_strategicLevel->GetId());
+        if (win)
+        {
+            wxLogMessage("[MAIN] Returning to strategic level");
+            
+            // Pass mission result if we have pending mission info
+            if (m_strategicLevel->m_pendingMission.valid)
+            {
+                m_strategicLevel->HandleMissionResult(
+                    m_strategicLevel->m_pendingMission.territory_id,
+                    m_mission_end_req.success,
+                    m_strategicLevel->m_pendingMission.mission_token
+                );
+            }
+            
+            // Show and raise strategic level
+            m_strategicLevel->Show();
+            m_strategicLevel->Raise();
+            
+            // Reset flow flag
+            m_mission_end_flow = false;
+            return;
+        }
+        else
+        {
+            // Window was closed, clear reference
+            m_strategicLevel = nullptr;
+        }
+    }
+    
+    // Original: Load next level DEF if specified
     std::string nextDef = nextW.empty()
         ? std::string()
         : find_def_candidate(std::string(nextW.begin(), nextW.end()));
@@ -1308,6 +1346,7 @@ void MainFrame::OpenStrategicAndLoadNext()
         else
         {
             auto* win = new StrategicLevelFrame(this, lvl);
+            m_strategicLevel = win;  // Store reference
             win->Show();
             win->Raise();
         }

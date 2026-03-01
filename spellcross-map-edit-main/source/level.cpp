@@ -3,6 +3,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 
 // --------- helpers ---------
 
@@ -313,6 +314,58 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
     // kdyby soubor skonèil bez '}'
     if (ctx == Ctx::Mission) flush_mission();
     if (ctx == Ctx::Event) flush_event();
+
+    // --- Post-parse linkage ---
+
+    // Mark the end territory as final (LASTTERT)
+    if (out.end_territory > 0)
+    {
+        for (auto& t : out.territories)
+        {
+            if (t.id == out.end_territory)
+            {
+                t.is_final = true;
+                break;
+            }
+        }
+    }
+
+    // Derive next_level_def from filename if not explicitly set
+    // e.g. LEVEL_02.DEF -> LEVEL_03.DEF
+    if (out.next_level_def.empty())
+    {
+        std::string stem = path;
+        // extract filename
+        auto pos = stem.find_last_of("/\\");
+        if (pos != std::string::npos) stem = stem.substr(pos + 1);
+        // strip extension
+        auto dot = stem.rfind('.');
+        if (dot != std::string::npos) stem = stem.substr(0, dot);
+        // uppercase
+        for (auto& c : stem) c = (char)std::toupper((unsigned char)c);
+
+        // Try to find and increment the number suffix: LEVEL_02 -> LEVEL_03
+        // Look for last group of digits
+        size_t num_end = stem.size();
+        while (num_end > 0 && !std::isdigit((unsigned char)stem[num_end - 1]))
+            num_end--;
+        size_t num_start = num_end;
+        while (num_start > 0 && std::isdigit((unsigned char)stem[num_start - 1]))
+            num_start--;
+
+        if (num_start < num_end)
+        {
+            std::string prefix = stem.substr(0, num_start);
+            std::string numStr = stem.substr(num_start, num_end - num_start);
+            std::string suffix = stem.substr(num_end);
+            int num = std::stoi(numStr);
+            int width = (int)numStr.size();
+
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%0*d", width, num + 1);
+            out.next_level_def = prefix + buf + suffix + ".DEF";
+        }
+    }
 
     return true;
 }

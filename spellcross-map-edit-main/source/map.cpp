@@ -742,6 +742,70 @@ bool SpellMap::AreAllObjectivesDone() const
 	return any_objective; // pokud nejsou objectives, neskončíme automaticky
 }
 
+void SpellMap::CheckObjectiveNotifications()
+{
+	if (!isGameMode())
+		return;
+
+	// If a notification is currently displayed, wait until dismissed
+	if (m_objective_notify_active)
+	{
+		if (m_msg_checker && m_msg_checker())
+			return; // still showing
+		// Dismissed - pop the front message
+		m_objective_notify_active = false;
+		if (!m_objective_notify_queue.empty())
+			m_objective_notify_queue.erase(m_objective_notify_queue.begin());
+	}
+
+	// Show next queued notification
+	if (!m_objective_notify_queue.empty() && m_msg_creator)
+	{
+		if (!m_msg_checker || !m_msg_checker())
+		{
+			m_msg_creator(m_objective_notify_queue.front().get(), false, NULL);
+			m_objective_notify_active = true;
+		}
+		return;
+	}
+
+	// Scan objectives for newly completed ones
+	for (auto* e : events->GetEvents())
+	{
+		if (!e) continue;
+		if (!e->is_objective) continue;
+		if (e->objective_notified) continue;
+
+		if (e->isDone())
+		{
+			e->objective_notified = true;
+
+			// Build notification text from the objective label
+			std::wstring msg = L"*** ";
+			if (!e->label.empty())
+				msg += e->label;
+			else
+				msg += L"Objective completed";
+			msg += L" ***";
+
+			auto text_rec = std::make_unique<SpellTextRec>(
+				std::string(msg.begin(), msg.end()), SpellLang::CZE, "OBJ_DONE");
+			text_rec->text = msg;
+			m_objective_notify_queue.push_back(std::move(text_rec));
+		}
+	}
+
+	// Show first if just enqueued
+	if (!m_objective_notify_queue.empty() && !m_objective_notify_active && m_msg_creator)
+	{
+		if (!m_msg_checker || !m_msg_checker())
+		{
+			m_msg_creator(m_objective_notify_queue.front().get(), false, NULL);
+			m_objective_notify_active = true;
+		}
+	}
+}
+
 SpellMap::SpellMap()
 {
 	is_valid = false;
@@ -971,25 +1035,48 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		}
 	}
 
+	// --- failure condition: all alliance units dead ---
+	bool failure = false;
 	if (!success)
+	{
+		bool any_alive = false;
+		for (auto* u : units)
+		{
+			if (!u) continue;
+			if (u->is_enemy) continue;
+			if (!u->isDead()) { any_alive = true; break; }
+		}
+		if (!any_alive)
+			failure = true;
+	}
+
+	if (!success && !failure)
 		return;
 
 	// !!! KLÍČ: latch nastav hned, než cokoliv zobrazíš (jinak se to znovu triggne v dalším ticku)
 	m_mission_end_fired = true;
 
-	// SUCCESS
-	m_mission_end_req.success = true;
+	m_mission_end_req.success = success;
 
 	SpellTextRec* txt = nullptr;
-	if (!params.end_ok_text.empty())
-		txt = spelldata->texts->GetText(params.end_ok_text);
-
-	if (!txt)
-		txt = spelldata->texts->GetText("MISSION_COMPLETE");
+	if (success)
+	{
+		if (!params.end_ok_text.empty())
+			txt = spelldata->texts->GetText(params.end_ok_text);
+		if (!txt)
+			txt = spelldata->texts->GetText("MISSION_COMPLETE");
+	}
+	else
+	{
+		if (!params.end_bad_text.empty())
+			txt = spelldata->texts->GetText(params.end_bad_text);
+		if (!txt)
+			txt = spelldata->texts->GetText("MISSION_FAILED");
+	}
 
 	m_mission_end_req.text = txt;
 
-	if (is_first)
+	if (is_first && success)
 	{
 		// DŮLEŽITÉ: posílej název entry v MOVIE.FS, ne filesystem cestu
 		m_mission_end_req.movie_path = L"LEVEL1_1.DPK";
@@ -1176,6 +1263,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 			e->is_objective = (is_obj != 0);
 			e->probability = prob;
 			e->is_done = (is_done != 0);
+			e->objective_notified = (is_done != 0); // suppress re-notification for already done objectives
 			e->hide = (hide != 0);
 			e->trig_unit = NULL;
 			e->trig_unit_id = trig_uid;
@@ -11478,6 +11566,7 @@ int SpellMap::Tick()
 
 	// try process pending events
 	ProcEventsList(event_list);
+	CheckObjectiveNotifications();
 	CheckAndTriggerMissionEnd();
 
 	// repaint
