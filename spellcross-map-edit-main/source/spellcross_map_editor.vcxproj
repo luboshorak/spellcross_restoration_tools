@@ -38,6 +38,7 @@
     <ClCompile Include="forms\form_map_options.cpp" />
     <ClCompile Include="forms\form_map_units_list.cpp" />
     <ClCompile Include="forms\form_message_box.cpp" />
+    <ClCompile Include="forms\form_mission_summary.cpp" />
     <ClCompile Include="forms\form_mmenu.cpp" />
     <ClCompile Include="forms\form_midi.cpp" />
     <ClCompile Include="forms\form_minimap.cpp" />
@@ -106,6 +107,7 @@
     <ClInclude Include="forms\form_map_options.h" />
     <ClInclude Include="forms\form_map_units_list.h" />
     <ClInclude Include="forms\form_message_box.h" />
+    <ClInclude Include="forms\form_mission_summary.h" />
     <ClInclude Include="forms\form_mmenu.h" />
     <ClInclude Include="forms\form_midi.h" />
     <ClInclude Include="forms\form_minimap.h" />

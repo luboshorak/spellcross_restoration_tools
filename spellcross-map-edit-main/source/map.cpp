@@ -1053,6 +1053,8 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (!success && !failure)
 		return;
 
+	wxLogMessage("[MISSION_END] success=%d failure=%d", (int)success, (int)failure);
+
 	// !!! KLÍČ: latch nastav hned, než cokoliv zobrazíš (jinak se to znovu triggne v dalším ticku)
 	m_mission_end_fired = true;
 
@@ -1062,9 +1064,15 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (success)
 	{
 		if (!params.end_ok_text.empty())
+		{
 			txt = spelldata->texts->GetText(params.end_ok_text);
+			wxLogMessage("[MISSION_END] end_ok_text='%s' found=%d", params.end_ok_text.c_str(), txt != nullptr);
+		}
 		if (!txt)
+		{
 			txt = spelldata->texts->GetText("MISSION_COMPLETE");
+			wxLogMessage("[MISSION_END] fallback MISSION_COMPLETE found=%d", txt != nullptr);
+		}
 	}
 	else
 	{
@@ -1076,6 +1084,18 @@ void SpellMap::CheckAndTriggerMissionEnd()
 
 	m_mission_end_req.text = txt;
 
+	// Fallback: if no text resource found, create a simple one so the message always shows
+	if (!txt)
+	{
+		std::wstring msg = success ? L"*** Mission Complete ***" : L"*** Mission Failed ***";
+		m_mission_end_fallback_text = std::make_unique<SpellTextRec>(
+			std::string(msg.begin(), msg.end()), SpellLang::CZE, success ? "MISSION_COMPLETE" : "MISSION_FAILED");
+		m_mission_end_fallback_text->text = msg;
+		m_mission_end_req.text = m_mission_end_fallback_text.get();
+		txt = m_mission_end_req.text;
+		wxLogMessage("[MISSION_END] using fallback text");
+	}
+
 	if (is_first && success)
 	{
 		// DŮLEŽITÉ: posílej název entry v MOVIE.FS, ne filesystem cestu
@@ -1083,17 +1103,20 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
 	}
 
+	wxLogMessage("[MISSION_END] text=%p movie_path_empty=%d", txt, m_mission_end_req.movie_path.empty());
+
 	if (m_msg_creator && m_mission_end_req.text)
 	{
 		m_msg_creator(m_mission_end_req.text, true, NULL);
 		m_mission_end_shown = true;
-		// pending se nastaví až po ACK v horní větvi
+		wxLogMessage("[MISSION_END] message shown, waiting for ACK");
 	}
 	else
 	{
 		// bez UI hooku -> pusť přechod rovnou
 		m_mission_end_ack = true;
 		m_mission_end_req.pending = true;
+		wxLogMessage("[MISSION_END] no text/creator, pending=true immediately");
 	}
 }
 
@@ -9737,46 +9760,46 @@ void SpellMap::ViewRange::Worker()
 							continue;
 
 						// mark as seen
-						units_view[hnext_mxy] = 5;
-						this_unit_view[next_mxy] = 5;
+							units_view[hnext_mxy] = 5;
+							this_unit_view[hnext_mxy] = 5;
 
-						// check new enemy contact
-						// check new unit contact
-						if (!map->Lunit.empty())
-						{
-							MapUnit* unit = map->Lunit[next_mxy];
-							while (unit)
+							// check new enemy contact
+							// check new unit contact
+							if (!map->Lunit.empty())
 							{
-								// new oponent contact?
-								if (unit->is_visible < 2 && unit->is_enemy != target->is_enemy)
+								MapUnit* unit = map->Lunit[hnext_mxy];
+								while (unit)
 								{
-									// add seen oponents to list
-									seen_units.push_back(unit->id);
+									// new oponent contact?
+									if (unit->is_visible < 2 && unit->is_enemy != target->is_enemy)
+									{
+										// add seen oponents to list
+										seen_units.push_back(unit->id);
+										if (detect_events)
+											new_contact = true;
+									}
+									// check linked SeeUnit() event?
 									if (detect_events)
-										new_contact = true;
-								}
-								// check linked SeeUnit() event?
-								if (detect_events)
-								{
-									for (auto& trig_event : unit->trig_events)
-										events_list.push_back(trig_event);
-								}
-								// mark unit as seen
-								if (unit->is_visible < 2)  // právě se stala viditelnou
-									unit->was_moved = true; // vynutí překreslení sprite
+									{
+										for (auto& trig_event : unit->trig_events)
+											events_list.push_back(trig_event);
+									}
+									// mark unit as seen
+									if (unit->is_visible < 2)  // právě se stala viditelnou
+										unit->was_moved = true; // vynutí překreslení sprite
 
-								unit->is_visible = 2;
-								unit->was_seen = true;
+									unit->is_visible = 2;
+									unit->was_seen = true;
 
-								unit = unit->next;
+									unit = unit->next;
+								}
 							}
-						}
-						if (detect_events && map->events->CheckEventMap(next_mxy))
-						{
-							// possibly some event here: get all undone events
-							auto list = map->events->GetEvents(next_mxy, true);
-							events_list.insert(events_list.end(), list.begin(), list.end());
-						}
+							if (detect_events && map->events->CheckEventMap(hnext_mxy))
+							{
+								// possibly some event here: get all undone events
+								auto list = map->events->GetEvents(hnext_mxy, true);
+								events_list.insert(events_list.end(), list.begin(), list.end());
+							}
 
 						// proceed to next position
 						hdir.push_back(0);
@@ -11813,6 +11836,39 @@ int SpellMap::PlaceUnit(MapUnit* unit)
 
 	// store new unit
 	units.push_back(unit);
+
+	// Assign unique ID if unit has no valid unique ID.
+	// Event-spawned units have id == -1, freshly created units have id == 0.
+	// Both need unique IDs for group selection and other runtime features.
+	if (unit->id <= 0)
+	{
+		// Check if the current ID is truly unique among all map units
+		bool need_id = (unit->id < 0);
+		if (!need_id)
+		{
+			// id == 0: check if another unit already has this ID
+			for (auto* u : units)
+				if (u != unit && u->id == unit->id)
+				{
+					need_id = true;
+					break;
+				}
+		}
+		if (need_id)
+		{
+			// Find max existing ID and assign next
+			int max_id = 49; // start above reserved range (0-49 used by DEF/events)
+			for (auto* u : units)
+				if (u != unit && u->id > max_id)
+					max_id = u->id;
+			if (events)
+				for (auto* ev : events->GetEvents())
+					for (auto& eu : ev->units)
+						if (eu.unit->id > max_id)
+							max_id = eu.unit->id;
+			unit->id = max_id + 1;
+		}
+	}
 
 		// v10: units placed during game mode should be immediately active & playable
 	if (isGameMode())

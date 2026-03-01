@@ -1132,11 +1132,13 @@ int SpellMapEvents::CheckEventMap(MapXY pos)
 int SpellMapEvents::CheckEventMap(int pos)
 {
 	auto evt = events_map[pos];
-	if(!evt)
-		return(false);
-	if(evt->is_done)
-		return(false);
-	return(true);
+	while(evt)
+	{
+		if(!evt->is_done)
+			return(true);
+		evt = evt->next;
+	}
+	return(false);
 }
 
 // get list of events for given position (SeePlace), only not executed

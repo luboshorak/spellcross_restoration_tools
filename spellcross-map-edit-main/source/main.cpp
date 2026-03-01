@@ -1232,10 +1232,11 @@ void MainFrame::OnTimer(wxTimerEvent& event)
         SpellMap::MissionEndRequest req;
         if (spell_map->ConsumeMissionEndRequest(req))
         {
+            wxLogMessage("[MAIN] ConsumeMissionEndRequest: success=%d pending=%d", (int)req.success, (int)req.pending);
             m_mission_end_flow = true;
             m_mission_end_req = req;
 
-            StartMissionEndFlow(); // nová metoda v MainFrame
+            StartMissionEndFlow();
         }
     }
 }
@@ -1294,12 +1295,15 @@ static std::string find_def_candidate(const std::string& name)
 void MainFrame::OpenStrategicAndLoadNext()
 {
     const std::wstring nextW = m_mission_end_req.next_level_def;
-    
+
+    wxLogMessage("[MAIN] OpenStrategicAndLoadNext: strategicLevel=%p success=%d", m_strategicLevel, (int)m_mission_end_req.success);
+
     // Return to existing strategic level with mission result
     if (m_strategicLevel)
     {
         // Check if strategic level window still exists
         wxWindow* win = wxWindow::FindWindowById(m_strategicLevel->GetId());
+        wxLogMessage("[MAIN] FindWindowById: win=%p", win);
         if (win)
         {
             wxLogMessage("[MAIN] Returning to strategic level");

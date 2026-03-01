@@ -247,6 +247,7 @@ public:
 	bool m_mission_end_ack = false;
 	MissionEndRequest m_mission_end_req;
 	bool m_mission_end_fired = false;   // jednorázová pojistka: mission end už byl vyvolán
+	std::unique_ptr<SpellTextRec> m_mission_end_fallback_text; // fallback text if not found in data
 
 	// Objective completion notification queue
 	std::vector<std::unique_ptr<SpellTextRec>> m_objective_notify_queue;
