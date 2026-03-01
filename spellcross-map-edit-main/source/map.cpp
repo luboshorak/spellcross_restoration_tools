@@ -1053,9 +1053,7 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (!success && !failure)
 		return;
 
-	wxLogMessage("[MISSION_END] success=%d failure=%d", (int)success, (int)failure);
-
-	// !!! KLÍČ: latch nastav hned, než cokoliv zobrazíš (jinak se to znovu triggne v dalším ticku)
+	// !!! KLÍČ:
 	m_mission_end_fired = true;
 
 	m_mission_end_req.success = success;
@@ -1064,15 +1062,9 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	if (success)
 	{
 		if (!params.end_ok_text.empty())
-		{
 			txt = spelldata->texts->GetText(params.end_ok_text);
-			wxLogMessage("[MISSION_END] end_ok_text='%s' found=%d", params.end_ok_text.c_str(), txt != nullptr);
-		}
 		if (!txt)
-		{
 			txt = spelldata->texts->GetText("MISSION_COMPLETE");
-			wxLogMessage("[MISSION_END] fallback MISSION_COMPLETE found=%d", txt != nullptr);
-		}
 	}
 	else
 	{
@@ -1093,7 +1085,6 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		m_mission_end_fallback_text->text = msg;
 		m_mission_end_req.text = m_mission_end_fallback_text.get();
 		txt = m_mission_end_req.text;
-		wxLogMessage("[MISSION_END] using fallback text");
 	}
 
 	if (is_first && success)
@@ -1103,20 +1094,16 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
 	}
 
-	wxLogMessage("[MISSION_END] text=%p movie_path_empty=%d", txt, m_mission_end_req.movie_path.empty());
-
 	if (m_msg_creator && m_mission_end_req.text)
 	{
 		m_msg_creator(m_mission_end_req.text, true, NULL);
 		m_mission_end_shown = true;
-		wxLogMessage("[MISSION_END] message shown, waiting for ACK");
 	}
 	else
 	{
 		// bez UI hooku -> pusť přechod rovnou
 		m_mission_end_ack = true;
 		m_mission_end_req.pending = true;
-		wxLogMessage("[MISSION_END] no text/creator, pending=true immediately");
 	}
 }
 

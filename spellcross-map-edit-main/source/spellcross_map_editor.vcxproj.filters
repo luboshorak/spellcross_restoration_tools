@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -170,9 +170,6 @@
     </ClCompile>
     <ClCompile Include="forms\form_level.cpp">
       <Filter>Source Files\forms</Filter>
-    </ClCompile>
-    <ClCompile Include="forms\form_mission_summary.cpp">
-      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -388,9 +385,6 @@
     </ClInclude>
     <ClInclude Include="forms\form_strategic.h">
       <Filter>Header Files\forms</Filter>
-    </ClInclude>
-    <ClInclude Include="forms\form_mission_summary.h">
-      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
