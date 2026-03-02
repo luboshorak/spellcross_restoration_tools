@@ -1,3 +1,14 @@
+//=============================================================================
+// Spellcross restoration
+// ----------------------------------------------------------------------------
+// Map and Levels handling functions, wxWidgets GUI.
+// 
+// This code is part of Spellcross – restoration tools project.
+// (c) 2025-2026, Lubos Horak
+// url: https://github.com/luboshorak/spellcross_restoration_tools
+// Distributed under MIT license, https://opensource.org/licenses/MIT.
+//=============================================================================
+
 #pragma once
 #include <string>
 #include <vector>
@@ -35,6 +46,9 @@ struct LevelMission {
     int freq_random_b = -1;
 
     int end_bad_event = -1;     // EndBadEvent(n) (viz M02_05A)
+
+    // Èasový limit mise v tazích (0 = bez limitu), z Time(X) v DEF
+    int time_limit = 0;
 
     // Videa po dokonèení mise
     std::string end_ok_video;

@@ -608,14 +608,12 @@ static wxBitmap LoadMenuIcon(const wxString& name, const wxSize& targetSize = wx
 
     if (!fs::exists(pngPath, ec))
     {
-        wxLogWarning("[MENU] Icon not found: %s", pngPath.string().c_str());
         return wxBitmap();
     }
 
     wxImage img;
     if (!img.LoadFile(wxString::FromUTF8(pngPath.string()), wxBITMAP_TYPE_PNG))
     {
-        wxLogWarning("[MENU] Failed to load icon: %s", pngPath.string().c_str());
         return wxBitmap();
     }
 
@@ -661,7 +659,6 @@ static wxBitmapButton* CreateStrategicBitmapButton(
     {
         // Fallback: create text button if icon missing
         btn = new wxBitmapButton(parent, id, wxBitmap(1, 1), wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-        wxLogWarning("[MENU] Using fallback for icon: %s", iconName.ToStdString().c_str());
     }
 
     btn->SetBackgroundColour(background);
@@ -1206,6 +1203,8 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     RefreshUI();
 
+    // Initialize timeout tracking so countdown markers are visible from turn 1
+    CheckTimeouts();
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
 
@@ -1826,7 +1825,6 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
 
     if (defPath.empty())
     {
-        wxLogWarning("[UPGRADES] UPGRADES.DEF not found.");
         m_upgradeDefsLoaded = true;
         return false;
     }
@@ -3657,7 +3655,18 @@ void StrategicLevelFrame::RefreshUnitsRoster()
             m_unitsRoster->SetItem(idx, 1, wxString::Format("%d", lvl));
 
             int cooldown = (pIdx < m_unitStates.size()) ? m_unitStates[pIdx].cooldown_turns : 0;
-            m_unitsRoster->SetItem(idx, 2, cooldown > 0 ? wxString::Format("-%dT", cooldown) : wxString("Ready"));
+            wxString status;
+            if (cooldown > 0)
+                status = wxString::Format("-%dT", cooldown);
+            else
+                status = "Ready";
+            if (u.health < 100)
+                status += wxString::Format(" %d%%", u.health);
+            m_unitsRoster->SetItem(idx, 2, status);
+
+            // Color damaged units so they are easy to spot
+            if (u.health < 100)
+                m_unitsRoster->SetItemTextColour(idx, wxColour(0xFF, 0xA0, 0x00));
 
             // Store the original playerUnits index for selection handling
             m_unitsRoster->SetItemData(idx, (long)pIdx);
@@ -4309,15 +4318,25 @@ int StrategicLevelFrame::GetRecruitCost(int unitIndex, int quality) const
     if (unitIndex < 0 || unitIndex >= (int)m_playerUnits.size())
         return 0;
 
+    if (quality < 0 || quality >= RECRUIT_QUALITY_COUNT)
+        quality = 1;
+
     const auto& u = m_playerUnits[unitIndex];
     int baseCost = GetUnitBuyCost(u.unit_id);
     if (baseCost <= 0)
-        return 0;
+        baseCost = 10; // fallback for units missing from units.json
 
-    // Cost is proportional to damage and quality
     int damage = 100 - u.health;
-    int costPercent = (damage * RECRUIT_QUALITY_COST_MULT[quality]) / 100;
-    return (baseCost * costPercent) / 100;
+    if (damage <= 0)
+        return 0; // full health, nothing to recruit
+
+    // Single-step multiplication avoids double integer truncation.
+    // Old formula: (baseCost * ((damage * mult) / 100)) / 100 — truncates to 0 for small damage.
+    // New formula: baseCost * damage * mult / 10000  (mathematically identical, less precision loss).
+    int cost = (baseCost * damage * RECRUIT_QUALITY_COST_MULT[quality]) / 10000;
+
+    // Always at least 1 credit for any damaged unit
+    return std::max(1, cost);
 }
 
 int StrategicLevelFrame::GetRecruitTime(int quality) const
@@ -5671,10 +5690,13 @@ void StrategicLevelFrame::OnCommanderSelectForMission(wxListEvent& ev)
     }
     else
     {
-        // Select commander and all their units
+        // Select commander and all their units (skip units on cooldown)
         m_selectedCommandersForMission.insert(cmdUid);
         for (uint32_t uid : units)
-            m_selectedUnitsForMission.insert(uid);
+        {
+            if (!IsRosterUidOnCooldown(uid))
+                m_selectedUnitsForMission.insert(uid);
+        }
     }
 
     UpdateCommanderRosterSelectionVisuals();
@@ -5694,6 +5716,14 @@ void StrategicLevelFrame::OnUnitSelectForMission(wxListEvent& ev)
     if (uid == 0)
         return;
 
+    // Units on cooldown cannot be selected for mission
+    if (IsRosterUidOnCooldown(uid))
+    {
+        m_selectedUnitsForMission.erase(uid);
+        UpdateRosterSelectionVisuals();
+        return;
+    }
+
     // Toggle selection: if already selected, remove; otherwise add
     if (m_selectedUnitsForMission.count(uid) > 0)
         m_selectedUnitsForMission.erase(uid);
@@ -5711,6 +5741,7 @@ void StrategicLevelFrame::UpdateRosterSelectionVisuals()
 
     const wxColour clrSelected(0x00, 0xFF, 0x00);  // bright green for selected
     const wxColour clrUnselected(0x80, 0x80, 0x80); // gray for unselected
+    const wxColour clrCooldown(0x66, 0x33, 0x33);   // dark red-brown for cooldown (not selectable)
 
     // Update text color in the list control to match m_selectedUnitsForMission
     // We don't modify the native selection state - we only use colors for visual feedback
@@ -5718,10 +5749,19 @@ void StrategicLevelFrame::UpdateRosterSelectionVisuals()
     for (long i = 0; i < count; ++i)
     {
         const uint32_t uid = (uint32_t)m_roster->GetItemData(i);
+        const bool onCooldown = (uid != 0 && IsRosterUidOnCooldown(uid));
         const bool isSelectedForMission = (uid != 0 && m_selectedUnitsForMission.count(uid) > 0);
 
-        // Update text color based on mission selection
-        m_roster->SetItemTextColour(i, isSelectedForMission ? clrSelected : clrUnselected);
+        // Cooldown units are always shown in cooldown color and auto-deselected
+        if (onCooldown)
+        {
+            m_selectedUnitsForMission.erase(uid);
+            m_roster->SetItemTextColour(i, clrCooldown);
+        }
+        else
+        {
+            m_roster->SetItemTextColour(i, isSelectedForMission ? clrSelected : clrUnselected);
+        }
     }
 
     // Force refresh to show color changes
@@ -5776,6 +5816,12 @@ std::vector<LevelData::PlayerUnitAdd> StrategicLevelFrame::GetSelectedUnitsForLa
                 const uint32_t uid = m_rosterRowUids[uidIndex];
                 if (m_selectedUnitsForMission.count(uid) > 0)
                 {
+                    // Safety: skip units on cooldown (should not be in selection, but guard anyway)
+                    if (pIdx < m_unitStates.size() && m_unitStates[pIdx].cooldown_turns > 0)
+                    {
+                        ++uidIndex;
+                        continue;
+                    }
                     // Add this unit instance to the result
                     LevelData::PlayerUnitAdd add;
                     add.unit_id = u.unit_id;
@@ -5790,6 +5836,28 @@ std::vector<LevelData::PlayerUnitAdd> StrategicLevelFrame::GetSelectedUnitsForLa
     }
 
     return result;
+}
+
+bool StrategicLevelFrame::IsRosterUidOnCooldown(uint32_t uid) const
+{
+    if (uid == 0)
+        return false;
+
+    int uidIndex = 0;
+    for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+    {
+        const auto& u = m_playerUnits[pIdx];
+        for (int inst = 0; inst < u.count; ++inst)
+        {
+            if (uidIndex < (int)m_rosterRowUids.size())
+            {
+                if (m_rosterRowUids[uidIndex] == uid)
+                    return (pIdx < m_unitStates.size() && m_unitStates[pIdx].cooldown_turns > 0);
+            }
+            ++uidIndex;
+        }
+    }
+    return false;
 }
 
 void StrategicLevelFrame::RefreshUI()
@@ -5879,20 +5947,36 @@ void StrategicLevelFrame::RefreshUI()
 
     long row = 0;
     int uidIndex = 0;
+    size_t pIdx = 0;
     const wxColour clrSelected(0x00, 0xFF, 0x00);  // bright green for selected
     const wxColour clrUnselected(0x80, 0x80, 0x80); // gray for unselected
-    for (const auto& u : m_playerUnits)
+    const wxColour clrCooldown(0x66, 0x33, 0x33);   // dark red-brown for cooldown
+    for (pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
     {
+        const auto& u = m_playerUnits[pIdx];
+        const bool onCooldown = (pIdx < m_unitStates.size() && m_unitStates[pIdx].cooldown_turns > 0);
         for (int i = 0; i < u.count; ++i)
         {
             const uint32_t uid = (uidIndex < (int)m_rosterRowUids.size()) ? m_rosterRowUids[(size_t)uidIndex++] : (uint32_t)m_nextRosterUid++;
             long idx = m_roster->InsertItem(row++, GetUnitDisplayName(u.unit_id));
-            m_roster->SetItem(idx, 1, wxString::Format("%d", u.health));
+            // Show cooldown in HP column
+            if (onCooldown)
+                m_roster->SetItem(idx, 1, wxString::Format("%d%% -%dT", u.health, m_unitStates[pIdx].cooldown_turns));
+            else
+                m_roster->SetItem(idx, 1, wxString::Format("%d", u.health));
             // Store UID in item data for picking.
             m_roster->SetItemData(idx, (long)uid);
-            // Set text color based on selection state
-            const bool isSelected = (m_selectedUnitsForMission.count(uid) > 0);
-            m_roster->SetItemTextColour(idx, isSelected ? clrSelected : clrUnselected);
+            // Set text color: cooldown > selection > default
+            if (onCooldown)
+            {
+                m_selectedUnitsForMission.erase(uid);
+                m_roster->SetItemTextColour(idx, clrCooldown);
+            }
+            else
+            {
+                const bool isSelected = (m_selectedUnitsForMission.count(uid) > 0);
+                m_roster->SetItemTextColour(idx, isSelected ? clrSelected : clrUnselected);
+            }
         }
     }
 
@@ -7177,13 +7261,7 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
         SelectTerritoryById(m_level.territories[idx].id);
         return;
     }
-
-    wxLogMessage("[CLK] tid=%u -> fallback idx=%zu -> territory_id=%d",
-        (unsigned)tid, idx, m_level.territories[idx].id);
-
     // Out of range -> ignore click
-    wxLogWarning("[CLK] tid=%u out of range (territories=%zu)", (unsigned)tid, m_level.territories.size());
-
 }
 
 void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
@@ -7367,7 +7445,6 @@ bool StrategicLevelFrame::EnsureCommanderNamesLoaded()
     const auto p = FindCommanderNamesDefPath();
     if (p.empty())
     {
-        wxLogWarning("[COMMANDERS] C_NAMES.DEF not found.");
         m_commanderNamesLoaded = true; // avoid spamming warnings
         return false;
     }
@@ -7835,11 +7912,6 @@ std::string StrategicLevelFrame::ResolveMissionTokenForTerritory(int territory_i
 
 std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::string& mission_token) const
 {
-    wxLogMessage(
-        "[RESOLVE] token='%s'",
-        mission_token.c_str()
-    );
-
     if (mission_token.empty() || mission_token == "none")
         return L"";
 
@@ -7923,11 +7995,6 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 
     const int terr_id = m_selectedTerritory;
     std::string token = ResolveMissionTokenForTerritory(terr_id);
-    wxLogMessage(
-        "[LAUNCH] territory_id=%d token='%s'",
-        terr_id,
-        token.c_str()
-    );
     if (token.empty() || token == "none")
         return;
 
@@ -7938,17 +8005,10 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         wxMessageBox("Map DEF not found for mission: " + wxString(token), "Launch", wxOK | wxICON_WARNING, this);
         return;
     }
-
-    wxLogMessage("[LAUNCH] DEF: %ls", defPath.c_str());
-    
     // Store pending mission for result handling
     m_pendingMission.valid = true;
     m_pendingMission.territory_id = terr_id;
     m_pendingMission.mission_token = token;
-    
-    wxLogMessage("[LAUNCH] Set m_pendingMission: valid=true, territory_id=%d, token='%s'",
-        m_pendingMission.territory_id, m_pendingMission.mission_token.c_str());
-
     // Record which roster indices are being sent to the mission
     m_pendingMission.sent_unit_indices.clear();
     {
@@ -7973,20 +8033,15 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     {
         ShowBriefing(terr_id);
     }
-    
-    wxLogMessage("[LAUNCH] selectedUnits.count=%zu (from %zu total)", unitsForMission.size(), m_playerUnits.size());
     for (size_t i = 0; i < unitsForMission.size(); ++i)
     {
         const auto& u = unitsForMission[i];
-        wxLogMessage("[LAUNCH] unit[%zu]: id=%d count=%d health=%d",
-            i, u.unit_id, u.count, u.health);
     }
 
     bool ok = m_main->LoadMapFromDefPath(defPath, unitsForMission);
 
     if (!ok && !unitsForMission.empty())
     {
-        wxLogWarning("[LAUNCH] Load failed WITH units, retrying WITHOUT units...");
         const std::vector<LevelData::PlayerUnitAdd> empty_units;
         ok = m_main->LoadMapFromDefPath(defPath, empty_units);
     }
@@ -8020,12 +8075,10 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     SaveStrategicState();
 
     // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
-    wxLogMessage("[LAUNCH] Entering game mode and hiding strategic level window");
     m_main->SetGameModeUI(true);
     m_main->Raise();
 
     Hide();
-    wxLogMessage("[LAUNCH] Strategic level hidden, tactical map should now be active");
 }
 
 
@@ -8552,8 +8605,6 @@ void StrategicLevelFrame::LoadStrategicState()
 
         if (!curStem.empty() && !saveStem.empty() && curStem != saveStem)
         {
-            wxLogWarning("[STRATEGIC] Ignoring state file for different level: save='%s' cur='%s'",
-                saveStem.c_str(), curStem.c_str());
             return; // keep defaults initialized in ctor
         }
 
@@ -9638,6 +9689,13 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                 const int tx = x + (int)std::lround((double)px * s);
                 const int ty = y + (int)std::lround((double)py * s);
 
+                // In game mode: no text labels (T01, T02...), only markers at centroid
+                if (m_gameModeEnabled && !resourcesView)
+                {
+                    DrawTerritoryMarker(dc, t.id, tx, ty, s);
+                    continue;
+                }
+
                 wxString label;
                 if (resourcesView)
                 {
@@ -10044,9 +10102,6 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
 
 void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, const std::string& mission_token)
 {
-    wxLogMessage("[STRATEGIC] HandleMissionResult: territory=%d success=%s token='%s'",
-        territory_id, success ? "YES" : "NO", mission_token.c_str());
-
     // Collect battle results from the tactical map (losses, damage, experience)
     LossBlock mission_enemy_kills = CollectAndApplyBattleResults(success);
 
@@ -10060,7 +10115,6 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
             if (success)
             {
                 ca.completed = true;
-                wxLogMessage("[STRATEGIC] Counter-attack on territory %d successfully defended!", territory_id);
             }
             else
             {
@@ -10070,7 +10124,6 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
                 if (it != m_ownedTerritories.end())
                     m_ownedTerritories.erase(it);
                 m_stats.territories_lost++;
-                wxLogMessage("[STRATEGIC] Counter-attack defense FAILED — territory %d lost!", territory_id);
             }
             break;
         }
@@ -10088,9 +10141,6 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
                            + mission_enemy_kills.air * 15
                            + mission_enemy_kills.commanders * 25;
         m_player.experience += xp_award;
-
-        wxLogMessage("[STRATEGIC] Player XP += %d (total %d)", xp_award, m_player.experience);
-
         RecomputePlayerRank();
 
         const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
@@ -10125,7 +10175,6 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
 
         if (isLevelComplete)
         {
-            wxLogMessage("[STRATEGIC] Level complete! Advancing to next level...");
             SaveMissionStats();
             SaveStrategicState();
             AdvanceToNextLevel();
@@ -10159,8 +10208,6 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
     SaveMissionStats();
     SaveStrategicState();
     RefreshUI();
-    
-    wxLogMessage("[STRATEGIC] HandleMissionResult completed, UI refreshed");
 }
 
 StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults(bool success)
@@ -10174,7 +10221,6 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     SpellMap* tactical_map = m_main->GetSpellMap();
     if (!tactical_map || !tactical_map->IsLoaded())
     {
-        wxLogMessage("[STRATEGIC] No tactical map available for battle results");
         return empty_result;
     }
 
@@ -10234,19 +10280,11 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     m_lossStats.enemy_all.heavy += mission_enemy_losses.heavy;
     m_lossStats.enemy_all.air += mission_enemy_losses.air;
     m_lossStats.enemy_all.commanders += mission_enemy_losses.commanders;
-
-    wxLogMessage("[STRATEGIC] Mission losses: alliance(L=%d H=%d A=%d C=%d) enemy(L=%d H=%d A=%d C=%d)",
-        mission_alliance_losses.light, mission_alliance_losses.heavy,
-        mission_alliance_losses.air, mission_alliance_losses.commanders,
-        mission_enemy_losses.light, mission_enemy_losses.heavy,
-        mission_enemy_losses.air, mission_enemy_losses.commanders);
-
     // --- 2) Sync unit health / damage / deaths back to player roster ---
     // Only touch roster entries that were actually sent to the mission (sent_unit_indices).
     const auto& sent = m_pendingMission.sent_unit_indices;
     if (sent.empty())
     {
-        wxLogMessage("[STRATEGIC] No sent_unit_indices recorded, skipping roster sync");
         return mission_enemy_losses;
     }
 
@@ -10264,6 +10302,15 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     std::unordered_map<int, std::vector<MapUnit*>> survivors_by_type;
     for (auto* s : survivors)
         survivors_by_type[s->unit->type_id].push_back(s);
+
+    // Ensure m_unitStates covers all roster entries (it may be empty if user
+    // never opened the Units page before the first battle).
+    while (m_unitStates.size() < m_playerUnits.size())
+    {
+        UnitInstanceState state;
+        state.uid = m_nextRosterUid++;
+        m_unitStates.push_back(state);
+    }
 
     std::unordered_map<int, size_t> consumed_idx; // type_id -> next index in survivors_by_type
 
@@ -10294,9 +10341,16 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
             else
                 pu.health = 100;
 
-            // Update unit instance experience
+            // Update unit instance experience and level from tactical map
             if (roster_idx < m_unitStates.size())
+            {
                 m_unitStates[roster_idx].experience += survivor->experience;
+                m_unitStates[roster_idx].level = survivor->experience_level;
+            }
+
+            // Set post-battle rest cooldown (minimum 1 turn before next mission)
+            if (roster_idx < m_unitStates.size())
+                m_unitStates[roster_idx].cooldown_turns = std::max(m_unitStates[roster_idx].cooldown_turns, 1);
         }
         else
         {
@@ -10314,16 +10368,12 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     {
         if (idx >= m_playerUnits.size())
             continue;
-        wxLogMessage("[STRATEGIC] Unit killed in battle: type_id=%d (roster index %zu)",
-            m_playerUnits[idx].unit_id, idx);
         m_playerUnits.erase(m_playerUnits.begin() + idx);
         if (idx < m_unitStates.size())
             m_unitStates.erase(m_unitStates.begin() + idx);
         if (idx < m_rosterRowUids.size())
             m_rosterRowUids.erase(m_rosterRowUids.begin() + idx);
     }
-
-    wxLogMessage("[STRATEGIC] Post-battle roster size: %zu", m_playerUnits.size());
     return mission_enemy_losses;
 }
 
@@ -10364,12 +10414,8 @@ void StrategicLevelFrame::ConquestTerritory(int territory_id)
     auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory_id);
     if (it != m_ownedTerritories.end())
     {
-        wxLogMessage("[STRATEGIC] Territory %d already owned", territory_id);
         return;
     }
-    
-    wxLogMessage("[STRATEGIC] Conquesting territory %d", territory_id);
-    
     m_ownedTerritories.push_back(territory_id);
     m_stats.territories_conquered++;
     
@@ -10402,9 +10448,6 @@ void StrategicLevelFrame::ConquestTerritory(int territory_id)
         ca.triggered = false;
         ca.completed = false;
         m_counterAttacks.push_back(ca);
-        
-        wxLogMessage("[STRATEGIC] Scheduled counter-attack for territory %d at turn %d",
-            territory_id, ca.trigger_turn);
     }
     
     // Remove from timeout tracking if it was there
@@ -10438,29 +10481,45 @@ void StrategicLevelFrame::CheckTimeouts()
         {
             // Set timeout from now
             m_territoryTimeoutTurn[t.id] = m_turn + t.timeout_turns;
-            wxLogMessage("[STRATEGIC] Territory %d timeout set: deadline turn %d",
-                t.id, m_territoryTimeoutTurn[t.id]);
+        }
+        else if (it->second <= 0)
+        {
+            // Already expired (sentinel), do not restart
+            continue;
         }
         else
         {
             if (m_turn >= it->second)
             {
-                wxLogMessage("[STRATEGIC] Territory %d TIMEOUT! Auto-BAD triggered", t.id);
-                
-                wxMessageBox(
-                    wxString::Format("Territory %d has been lost due to timeout!\n\n"
-                        "The enemy has secured their position.", t.id),
-                    "Territory Lost",
-                    wxOK | wxICON_WARNING,
-                    this
-                );
-                
-                m_stats.territories_lost++;
-                m_territoryTimeoutTurn.erase(t.id);
+                // Resolve the current mission token for this territory
+                std::string curToken = ResolveMissionTokenForTerritory(t.id);
+                // Try to append 'A' if token ends with digit (m04_07 -> M04_07A)
+                std::string lookupToken = to_upper(curToken);
+                if (!lookupToken.empty() && std::isdigit((unsigned char)lookupToken.back()))
+                    lookupToken += "A";
+
+                // Find the mission and its EndBadMission
+                const LevelMission* mission = FindMissionByNameUpper(lookupToken);
+                if (!mission && lookupToken != to_upper(curToken))
+                    mission = FindMissionByNameUpper(to_upper(curToken));
+
+                if (mission && !mission->end_bad_mission.empty() && mission->end_bad_mission != "none")
+                {
+                    // Switch territory to the BAD mission variant (e.g. M04_07A -> M04_07B)
+                    m_territoryCurrentMission[t.id] = to_lower(mission->end_bad_mission);
+                }
+                else
+                {
+                    // No EndBadMission defined -> territory is truly lost
+                    m_stats.territories_lost++;
+                }
+
+                // Mark as expired (sentinel -1); prevents re-adding on next CheckTimeouts call
+                it->second = -1;
             }
         }
     }
-    
+
     MarkOverlayDirty();
 }
 
@@ -10476,8 +10535,6 @@ void StrategicLevelFrame::CheckCounterAttacks()
 
         if (m_turn >= ca.trigger_turn)
         {
-            wxLogMessage("[STRATEGIC] Counter-attack triggered for territory %d!", ca.territory_id);
-
             ca.triggered = true;
 
             // Set the counter-attack mission on the territory
@@ -10513,8 +10570,6 @@ void StrategicLevelFrame::CheckCounterAttacks()
             }
             else
             {
-                wxLogMessage("[STRATEGIC] Player declined defense - territory %d lost!", ca.territory_id);
-
                 auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), ca.territory_id);
                 if (it != m_ownedTerritories.end())
                 {
@@ -10552,7 +10607,6 @@ void StrategicLevelFrame::ShowBriefing(int territory_id)
     std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
     if (texts_dir.empty())
     {
-        wxLogMessage("[STRATEGIC] TEXTS dir not found for briefing");
         return;
     }
 
@@ -10569,7 +10623,6 @@ void StrategicLevelFrame::ShowBriefing(int territory_id)
 
     if (info.IsEmpty())
     {
-        wxLogMessage("[STRATEGIC] No briefing text found for mission '%s'", token.c_str());
         return;
     }
 
@@ -10625,9 +10678,6 @@ void StrategicLevelFrame::PlayVideo(const std::string& video_file)
 {
     if (video_file.empty())
         return;
-    
-    wxLogMessage("[STRATEGIC] PlayVideo requested: %s", video_file.c_str());
-    
     namespace fs = std::filesystem;
     fs::path base = fs::path(m_level.source_path).parent_path();
     
@@ -10653,27 +10703,98 @@ void StrategicLevelFrame::PlayVideo(const std::string& video_file)
     
     if (videoPath.empty())
     {
-        wxLogMessage("[STRATEGIC] Video file not found in any search path: %s", video_file.c_str());
         return;
     }
-    
-    wxLogMessage("[STRATEGIC] Video file found: %s", videoPath.c_str());
-    
     // TODO: Implement actual video playback through FormVideoBox
     // For now, videos defined in mission end_ok_video/end_bad_video are logged but not played
     // The main cutscene video (movie_path in MissionEndRequest) IS played through StartMissionEndFlow
     if (m_main && m_spellData && m_spellData->videos)
     {
-        wxLogMessage("[STRATEGIC] Video playback system available but not yet implemented for strategic level videos");
         // Future: could use m_main to trigger video playback
+    }
+}
+
+void StrategicLevelFrame::EnsureStrategicIconsLoaded()
+{
+    if (m_strategicIconsLoaded)
+        return;
+    m_strategicIconsLoaded = true;
+
+    if (!m_spellData)
+        return;
+
+    auto& gres = m_spellData->gres;
+
+    // Load VM_0 .. VM_9 (timeout countdown digits)
+    for (int i = 0; i < 10; ++i)
+    {
+        char name[8];
+        std::snprintf(name, sizeof(name), "VM_%d", i);
+        SpellGraphicItem* item = gres.GetResource(name);
+        if (item)
+        {
+            wxBitmap* bmp = item->Render(true); // transparent
+            if (bmp && bmp->IsOk())
+            {
+                m_icoVM[i] = *bmp;
+                delete bmp;
+            }
+        }
+    }
+
+    // Load LASTTERT (crossed swords for final territory)
+    {
+        SpellGraphicItem* item = gres.GetResource("LASTTERT");
+        if (item)
+        {
+            wxBitmap* bmp = item->Render(true);
+            if (bmp && bmp->IsOk())
+            {
+                m_icoLastTert = *bmp;
+                delete bmp;
+            }
+        }
+    }
+}
+
+// Helper: draw a wxBitmap centered at (cx, cy) with optional scaling
+static void DrawIconCentered(wxDC& dc, const wxBitmap& bmp, int cx, int cy, double scale)
+{
+    if (!bmp.IsOk())
+        return;
+
+    const int srcW = bmp.GetWidth();
+    const int srcH = bmp.GetHeight();
+    if (srcW <= 0 || srcH <= 0)
+        return;
+
+    const int dstW = std::max(1, (int)std::lround(srcW * scale));
+    const int dstH = std::max(1, (int)std::lround(srcH * scale));
+
+    if (dstW == srcW && dstH == srcH)
+    {
+        // No scaling needed
+        dc.DrawBitmap(bmp, cx - srcW / 2, cy - srcH / 2, true);
+    }
+    else
+    {
+        wxImage img = bmp.ConvertToImage();
+        wxBitmap scaled(img.Scale(dstW, dstH, wxIMAGE_QUALITY_HIGH));
+        dc.DrawBitmap(scaled, cx - dstW / 2, cy - dstH / 2, true);
     }
 }
 
 void StrategicLevelFrame::DrawTerritoryMarker(wxDC& dc, int territory_id, int x, int y, double scale)
 {
-    const int baseRadius = 12;
-    int radius = static_cast<int>(baseRadius * scale);
-    if (radius < 4) radius = 4;
+    EnsureStrategicIconsLoaded();
+
+    // Scale markers with the map but cap so they don't become huge.
+    // VM icons are low-res sprites (designed for 320x200), so they need some
+    // scaling on modern displays, but full map zoom (2-3x) is too much.
+    const double markerScale = std::clamp(scale, 0.8, 1.6);
+    const int baseRadius = 10;
+    int radius = static_cast<int>(baseRadius * markerScale);
+    if (radius < 6) radius = 6;
 
     bool isOwned = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory_id) 
                    != m_ownedTerritories.end();
@@ -10699,13 +10820,21 @@ void StrategicLevelFrame::DrawTerritoryMarker(wxDC& dc, int territory_id, int x,
 
     if (counterActive && isOwned)
     {
-        // Counter-attack active — crossed swords + yellow/red flash
-        dc.SetPen(wxPen(wxColour(255, 100, 0), 2));
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-        int len = radius;
-        dc.DrawLine(x - len, y - len, x + len, y + len);
-        dc.DrawLine(x + len, y - len, x - len, y + len);
-        // Add "CA" label
+        // Counter-attack active — show LASTTERT icon (crossed swords) with orange tint
+        if (m_icoLastTert.IsOk())
+        {
+            DrawIconCentered(dc, m_icoLastTert, x, y, markerScale);
+        }
+        else
+        {
+            // Fallback: primitive shape
+            dc.SetPen(wxPen(wxColour(255, 100, 0), 2));
+            dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            int len = radius;
+            dc.DrawLine(x - len, y - len, x + len, y + len);
+            dc.DrawLine(x + len, y - len, x - len, y + len);
+        }
+        // Add "!" label for urgency
         dc.SetTextForeground(wxColour(255, 100, 0));
         wxFont font(wxFontInfo(std::max(8, radius)).Bold());
         dc.SetFont(font);
@@ -10713,64 +10842,80 @@ void StrategicLevelFrame::DrawTerritoryMarker(wxDC& dc, int territory_id, int x,
     }
     else if (isFinal && !isOwned)
     {
-        // LASTTERT - crossed swords
-        dc.SetPen(wxPen(wxColour(200, 50, 50), 2));
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-        
-        int len = radius;
-        dc.DrawLine(x - len, y - len, x + len, y + len);
-        dc.DrawLine(x + len, y - len, x - len, y + len);
-        
-        int handleR = radius / 3;
-        dc.DrawCircle(x - len, y - len, handleR);
-        dc.DrawCircle(x + len, y - len, handleR);
+        // LASTTERT - crossed swords icon for the final territory
+        if (m_icoLastTert.IsOk())
+        {
+            DrawIconCentered(dc, m_icoLastTert, x, y, markerScale);
+        }
+        else
+        {
+            // Fallback: primitive crossed lines
+            dc.SetPen(wxPen(wxColour(200, 50, 50), 2));
+            dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            int len = radius;
+            dc.DrawLine(x - len, y - len, x + len, y + len);
+            dc.DrawLine(x + len, y - len, x - len, y + len);
+            int handleR = radius / 3;
+            dc.DrawCircle(x - len, y - len, handleR);
+            dc.DrawCircle(x + len, y - len, handleR);
+        }
     }
     else if (timeoutRemaining > 0 && !isOwned)
     {
-        wxColour color;
-        if (timeoutRemaining <= 2)
-            color = wxColour(255, 50, 50);
-        else if (timeoutRemaining <= 5)
-            color = wxColour(255, 165, 0);
-        else
-            color = wxColour(255, 255, 100);
-        
-        dc.SetPen(wxPen(color, 2));
-        dc.SetBrush(wxBrush(color, wxBRUSHSTYLE_TRANSPARENT));
-        dc.DrawCircle(x, y, radius);
-        
-        dc.SetTextForeground(color);
-        wxFont font(wxFontInfo(radius).Bold());
-        dc.SetFont(font);
-        
-        wxString num = wxString::Format("%d", timeoutRemaining);
-        wxSize textSize = dc.GetTextExtent(num);
-        dc.DrawText(num, x - textSize.x / 2, y - textSize.y / 2);
-    }
-    else if (isOwned)
-    {
-        dc.SetPen(wxPen(wxColour(50, 200, 50), 2));
-        dc.SetBrush(wxBrush(wxColour(50, 200, 50, 128)));
-        dc.DrawCircle(x, y, radius);
-
-        // Show counter-attack countdown on owned territory
-        if (counterTurnsLeft > 0 && counterTurnsLeft <= 5)
+        // Timeout countdown: show VM_N icon (digit 0-9)
+        int digit = std::clamp(timeoutRemaining, 0, 9);
+        if (m_icoVM[digit].IsOk())
         {
-            wxColour caColor = counterTurnsLeft <= 2 ? wxColour(255, 50, 50) : wxColour(255, 165, 0);
-            dc.SetTextForeground(caColor);
-            wxFont font(wxFontInfo(std::max(7, radius - 2)).Bold());
+            DrawIconCentered(dc, m_icoVM[digit], x, y, markerScale);
+        }
+        else
+        {
+            // Fallback: draw number as text with colored circle
+            wxColour color;
+            if (timeoutRemaining <= 2)
+                color = wxColour(255, 50, 50);
+            else if (timeoutRemaining <= 5)
+                color = wxColour(255, 165, 0);
+            else
+                color = wxColour(255, 255, 100);
+
+            dc.SetPen(wxPen(color, 2));
+            dc.SetBrush(wxBrush(color, wxBRUSHSTYLE_TRANSPARENT));
+            dc.DrawCircle(x, y, radius);
+
+            dc.SetTextForeground(color);
+            wxFont font(wxFontInfo(radius).Bold());
             dc.SetFont(font);
-            wxString num = wxString::Format("%d", counterTurnsLeft);
+
+            wxString num = wxString::Format("%d", timeoutRemaining);
             wxSize textSize = dc.GetTextExtent(num);
             dc.DrawText(num, x - textSize.x / 2, y - textSize.y / 2);
         }
     }
-    else
+    else if (isOwned)
     {
-        dc.SetPen(wxPen(wxColour(200, 50, 50), 2));
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-        dc.DrawCircle(x, y, radius);
+        // Show counter-attack countdown on owned territory using VM_N icons
+        if (counterTurnsLeft > 0 && counterTurnsLeft <= 9)
+        {
+            int digit = std::clamp(counterTurnsLeft, 0, 9);
+            if (m_icoVM[digit].IsOk())
+            {
+                // Draw the countdown icon slightly offset (bottom-right) to not cover the green marker
+                DrawIconCentered(dc, m_icoVM[digit], x + radius, y - radius, markerScale * 0.7);
+            }
+            else
+            {
+                wxColour caColor = counterTurnsLeft <= 2 ? wxColour(255, 50, 50) : wxColour(255, 165, 0);
+                dc.SetTextForeground(caColor);
+                wxFont font(wxFontInfo(std::max(7, radius - 2)).Bold());
+                dc.SetFont(font);
+                wxString num = wxString::Format("%d", counterTurnsLeft);
+                wxSize textSize = dc.GetTextExtent(num);
+                dc.DrawText(num, x - textSize.x / 2, y - textSize.y / 2);
+            }
+        }
     }
+    // else: visible but not owned, no special state — no marker drawn
 }
 
 bool StrategicLevelFrame::AreAllTerritoriesConquered() const
@@ -10805,15 +10950,17 @@ int StrategicLevelFrame::GetTerritoryTimeoutRemaining(int territory_id) const
     auto it = m_territoryTimeoutTurn.find(territory_id);
     if (it == m_territoryTimeoutTurn.end())
         return -1;
-    
+
+    // Sentinel <= 0 means expired (timeout already fired)
+    if (it->second <= 0)
+        return 0;
+
     int remaining = it->second - m_turn;
     return remaining > 0 ? remaining : 0;
 }
 
 void StrategicLevelFrame::AdvanceToNextLevel()
 {
-    wxLogMessage("[STRATEGIC] AdvanceToNextLevel called");
-    
     std::string nextDef;
     
     if (!m_level.next_level_def.empty() && m_level.next_level_def != "none")
@@ -10847,9 +10994,6 @@ void StrategicLevelFrame::AdvanceToNextLevel()
         );
         return;
     }
-    
-    wxLogMessage("[STRATEGIC] Loading next level: %s", nextDef.c_str());
-    
     namespace fs = std::filesystem;
     fs::path base = fs::path(m_level.source_path).parent_path();
     

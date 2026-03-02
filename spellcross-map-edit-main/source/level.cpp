@@ -1,3 +1,14 @@
+//=============================================================================
+// Spellcross restoration
+// ----------------------------------------------------------------------------
+// Map and Levels handling functions, wxWidgets GUI.
+// 
+// This code is part of Spellcross – restoration tools project.
+// (c) 2025-2026, Lubos Horak
+// url: https://github.com/luboshorak/spellcross_restoration_tools
+// Distributed under MIT license, https://opensource.org/licenses/MIT.
+//=============================================================================
+
 #include "level.h"
 #include <fstream>
 #include <sstream>
@@ -273,6 +284,10 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
                 parse_int(args[1], curMission.freq_random_b);
                 continue;
             }
+            if (cmd == "Time" && args.size() >= 1) {
+                int v = 0; if (parse_int(args[0], v)) curMission.time_limit = v;
+                continue;
+            }
 
             unknown_here();
             continue;
@@ -325,6 +340,36 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
             if (t.id == out.end_territory)
             {
                 t.is_final = true;
+                break;
+            }
+        }
+    }
+
+    // Propagate mission Time(X) limits to territory timeout_turns
+    // Territory token (e.g. "m04_07") corresponds to Mission(M04_07A) - the A variant.
+    for (auto& t : out.territories)
+    {
+        if (t.timeout_turns > 0)
+            continue; // already set explicitly
+        const std::string& missionToken = t.mission;
+        if (missionToken.empty() || missionToken == "none")
+            continue;
+
+        std::string tNameUp = missionToken;
+        for (auto& c : tNameUp) c = (char)std::toupper((unsigned char)c);
+
+        // If token ends with digit, also try with 'A' appended (m04_07 -> M04_07A)
+        std::string tNameUpA;
+        if (!tNameUp.empty() && std::isdigit((unsigned char)tNameUp.back()))
+            tNameUpA = tNameUp + "A";
+
+        for (const auto& m : out.missions)
+        {
+            std::string mNameUp = m.name;
+            for (auto& c : mNameUp) c = (char)std::toupper((unsigned char)c);
+            if ((mNameUp == tNameUp || (!tNameUpA.empty() && mNameUp == tNameUpA)) && m.time_limit > 0)
+            {
+                t.timeout_turns = m.time_limit;
                 break;
             }
         }

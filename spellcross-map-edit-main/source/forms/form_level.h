@@ -212,6 +212,9 @@ public:
     
     // Draw territory marker on map (LASTTERT, timeout countdown, owned/enemy)
     void DrawTerritoryMarker(wxDC& dc, int territory_id, int x, int y, double scale);
+
+    // Load strategic icons (VM_0..VM_9, LASTTERT) from SpellGraphics gres
+    void EnsureStrategicIconsLoaded();
     
     // Check if all territories are conquered
     bool AreAllTerritoriesConquered() const;
@@ -443,6 +446,11 @@ public:
 
     std::string m_compositeFolder; // where LEVEL_XX.* were found (for SSD)
 
+    // Strategic map icons (cached wxBitmaps from SpellGraphics ICO resources)
+    bool m_strategicIconsLoaded = false;
+    wxBitmap m_icoVM[10];        // VM_0 .. VM_9 (timeout countdown digits)
+    wxBitmap m_icoLastTert;      // LASTTERT (crossed swords for final territory)
+
     void OnToggleGameMode(wxCommandEvent& ev);
     void OnMapMouseMove(wxMouseEvent& ev);
     void ApplyTerritoryVisibility();
@@ -610,6 +618,8 @@ public:
     void UpdateCommanderRosterSelectionVisuals();
     // Get selected units as PlayerUnitAdd vector for mission launch
     std::vector<LevelData::PlayerUnitAdd> GetSelectedUnitsForLaunch() const;
+    // Check if a roster UID corresponds to a unit currently on cooldown
+    bool IsRosterUidOnCooldown(uint32_t uid) const;
 
     wxButton* m_btnResearch = nullptr;
     wxButton* m_btnInfo = nullptr;       // NEW: Info/encyclopedia button
