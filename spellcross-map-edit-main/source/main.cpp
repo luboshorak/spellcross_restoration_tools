@@ -1234,7 +1234,9 @@ void MainFrame::OnTimer(wxTimerEvent& event)
         canvas->Refresh();
 
     // Mission-end flow (po ticku)
-    if (spell_map->isGameMode() && !m_mission_end_flow)
+    // Note: do NOT require isGameMode() here — game mode may already be off
+    // after all player units died (SetGameMode(0) runs after CheckAndTriggerMissionEnd).
+    if (!m_mission_end_flow)
     {
         SpellMap::MissionEndRequest req;
         if (spell_map->ConsumeMissionEndRequest(req))
@@ -1242,7 +1244,7 @@ void MainFrame::OnTimer(wxTimerEvent& event)
             wxLogMessage("[MISSION_END] ConsumeMissionEndRequest returned true");
             wxLogMessage("[MISSION_END] success=%d, movie_path='%ls', next_level_def='%ls'",
                 req.success ? 1 : 0, req.movie_path.c_str(), req.next_level_def.c_str());
-            
+
             m_mission_end_flow = true;
             m_mission_end_req = req;
 

@@ -10269,6 +10269,9 @@ int SpellMap::Tick()
 			// stop any running enemy phase
 			if (enemy_turn_running)
 				EndEnemyTurn();
+			// Trigger mission end BEFORE disabling game mode
+			// (CheckAndTriggerMissionEnd requires game mode to be active)
+			CheckAndTriggerMissionEnd();
 			SetGameMode(0);
 			unit_selection = NULL;
 			unit_selection_mod = true;
