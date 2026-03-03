@@ -264,18 +264,21 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
+    <TargetName>Spellcross</TargetName>
     <OutDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</IntDir>
     <IncludePath>$(wxwin)include\;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
+    <TargetName>Spellcross</TargetName>
     <OutDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</IntDir>
     <IncludePath>$(wxwin)include\;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release static|x64'">
     <LinkIncremental>false</LinkIncremental>
+    <TargetName>Spellcross</TargetName>
     <OutDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)..\builds\$(Platform)\$(Configuration)\</IntDir>
     <IncludePath>$(wxwin)include\;$(IncludePath)</IncludePath>
