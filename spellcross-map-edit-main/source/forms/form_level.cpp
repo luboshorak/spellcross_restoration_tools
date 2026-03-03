@@ -971,6 +971,41 @@ static void append_text_snippet(wxString& info, const std::string& label, const 
     if (s.size() > kMax)
         s = s.substr(0, kMax) + "...";
 
+    // Reflow hard line breaks from original game text files (designed for 320x200).
+    // Replace single \n with space so text wraps to the full width of the text control.
+    // Preserve paragraph breaks (double \n\n) and leading whitespace lines.
+    {
+        std::string reflowed;
+        reflowed.reserve(s.size());
+        for (size_t i = 0; i < s.size(); ++i)
+        {
+            if (s[i] == '\n')
+            {
+                // Double newline (or more) = paragraph break: keep as-is
+                if (i + 1 < s.size() && s[i + 1] == '\n')
+                {
+                    reflowed.push_back('\n');
+                    reflowed.push_back('\n');
+                    ++i; // skip second \n
+                    // Skip any additional consecutive newlines
+                    while (i + 1 < s.size() && s[i + 1] == '\n')
+                        ++i;
+                }
+                else
+                {
+                    // Single newline: replace with space (reflow)
+                    if (!reflowed.empty() && reflowed.back() != ' ' && reflowed.back() != '\n')
+                        reflowed.push_back(' ');
+                }
+            }
+            else
+            {
+                reflowed.push_back(s[i]);
+            }
+        }
+        s = std::move(reflowed);
+    }
+
     info << "\n" << label << "\n";
     info << wxString(char2wstringCP895(s.c_str())) << "\n";
 }
@@ -1200,6 +1235,11 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
             }
         }
     }
+
+    // Rebuild background and visibility after state load (game mode may have changed,
+    // affecting baked borders and territory fog). Must run AFTER LoadStrategicState().
+    if (m_gameModeEnabled)
+        TryLoadBackground();
 
     RefreshUI();
 
@@ -1572,6 +1612,10 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         return;
     }
 
+    // Rebuild background, visibility and timeouts for loaded state
+    TryLoadBackground();
+    CheckTimeouts();
+
     if (m_selectedTerritory >= 0)
         SelectTerritoryById(m_selectedTerritory);
 
@@ -1679,6 +1723,7 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
     // Rebuild background, because baked borders must be ON in editor mode and OFF in game mode.
     TryLoadBackground();
     ApplyTerritoryVisibility();
+    CheckTimeouts();
     MarkOverlayDirty();
     RefreshUI();
 
@@ -6332,6 +6377,39 @@ static wxString DecodeCp895Text(const std::string& bytes)
         ws = ws.Left(tilde);
 
     ws.Trim(true).Trim(false);
+
+    // Reflow hard line breaks from original game text files (designed for 320x200).
+    // Replace single \n with space so text wraps to the full width of the text control.
+    // Preserve paragraph breaks (double \n\n).
+    {
+        wxString reflowed;
+        reflowed.reserve(ws.length());
+        for (size_t i = 0; i < ws.length(); ++i)
+        {
+            if (ws[i] == '\n')
+            {
+                if (i + 1 < ws.length() && ws[i + 1] == '\n')
+                {
+                    reflowed += '\n';
+                    reflowed += '\n';
+                    ++i;
+                    while (i + 1 < ws.length() && ws[i + 1] == '\n')
+                        ++i;
+                }
+                else
+                {
+                    if (!reflowed.empty() && reflowed.Last() != ' ' && reflowed.Last() != '\n')
+                        reflowed += ' ';
+                }
+            }
+            else
+            {
+                reflowed += ws[i];
+            }
+        }
+        ws = std::move(reflowed);
+    }
+
     return ws;
 }
 
@@ -7337,10 +7415,6 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
             if (!texts_dir.empty())
                 try_append_single_text(info, texts_dir, cur, "", "Briefing");
-
-            // Show intro text if available
-            if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none" && !texts_dir.empty())
-                try_append_single_text(info, texts_dir, t.intro_mission, "", "Intro");
         }
         else
         {
@@ -10203,6 +10277,7 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
     m_pendingMission.valid = false;
 
     ApplyTerritoryVisibility();
+    CheckTimeouts();
     MarkOverlayDirty();
 
     SaveMissionStats();
