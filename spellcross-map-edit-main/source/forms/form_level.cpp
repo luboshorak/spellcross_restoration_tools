@@ -1290,6 +1290,22 @@ struct ResearchPersistLoadView
 static thread_local const ResearchPersistSaveView* g_researchPersistSave = nullptr;
 static thread_local ResearchPersistLoadView* g_researchPersistLoad = nullptr;
 
+// ------------------------------------------------------------------
+// Unit-state persistence glue (same pattern as research)
+// ------------------------------------------------------------------
+struct UnitStatePersistSaveView
+{
+    const std::vector<StrategicLevelFrame::UnitInstanceState>* states = nullptr;
+};
+
+struct UnitStatePersistLoadView
+{
+    std::vector<StrategicLevelFrame::UnitInstanceState>* states = nullptr;
+};
+
+static thread_local const UnitStatePersistSaveView* g_unitStatePersistSave = nullptr;
+static thread_local UnitStatePersistLoadView* g_unitStatePersistLoad = nullptr;
+
 static bool LoadStrategicStateFile(
     const std::filesystem::path& path,
     const LevelData& level,
@@ -1461,12 +1477,29 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
     const int slot = dlg.GetSelection() + 1;
     const auto path = GetStrategicSaveSlotPath(m_level, slot);
 
-    // Save full strategic state into slot file
+    // Save full strategic state into slot file (with research + unit state persistence)
+    ResearchPersistSaveView rsv;
+    rsv.activeId = m_researchActiveId;
+    rsv.activeIndex = m_researchActiveIndex;
+    rsv.allocPerTurn = m_researchAllocPerTurn;
+    rsv.progressById = &m_researchProgressById;
+    rsv.completed = &m_researchCompleted;
+    const ResearchPersistSaveView* prevR = g_researchPersistSave;
+    g_researchPersistSave = &rsv;
+
+    UnitStatePersistSaveView usv;
+    usv.states = &m_unitStates;
+    const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
+    g_unitStatePersistSave = &usv;
+
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         /*timestamp*/NowIsoLocal());
+
+    g_unitStatePersistSave = prevU;
+    g_researchPersistSave = prevR;
 
     wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
 }
@@ -1517,15 +1550,26 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 
     std::string loaded_level_def;
     std::string ts;
+
+    // Hook unit state persistence for load
+    std::vector<UnitInstanceState> loadedUnitStates;
+    UnitStatePersistLoadView ulv;
+    ulv.states = &loadedUnitStates;
+    UnitStatePersistLoadView* prevUL = g_unitStatePersistLoad;
+    g_unitStatePersistLoad = &ulv;
+
     if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         &loaded_level_def, &ts))
     {
+        g_unitStatePersistLoad = prevUL;
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
         return;
     }
+    g_unitStatePersistLoad = prevUL;
+    m_unitStates = std::move(loadedUnitStates);
 
     if (GetMenuBar())
     {
@@ -1577,10 +1621,19 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         std::vector<int> owned2;
         std::unordered_map<int, TerritoryResourceState> terrRes;
 
+        // Hook unit state persistence for cross-level load
+        std::vector<UnitInstanceState> loadedUnitStates2;
+        UnitStatePersistLoadView ulv2;
+        ulv2.states = &loadedUnitStates2;
+        UnitStatePersistLoadView* prevUL2 = g_unitStatePersistLoad;
+        g_unitStatePersistLoad = &ulv2;
+
         if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
+            g_unitStatePersistLoad = prevUL2;
             wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
             return;
         }
+        g_unitStatePersistLoad = prevUL2;
 
         // Open new Strategic Level window for that DEF and apply loaded state.
         auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
@@ -1593,6 +1646,7 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         win->m_territoryCurrentMission = std::move(terrMission);
         win->m_territoryLaunchCount = std::move(terrLaunch);
         win->m_playerUnits = std::move(units);
+        win->m_unitStates = std::move(loadedUnitStates2);
         win->m_playerCommanders = std::move(playerCmds2);
         win->m_availableCommanders = std::move(availCmds2);
         win->m_cmdGenWindowStartTurn = windowStart2;
@@ -8180,6 +8234,55 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level)
     return GetStrategicSaveDir(level) / "autosave.json";
 }
 
+// Extract a JSON array or object value for a given key, properly handling
+// nested brackets and quoted strings.  Returns the full block including
+// the outer delimiters ("[...]" or "{...}"), or "null", or empty string.
+static std::string ExtractJsonBlock(const std::string& data, const char* key)
+{
+    const std::string needle = std::string("\"" ) + key + "\"";
+    size_t pos = data.find(needle);
+    if (pos == std::string::npos)
+        return {};
+    pos = data.find(':', pos + needle.size());
+    if (pos == std::string::npos)
+        return {};
+    ++pos;
+    while (pos < data.size() && std::isspace(static_cast<unsigned char>(data[pos])))
+        ++pos;
+    if (pos >= data.size())
+        return {};
+    if (pos + 4 <= data.size() && data.compare(pos, 4, "null") == 0)
+        return "null";
+    const char open = data[pos];
+    char close;
+    if (open == '[') close = ']';
+    else if (open == '{') close = '}';
+    else return {};
+    int depth = 0;
+    bool inStr = false;
+    bool esc = false;
+    for (size_t i = pos; i < data.size(); ++i)
+    {
+        const char c = data[i];
+        if (inStr)
+        {
+            if (esc) { esc = false; continue; }
+            if (c == '\\') { esc = true; continue; }
+            if (c == '"') inStr = false;
+            continue;
+        }
+        if (c == '"') { inStr = true; continue; }
+        if (c == open) ++depth;
+        else if (c == close)
+        {
+            --depth;
+            if (depth == 0)
+                return data.substr(pos, i - pos + 1);
+        }
+    }
+    return {};
+}
+
 static bool LoadStrategicStateFile(
     const std::filesystem::path& path,
     const LevelData& level,
@@ -8245,6 +8348,15 @@ static bool LoadStrategicStateFile(
     if (data.empty())
         return false;
 
+    // Normalize newlines to spaces so regex (.*?) can match across lines
+    // (ECMAScript '.' does not match \n). JSON string values use escaped \\n,
+    // so replacing literal newlines with spaces is safe.
+    for (auto& ch : data)
+    {
+        if (ch == '\n' || ch == '\r')
+            ch = ' ';
+    }
+
     std::smatch m;
 
     // version/level_def/timestamp are optional but recommended
@@ -8285,64 +8397,62 @@ static bool LoadStrategicStateFile(
             int id = std::stoi((*it)[1].str());
             ownedTerritories.push_back(id);
         }
+    }
 
+    // research_state (optional)
+    if (g_researchPersistLoad && g_researchPersistLoad->progressById && g_researchPersistLoad->completed)
+    {
+        // defaults
+        if (g_researchPersistLoad->activeId) *g_researchPersistLoad->activeId = -1;
+        if (g_researchPersistLoad->activeIndex) *g_researchPersistLoad->activeIndex = -1;
+        if (g_researchPersistLoad->allocPerTurn) *g_researchPersistLoad->allocPerTurn = 0;
+        g_researchPersistLoad->progressById->clear();
+        g_researchPersistLoad->completed->clear();
 
-        // research_state (optional)
-        if (g_researchPersistLoad && g_researchPersistLoad->progressById && g_researchPersistLoad->completed)
+        // Extract "research_state": {...} with proper bracket matching (handles nested {})
+        const std::string rsVal = ExtractJsonBlock(data, "research_state");
         {
-            // defaults
-            if (g_researchPersistLoad->activeId) *g_researchPersistLoad->activeId = -1;
-            if (g_researchPersistLoad->activeIndex) *g_researchPersistLoad->activeIndex = -1;
-            if (g_researchPersistLoad->allocPerTurn) *g_researchPersistLoad->allocPerTurn = 0;
-            g_researchPersistLoad->progressById->clear();
-            g_researchPersistLoad->completed->clear();
-
-            // capture "research_state": { ... }  (or null)
-            std::smatch mmRS;
-            std::regex rs_re(R"("research_state"\s*:\s*(null|\{.*?\}))", std::regex_constants::ECMAScript | std::regex_constants::icase);
-            if (std::regex_search(data, mmRS, rs_re) && mmRS.size() > 1)
+            if (!rsVal.empty() && rsVal != "null" && rsVal[0] == '{')
             {
-                const std::string rsVal = mmRS[1].str();
-                if (!rsVal.empty() && rsVal[0] == '{')
+                (void)ParseJsonIntField(rsVal, "active_id", *g_researchPersistLoad->activeId);
+                (void)ParseJsonIntField(rsVal, "active_index", *g_researchPersistLoad->activeIndex);
+                (void)ParseJsonIntField(rsVal, "alloc_per_turn", *g_researchPersistLoad->allocPerTurn);
+
+                // progress object
+                std::smatch mmProg;
+                std::regex prog_re(R"("progress"\s*:\s*\{(.*?)\})", std::regex_constants::ECMAScript | std::regex_constants::icase);
+                if (std::regex_search(rsVal, mmProg, prog_re) && mmProg.size() > 1)
                 {
-                    (void)ParseJsonIntField(rsVal, "active_id", *g_researchPersistLoad->activeId);
-                    (void)ParseJsonIntField(rsVal, "active_index", *g_researchPersistLoad->activeIndex);
-                    (void)ParseJsonIntField(rsVal, "alloc_per_turn", *g_researchPersistLoad->allocPerTurn);
-
-                    // progress object
-                    std::smatch mmProg;
-                    std::regex prog_re(R"("progress"\s*:\s*\{(.*?)\})", std::regex_constants::ECMAScript | std::regex_constants::icase);
-                    if (std::regex_search(rsVal, mmProg, prog_re) && mmProg.size() > 1)
+                    const std::string pobj = mmProg[1].str();
+                    // match pairs like "12": 3
+                    std::regex pair_re("\"(\\d+)\"\\s*:\\s*(-?\\d+)");
+                    for (auto it = std::sregex_iterator(pobj.begin(), pobj.end(), pair_re); it != std::sregex_iterator(); ++it)
                     {
-                        const std::string pobj = mmProg[1].str();
-                        // match pairs like "12": 3
-                        std::regex pair_re("\\\\\"(\\\\d+)\\\\\"\\\\s*:\\\\s*(-?\\\\d+)");
-                        for (auto it = std::sregex_iterator(pobj.begin(), pobj.end(), pair_re); it != std::sregex_iterator(); ++it)
-                        {
-                            const int id = std::atoi((*it)[1].str().c_str());
-                            const int val = std::atoi((*it)[2].str().c_str());
-                            (*g_researchPersistLoad->progressById)[id] = val;
-                        }
+                        const int id = std::atoi((*it)[1].str().c_str());
+                        const int val = std::atoi((*it)[2].str().c_str());
+                        (*g_researchPersistLoad->progressById)[id] = val;
                     }
+                }
 
-                    // completed array
-                    std::smatch mmComp;
-                    std::regex comp_re(R"("completed"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
-                    if (std::regex_search(rsVal, mmComp, comp_re) && mmComp.size() > 1)
+                // completed array
+                std::smatch mmComp;
+                std::regex comp_re(R"("completed"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
+                if (std::regex_search(rsVal, mmComp, comp_re) && mmComp.size() > 1)
+                {
+                    const std::string carr = mmComp[1].str();
+                    std::regex num_re("(-?\\d+)");
+                    for (auto it = std::sregex_iterator(carr.begin(), carr.end(), num_re); it != std::sregex_iterator(); ++it)
                     {
-                        const std::string carr = mmComp[1].str();
-                        std::regex num_re("(-?\\\\d+)");
-                        for (auto it = std::sregex_iterator(carr.begin(), carr.end(), num_re); it != std::sregex_iterator(); ++it)
-                        {
-                            const int id = std::atoi((*it)[1].str().c_str());
-                            g_researchPersistLoad->completed->insert(id);
-                        }
+                        const int id = std::atoi((*it)[1].str().c_str());
+                        g_researchPersistLoad->completed->insert(id);
                     }
                 }
             }
         }
+    }
 
-        // resources (optional)
+    // resources (optional)
+    {
         std::smatch mmRes;
         std::regex res_arr_re(R"("resources"\s*:\s*\[(.*?)\])", std::regex_constants::ECMAScript | std::regex_constants::icase);
         if (std::regex_search(data, mmRes, res_arr_re) && mmRes.size() > 1)
@@ -8400,21 +8510,57 @@ static bool LoadStrategicStateFile(
         territoryLaunchCount[id] = launches;
     }
 
-    // units list (as before)
-    std::regex unit_re("\\{\\s*\"unit_id\"\\s*:\\s*(\\d+)\\s*,\\s*\"count\"\\s*:\\s*(\\d+)\\s*,\\s*\"health\"\\s*:\\s*(\\d+)\\s*\\}");
-    auto begin = std::sregex_iterator(data.begin(), data.end(), unit_re);
-    auto end = std::sregex_iterator();
-    for (auto it = begin; it != end; ++it)
+    // units list – parse each unit object individually to also extract state fields
     {
-        const auto& match = *it;
-        if (match.size() < 4)
-            continue;
-        LevelData::PlayerUnitAdd entry;
-        entry.unit_id = std::stoi(match[1].str());
-        entry.count = std::stoi(match[2].str());
-        entry.health = std::stoi(match[3].str());
-        entry.extra = "-";
-        units.push_back(entry);
+        // Extract "units": [...] with proper bracket matching (handles nested [] in upgrades)
+        std::string unitsBlock = ExtractJsonBlock(data, "units");
+        std::string unitsArr;
+        if (unitsBlock.size() >= 2 && unitsBlock.front() == '[' && unitsBlock.back() == ']')
+            unitsArr = unitsBlock.substr(1, unitsBlock.size() - 2);
+
+        if (!unitsArr.empty())
+        {
+            std::regex obj_re("\\{[^\\}]*\\}");
+            for (auto it = std::sregex_iterator(unitsArr.begin(), unitsArr.end(), obj_re); it != std::sregex_iterator(); ++it)
+            {
+                const std::string obj = (*it)[0].str();
+                int uid = -1, cnt = 0, hp = 100;
+                if (!ParseJsonIntField(obj, "unit_id", uid) || uid < 0)
+                    continue;
+                (void)ParseJsonIntField(obj, "count", cnt);
+                (void)ParseJsonIntField(obj, "health", hp);
+
+                LevelData::PlayerUnitAdd entry;
+                entry.unit_id = uid;
+                entry.count = cnt;
+                entry.health = hp;
+                entry.extra = "-";
+                units.push_back(entry);
+
+                // Parse unit instance state (optional fields)
+                if (g_unitStatePersistLoad && g_unitStatePersistLoad->states)
+                {
+                    StrategicLevelFrame::UnitInstanceState st;
+                    (void)ParseJsonIntField(obj, "cooldown", st.cooldown_turns);
+                    (void)ParseJsonIntField(obj, "experience", st.experience);
+                    (void)ParseJsonIntField(obj, "level", st.level);
+                    (void)ParseJsonStringField(obj, "custom_name", st.custom_name);
+
+                    // Parse upgrades array: "upgrades": [1, 3, 5]
+                    std::smatch mmUpg;
+                    std::regex upg_re(R"("upgrades"\s*:\s*\[(.*?)\])");
+                    if (std::regex_search(obj, mmUpg, upg_re) && mmUpg.size() > 1)
+                    {
+                        const std::string uArr = mmUpg[1].str();
+                        std::regex num_re("(-?\\d+)");
+                        for (auto uit = std::sregex_iterator(uArr.begin(), uArr.end(), num_re); uit != std::sregex_iterator(); ++uit)
+                            st.upgrades.push_back(std::stoi((*uit)[1].str()));
+                    }
+
+                    g_unitStatePersistLoad->states->push_back(std::move(st));
+                }
+            }
+        }
     }
 
 
@@ -8513,7 +8659,7 @@ static void SaveStrategicStateFile(
         {
             if (!first) f << ", ";
             first = false;
-            f << "\\\"" << kv.first << "\\\": " << kv.second;
+            f << "\"" << kv.first << "\": " << kv.second;
         }
         f << "},\n";
 
@@ -8609,12 +8755,35 @@ static void SaveStrategicStateFile(
     }
     f << "  ],\n";
 
-    // units
+    // units (with per-unit instance state if available)
     f << "  \"units\": [\n";
     for (size_t i = 0; i < units.size(); ++i)
     {
         const auto& u = units[i];
-        f << "    {\"unit_id\": " << u.unit_id << ", \"count\": " << u.count << ", \"health\": " << u.health << "}";
+        f << "    {\"unit_id\": " << u.unit_id << ", \"count\": " << u.count << ", \"health\": " << u.health;
+
+        // Write unit instance state (cooldown, experience, level, upgrades, custom_name)
+        if (g_unitStatePersistSave && g_unitStatePersistSave->states && i < g_unitStatePersistSave->states->size())
+        {
+            const auto& st = (*g_unitStatePersistSave->states)[i];
+            f << ", \"cooldown\": " << st.cooldown_turns;
+            f << ", \"experience\": " << st.experience;
+            f << ", \"level\": " << st.level;
+            if (!st.custom_name.empty())
+                f << ", \"custom_name\": \"" << EscapeJson(st.custom_name) << "\"";
+            if (!st.upgrades.empty())
+            {
+                f << ", \"upgrades\": [";
+                for (size_t ui = 0; ui < st.upgrades.size(); ++ui)
+                {
+                    f << st.upgrades[ui];
+                    if (ui + 1 < st.upgrades.size()) f << ", ";
+                }
+                f << "]";
+            }
+        }
+
+        f << "}";
         if (i + 1 < units.size())
             f << ",";
         f << "\n";
@@ -8651,10 +8820,18 @@ void StrategicLevelFrame::LoadStrategicState()
     ResearchPersistLoadView* prevR = g_researchPersistLoad;
     g_researchPersistLoad = &rlv;
 
+    // Hook unit state persistence
+    std::vector<UnitInstanceState> loadedUnitStates;
+    UnitStatePersistLoadView ulv;
+    ulv.states = &loadedUnitStates;
+    UnitStatePersistLoadView* prevU = g_unitStatePersistLoad;
+    g_unitStatePersistLoad = &ulv;
+
     const bool ok = LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
         playerCmds, availCmds, windowStart, genCount,
         gm, owned, terrRes,
         &level_def, &ts);
+    g_unitStatePersistLoad = prevU;
     g_researchPersistLoad = prevR;
 
     if (ok)
@@ -8676,6 +8853,7 @@ void StrategicLevelFrame::LoadStrategicState()
         m_territoryCurrentMission = std::move(terrM);
         m_territoryLaunchCount = std::move(terrL);
         m_playerUnits = std::move(units);
+        m_unitStates = std::move(loadedUnitStates);
         m_playerCommanders = std::move(playerCmds);
         m_availableCommanders = std::move(availCmds);
         m_cmdGenWindowStartTurn = windowStart;
@@ -8720,6 +8898,11 @@ void StrategicLevelFrame::SaveStrategicState() const
     const ResearchPersistSaveView* prev = g_researchPersistSave;
     g_researchPersistSave = &rsv;
 
+    UnitStatePersistSaveView usv;
+    usv.states = &m_unitStates;
+    const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
+    g_unitStatePersistSave = &usv;
+
     SaveStrategicStateFile(
         path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
         m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
@@ -8727,6 +8910,7 @@ void StrategicLevelFrame::SaveStrategicState() const
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         NowIsoLocal());
 
+    g_unitStatePersistSave = prevU;
     g_researchPersistSave = prev;
 }
 
@@ -11119,12 +11303,10 @@ void StrategicLevelFrame::AdvanceToNextLevel()
         newWin->m_playerUnits.push_back(su);
     }
 
-    if (newWin->m_gameModeEnabled)
-    {
-        newWin->TryLoadBackground();
-        newWin->ApplyTerritoryVisibility();
-        newWin->RefreshUI();
-    }
+    // Always rebuild background, visibility and UI after transferring state
+    newWin->TryLoadBackground();
+    newWin->ApplyTerritoryVisibility();
+    newWin->RefreshUI();
 
     // Transfer all-time loss stats (level stats reset for new level)
     newWin->m_lossStats.alliance_all = m_lossStats.alliance_all;
