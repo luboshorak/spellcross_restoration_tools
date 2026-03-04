@@ -981,11 +981,9 @@ void MainFrame::OnClose(wxCloseEvent& ev)
     else if(ev.GetId() == ID_MSG_WIN && form_message)
     {
         // unit multi-action menu
-        wxLogMessage("[MISSION_END] OnClose: ID_MSG_WIN received, calling ResultCallback");
         form_message->ResultCallback(); // exec result callback (calling it from here to have in this thread)
         delete form_message;
         form_message = NULL;
-        wxLogMessage("[MISSION_END] OnClose: form_message deleted and set to NULL");
     }
     else if(ev.GetId() == ID_VIDEO_BOX_WIN && form_video_box)
     {
@@ -1181,12 +1179,9 @@ static bool g_cutscene_handled = false;
 
 void MainFrame::StartMissionEndFlow()
 {
-    wxLogMessage("[MISSION_END] StartMissionEndFlow() called, movie_path='%ls'", m_mission_end_req.movie_path.c_str());
-    
     // 1) Pokud je video, přehraj ho a až pak pokračuj
     if (!m_mission_end_req.movie_path.empty())
     {
-        wxLogMessage("[MISSION_END] Playing cutscene video before returning to strategic");
         
         // zavři případný seznam videí
         if (form_videos)
@@ -1218,7 +1213,6 @@ void MainFrame::StartMissionEndFlow()
     }
 
     // 2) Bez videa – rovnou přejdi na strategickou
-    wxLogMessage("[MISSION_END] No cutscene video, proceeding directly to strategic level");
     OpenStrategicAndLoadNext();
 }
 
@@ -1241,10 +1235,6 @@ void MainFrame::OnTimer(wxTimerEvent& event)
         SpellMap::MissionEndRequest req;
         if (spell_map->ConsumeMissionEndRequest(req))
         {
-            wxLogMessage("[MISSION_END] ConsumeMissionEndRequest returned true");
-            wxLogMessage("[MISSION_END] success=%d, movie_path='%ls', next_level_def='%ls'",
-                req.success ? 1 : 0, req.movie_path.c_str(), req.next_level_def.c_str());
-
             m_mission_end_flow = true;
             m_mission_end_req = req;
 
@@ -1306,59 +1296,48 @@ static std::string find_def_candidate(const std::string& name)
 
 void MainFrame::OpenStrategicAndLoadNext()
 {
-    wxLogMessage("[MISSION_END] OpenStrategicAndLoadNext() called, success=%d", m_mission_end_req.success ? 1 : 0);
-    
     const std::wstring nextW = m_mission_end_req.next_level_def;
 
     // Return to existing strategic level with mission result
     if (m_strategicLevel)
     {
-        wxLogMessage("[MISSION_END] Existing strategic level found, returning to it");
-        
         // Pass mission result if we have pending mission info
         if (m_strategicLevel->m_pendingMission.valid)
         {
-            wxLogMessage("[MISSION_END] Calling HandleMissionResult: territory=%d, success=%d, token='%s'",
-                m_strategicLevel->m_pendingMission.territory_id,
-                m_mission_end_req.success ? 1 : 0,
-                m_strategicLevel->m_pendingMission.mission_token.c_str());
-            
             m_strategicLevel->HandleMissionResult(
                 m_strategicLevel->m_pendingMission.territory_id,
                 m_mission_end_req.success,
                 m_strategicLevel->m_pendingMission.mission_token
             );
         }
-        else
+        // else: no pending mission to process
+
+        // HandleMissionResult may have called AdvanceToNextLevel() which
+        // replaced m_strategicLevel with a new window (already shown).
+        // Show/Raise the current strategic level (whichever it is now).
+        if (m_strategicLevel)
         {
-            wxLogMessage("[MISSION_END] WARNING: m_pendingMission.valid is false - no mission result to process");
+            m_strategicLevel->Show();
+            m_strategicLevel->Raise();
         }
-        
-        // Show and raise strategic level
-        m_strategicLevel->Show();
-        m_strategicLevel->Raise();
-        
+
         // Reset flow flag
         m_mission_end_flow = false;
-        
+
         // Exit game mode UI (return to editor-like state for strategic view)
         // Note: strategic level handles its own game mode state
-        
-        wxLogMessage("[MISSION_END] Strategic level shown and raised");
         return;
     }
-    
-    wxLogMessage("[MISSION_END] No existing strategic level, checking next_level_def='%ls'", nextW.c_str());
-    
-    // Original: Load next level DEF if specified (used for level transitions like LEVEL_01 -> LEVEL_02)
+
+    // Fallback: no existing strategic level. Create one from next_level_def.
+    // This path is used when a mission was launched outside the strategic UI
+    // (e.g., direct map open) or if the strategic window was lost.
     std::string nextDef = nextW.empty()
         ? std::string()
         : find_def_candidate(std::string(nextW.begin(), nextW.end()));
 
     if (!nextDef.empty())
     {
-        wxLogMessage("[MISSION_END] Loading next level DEF: %s", nextDef.c_str());
-        
         LevelData lvl;
         std::string err;
         LevelLoader loader;
@@ -1376,7 +1355,7 @@ void MainFrame::OpenStrategicAndLoadNext()
     }
     else
     {
-        wxLogMessage("[MISSION_END] No next_level_def and no strategic level - nowhere to return!");
+        // No next_level_def and no strategic level
     }
 
     // reset flow flag

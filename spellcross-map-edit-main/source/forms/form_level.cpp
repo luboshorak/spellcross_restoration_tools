@@ -1162,7 +1162,7 @@ static std::vector<int> ChooseStartTerritories_NoBriefing(const LevelData& level
     return out;
 }
 
-StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level)
+StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level, bool skipAutosave)
     : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
         wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
     m_main(parent),
@@ -1201,6 +1201,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     // Default: start NEW strategic state (do NOT auto-load autosave).
     // If autosave exists, ask user.
+    if (!skipAutosave)
     {
         namespace fs = std::filesystem;
         std::error_code ec;
@@ -1582,7 +1583,7 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         }
 
         // Open new Strategic Level window for that DEF and apply loaded state.
-        auto* win = new StrategicLevelFrame(m_main, lvl);
+        auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
 
         win->m_turn = turn;
         win->m_money = money;
@@ -4161,10 +4162,7 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
     case UNITS_TAB_RECRUIT:
     {
         if (u.health >= 100)
-        {
-            wxMessageBox("Unit is already at full strength.", "Recruit", wxOK | wxICON_INFORMATION, this);
             return;
-        }
 
         int q = (m_unitsSelectedUpgrade >= 0 && m_unitsSelectedUpgrade < RECRUIT_QUALITY_COUNT) ? m_unitsSelectedUpgrade : 1;
 
@@ -4195,9 +4193,6 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
         m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
 
         m_money -= cost;
-
-        wxMessageBox(wxString::Format("%s completed.\nExperience change: -%d\nUnit ready in %d turns.",
-            RECRUIT_QUALITY_NAMES[q], xpLoss, time), "Recruit", wxOK | wxICON_INFORMATION, this);
     }
     break;
 
@@ -4234,9 +4229,6 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
             m_money -= cost;
             ups.push_back(upgId);
             m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
-
-            wxMessageBox(wxString::Format("Upgrade installed.\nCost: %d\nReady in %d turns.", cost, time),
-                "Upgrade", wxOK | wxICON_INFORMATION, this);
             break;
         }
 
@@ -4281,9 +4273,6 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
         m_unitStates[m_unitsSelectedUnit].level = xp / 100;
 
         m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
-
-        wxMessageBox(wxString::Format("Unit re-armed to %s.\nExperience change: -%d\nReady in %d turns.",
-            toName, xpLoss, time), "Re-arm", wxOK | wxICON_INFORMATION, this);
     }
     break;
 
@@ -7088,9 +7077,6 @@ void StrategicLevelFrame::ApplyResearchTickEndTurn()
         prog = cost;
         m_researchCompleted.insert(cur.id);
         m_researchAllocPerTurn = 0; // auto-stop when done
-        wxMessageBox(
-            wxString::Format("Research complete: %s", cur.title),
-            "Research", wxOK | wxICON_INFORMATION, this);
     }
 }
 
@@ -10218,6 +10204,14 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
         RecomputePlayerRank();
 
         const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
+        // Territory tokens like "m01_01" don't include the variant suffix;
+        // mission names in the DEF are "M01_01A". Try with 'A' appended.
+        if (!mission)
+        {
+            std::string tokenUp = to_upper(mission_token);
+            if (!tokenUp.empty() && std::isdigit((unsigned char)tokenUp.back()))
+                mission = FindMissionByNameUpper(tokenUp + "A");
+        }
 
         // Play end_ok_video if defined
         if (mission && !mission->end_ok_video.empty() && mission->end_ok_video != "none")
@@ -10260,6 +10254,12 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
         m_stats.missions_failed++;
 
         const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
+        if (!mission)
+        {
+            std::string tokenUp = to_upper(mission_token);
+            if (!tokenUp.empty() && std::isdigit((unsigned char)tokenUp.back()))
+                mission = FindMissionByNameUpper(tokenUp + "A");
+        }
 
         // Play end_bad_video if defined
         if (mission && !mission->end_bad_video.empty() && mission->end_bad_video != "none")
@@ -11115,7 +11115,7 @@ void StrategicLevelFrame::AdvanceToNextLevel()
         return;
     }
     
-    auto* newWin = new StrategicLevelFrame(m_main, lvl);
+    auto* newWin = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
 
     // Transfer player progress to next level
     newWin->m_player = m_player;
@@ -11123,6 +11123,29 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     newWin->m_research = m_research;
     newWin->m_playerUnits = m_playerUnits;
     newWin->m_playerCommanders = m_playerCommanders;
+    newWin->m_gameModeEnabled = m_gameModeEnabled;
+    newWin->m_unitStates = m_unitStates;
+    newWin->m_researchCompleted = m_researchCompleted;
+    newWin->m_researchProgressById = m_researchProgressById;
+
+    if (newWin->GetMenuBar())
+    {
+        auto* item = newWin->GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
+        if (item) item->Check(newWin->m_gameModeEnabled);
+    }
+
+    // Merge start_units from the new level (bonus units the player receives at level start)
+    for (const auto& su : lvl.start_units)
+    {
+        newWin->m_playerUnits.push_back(su);
+    }
+
+    if (newWin->m_gameModeEnabled)
+    {
+        newWin->TryLoadBackground();
+        newWin->ApplyTerritoryVisibility();
+        newWin->RefreshUI();
+    }
 
     // Transfer all-time loss stats (level stats reset for new level)
     newWin->m_lossStats.alliance_all = m_lossStats.alliance_all;
@@ -11130,6 +11153,9 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     // Level-scope stats start fresh
     newWin->m_lossStats.alliance_level = {};
     newWin->m_lossStats.enemy_level = {};
+
+    // Persist the transferred state immediately so it survives restarts
+    newWin->SaveStrategicState();
 
     // Update parent reference
     if (m_main)

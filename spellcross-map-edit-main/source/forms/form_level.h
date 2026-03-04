@@ -26,7 +26,7 @@ class SpellData;
 class StrategicLevelFrame : public wxFrame
 {
 public:
-    StrategicLevelFrame(MainFrame* parent, const LevelData& level);
+    StrategicLevelFrame(MainFrame* parent, const LevelData& level, bool skipAutosave = false);
 
     void BuildUI();
     void RefreshUI();

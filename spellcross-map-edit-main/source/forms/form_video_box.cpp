@@ -7,6 +7,7 @@
 #include <wx/msgdlg.h>
 #include <filesystem>
 #include <stdexcept>
+#include <algorithm>
 
 // load video and make form
 FormVideoBox::FormVideoBox(wxPanel* parent,wxWindowID win_id,SpellData* spell_data,std::string name,int zoom)
@@ -24,7 +25,8 @@ FormVideoBox::FormVideoBox(wxPanel* parent,wxWindowID win_id,SpellData* spell_da
     std::wstring archive_path;
     std::vector<std::wstring> candidates;
 
-    const std::string ext = std::filesystem::path(entry_name).extension().string();
+    std::string ext = std::filesystem::path(entry_name).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
     if (ext == ".DP2")
     {
         // in CZE version, DP2 video loops are placed in SPEAKER.FS
@@ -269,11 +271,8 @@ void FormVideoBox::OnPaintTab(wxPaintEvent& event)
     auto horz = m_spelldata->gres.wm_frame_horz;
     auto vert = m_spelldata->gres.wm_frame_vert;
     
-    if(m_frame && m_video && m_video->GetFramesCount() && m_frame_id >= 0 && m_frame_id < m_video->GetFramesCount())
+    if(m_frame && m_video && m_video->GetFramesCount() && m_frame_id >= 0 && m_frame_id < m_video->GetFramesCount() && !m_video->isCAN())
     {
-        if(m_video->isCAN())
-            return;
-
         // get frame size
         auto [frame_x,frame_y] = m_video->GetResolution();
 

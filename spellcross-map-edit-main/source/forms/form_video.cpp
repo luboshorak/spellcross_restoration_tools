@@ -217,11 +217,8 @@ void FormVideo::OnPaintCanvas(wxPaintEvent& event)
 	int surf_y = bmp.GetHeight();
 	
 	int frame_id = slideOffset->GetValue();
-	if(m_data && m_data->GetFramesCount() && frame_id < m_data->GetFramesCount())
+	if(m_data && m_data->GetFramesCount() && frame_id < m_data->GetFramesCount() && !m_data->isCAN())
 	{
-		if(m_data->isCAN())
-			return;
-
 		// resize canvas
 		auto [frame_x,frame_y] = m_data->GetResolution();
 		

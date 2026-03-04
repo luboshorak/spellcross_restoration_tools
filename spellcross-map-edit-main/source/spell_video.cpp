@@ -13,6 +13,7 @@
 
 #include <fstream>
 #include <filesystem>
+#include <algorithm>
 
 // ------------------------------------------------------------------------------------------------
 // Video resources handling
@@ -112,15 +113,18 @@ SpellVideo::SpellVideo(std::wstring path)
 	fr.read((char*)data.data(),flen);
 	fr.close();
 
-	if(std::filesystem::path(path).extension().compare(".CAN") == 0 && DecodeCAN(data.data(), data.size()))
+	std::string ext = std::filesystem::path(path).extension().string();
+	std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
+
+	if(ext == ".CAN" && DecodeCAN(data.data(), data.size()))
 	{
 		throw runtime_error("Decoding CAN video file failed!");
 	}	
-	else if(std::filesystem::path(path).extension().compare(".DPK") == 0 && DecodeDPK(data.data(),data.size()))
+	else if(ext == ".DPK" && DecodeDPK(data.data(),data.size()))
 	{
 		throw runtime_error("Decoding DPK video file failed!");
 	}
-	else if(std::filesystem::path(path).extension().compare(".DP2") == 0)
+	else if(ext == ".DP2")
 	{		
 		// try open complement wave file
 		std::wstring wave_path = std::filesystem::path(path).replace_extension("").wstring();
@@ -156,20 +160,23 @@ SpellVideo::SpellVideo(FSarchive* fs,std::string name)
 	if(fs->GetFile(name, &v_data, &v_size))
 		throw runtime_error(string_format("Loading video file: video file \"%s\" not found in archive!",name));
 	
-	if(std::filesystem::path(name).extension().compare(".CAN") == 0 && DecodeCAN(v_data, v_size))
+	std::string ext = std::filesystem::path(name).extension().string();
+	std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
+
+	if(ext == ".CAN" && DecodeCAN(v_data, v_size))
 	{
 		throw runtime_error("Decoding CAN video file failed!");
 	}
-	else if(std::filesystem::path(name).extension().compare(".DPK") == 0 && DecodeDPK(v_data,v_size))
+	else if(ext == ".DPK" && DecodeDPK(v_data,v_size))
 	{
 		throw runtime_error("Decoding DPK video file failed!");
 	}
-	else if(std::filesystem::path(name).extension().compare(".DP2") == 0)
+	else if(ext == ".DP2")
 	{
 		// try load complement audio file if needed
 		uint8_t* a_data = NULL;
 		int a_size = 0;
-		if(std::filesystem::path(name).extension().compare(".DP2") == 0)
+		if(ext == ".DP2")
 		{
 			std::string audio_name = std::filesystem::path(name).replace_extension("").string();
 			if(fs->GetFile(audio_name,&a_data,&a_size))
