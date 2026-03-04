@@ -21,7 +21,7 @@ public:
 private:
     SpellData* m_spelldata;    
     SpellMap* m_spell_map;
-    std::function<void(int)> m_sel_cb;
+    std::function<void(bool)> m_sel_cb;
     SpellMsgOptions m_options;
 
     SpellTextChunks m_chunks;

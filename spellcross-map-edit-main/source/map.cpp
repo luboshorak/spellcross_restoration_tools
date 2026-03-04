@@ -1087,12 +1087,17 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		txt = m_mission_end_req.text;
 	}
 
-	if (is_first && success)
+	// Nastav video cestu z parametrů mise
+	// Video soubory jsou v MOVIE.FS / temp/MOVIE/ jako DPK/DP2
+	if (success && !params.end_ok_video.empty())
 	{
-		// DŮLEŽITÉ: posílej název entry v MOVIE.FS, ne filesystem cestu
-		m_mission_end_req.movie_path = L"LEVEL1_1.DPK";
-		m_mission_end_req.next_level_def = L"LEVEL_02.DEF";
+		m_mission_end_req.movie_path = std::wstring(params.end_ok_video.begin(), params.end_ok_video.end());
 	}
+	else if (!success && !params.end_bad_video.empty())
+	{
+		m_mission_end_req.movie_path = std::wstring(params.end_bad_video.begin(), params.end_bad_video.end());
+	}
+	// next_level_def se zpracovává ve Strategic Level (HandleMissionResult/AdvanceToNextLevel)
 
 	if (m_msg_creator && m_mission_end_req.text)
 	{

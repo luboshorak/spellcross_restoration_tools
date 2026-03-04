@@ -266,6 +266,21 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
                 out.start_units.push_back(pu);
                 continue;
             }
+            // PlayStartDeltaAnim - intro video levelu
+            if (cmd == "PlayStartDeltaAnim" && args.size() >= 1) {
+                out.intro_video = args[0];
+                continue;
+            }
+            // PlayEndDeltaAnim na úrovni levelu - outro video
+            if (cmd == "PlayEndDeltaAnim" && args.size() >= 1) {
+                out.outro_video = args[0];
+                continue;
+            }
+            // NextLevel - další level po dokonèení všech misí
+            if (cmd == "NextLevel" && args.size() >= 1) {
+                out.next_level_def = args[0];
+                continue;
+            }
 
             // jinak ignor/tolerant
             unknown_here();
@@ -286,6 +301,22 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
             }
             if (cmd == "Time" && args.size() >= 1) {
                 int v = 0; if (parse_int(args[0], v)) curMission.time_limit = v;
+                continue;
+            }
+            // PlayEndDeltaAnim - video po dokonèení mise (success)
+            if (cmd == "PlayEndDeltaAnim" && args.size() >= 1) {
+                curMission.end_ok_video = args[0];
+                continue;
+            }
+            // PlayEndBadDeltaAnim - video po selhání mise
+            if (cmd == "PlayEndBadDeltaAnim" && args.size() >= 1) {
+                curMission.end_bad_video = args[0];
+                continue;
+            }
+            // NextLevelDef - další level po dokonèení mise
+            if (cmd == "NextLevelDef" && args.size() >= 1) {
+                curMission.next_level_def = args[0];
+                curMission.is_level_final = true;
                 continue;
             }
 

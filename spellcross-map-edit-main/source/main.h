@@ -114,13 +114,16 @@ public:
 
     bool m_mission_end_flow = false;
     SpellMap::MissionEndRequest m_mission_end_req;
-    
+
     // Strategic level reference for mission result callback
     class StrategicLevelFrame* m_strategicLevel = nullptr;
 
     void StartMissionEndFlow();
     void OnCutsceneClosed(wxCloseEvent& ev);
     void OpenStrategicAndLoadNext();
+
+    // Play a cutscene video (called from Strategic Level)
+    void PlayCutsceneFromStrategic(const std::string& video_entry_name);
    
     SpellData* spell_data;
 

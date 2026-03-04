@@ -10751,42 +10751,21 @@ std::wstring StrategicLevelFrame::FindBriefingPath(const std::string& mission_to
 
 void StrategicLevelFrame::PlayVideo(const std::string& video_file)
 {
-    if (video_file.empty())
+    if (video_file.empty() || !m_main || !m_spellData)
         return;
+
+    // Convert video_file to entry name (uppercase, just filename)
     namespace fs = std::filesystem;
-    fs::path base = fs::path(m_level.source_path).parent_path();
-    
-    std::vector<fs::path> searchPaths = {
-        base / video_file,
-        base / to_upper(video_file),
-        base / ".." / "VIDEO" / video_file,
-        base / ".." / "VIDEO" / to_upper(video_file),
-        fs::current_path() / "temp" / "VIDEO" / video_file,
-        fs::current_path() / "temp" / "VIDEO" / to_upper(video_file)
-    };
-    
-    std::string videoPath;
-    for (const auto& p : searchPaths)
-    {
-        std::error_code ec;
-        if (fs::exists(p, ec))
-        {
-            videoPath = p.string();
-            break;
-        }
-    }
-    
-    if (videoPath.empty())
-    {
-        return;
-    }
-    // TODO: Implement actual video playback through FormVideoBox
-    // For now, videos defined in mission end_ok_video/end_bad_video are logged but not played
-    // The main cutscene video (movie_path in MissionEndRequest) IS played through StartMissionEndFlow
-    if (m_main && m_spellData && m_spellData->videos)
-    {
-        // Future: could use m_main to trigger video playback
-    }
+    std::string entry_name = fs::path(video_file).filename().string();
+    for (auto& c : entry_name) c = (char)std::toupper((unsigned char)c);
+
+    // Add extension if missing
+    if (entry_name.find('.') == std::string::npos)
+        entry_name += ".DPK";
+
+    // Delegate to MainFrame for video playback
+    // MainFrame handles FormVideoBox creation and synchronization
+    m_main->PlayCutsceneFromStrategic(entry_name);
 }
 
 void StrategicLevelFrame::EnsureStrategicIconsLoaded()
@@ -11160,6 +11139,12 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     // Update parent reference
     if (m_main)
         m_main->m_strategicLevel = newWin;
+
+    // Play intro video of the NEW level (after window is shown)
+    if (!lvl.intro_video.empty() && lvl.intro_video != "none")
+    {
+        newWin->PlayVideo(lvl.intro_video);
+    }
 
     newWin->Show();
     newWin->Raise();

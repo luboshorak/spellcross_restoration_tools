@@ -509,7 +509,9 @@ public:
 			std::string start_text = "";
 			std::string end_ok_text = "";
 			std::string end_bad_text = "";
-			void Clear() { is_night = false; mission_text = "";start_text = "";end_ok_text = "";end_bad_text = "";};
+			std::string end_ok_video = "";   // PlayEndDeltaAnim - video po úspěšném dokončení
+			std::string end_bad_video = "";  // video po neúspěchu
+			void Clear() { is_night = false; mission_text = "";start_text = "";end_ok_text = "";end_bad_text = "";end_ok_video = "";end_bad_video = "";};
 		};
 		MissionParams params;
 

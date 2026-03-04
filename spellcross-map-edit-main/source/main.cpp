@@ -1182,7 +1182,7 @@ void MainFrame::StartMissionEndFlow()
     // 1) Pokud je video, přehraj ho a až pak pokračuj
     if (!m_mission_end_req.movie_path.empty())
     {
-        
+
         // zavři případný seznam videí
         if (form_videos)
         {
@@ -1191,32 +1191,73 @@ void MainFrame::StartMissionEndFlow()
         }
 
         // přehraj cutscénu
+        bool video_ok = false;
         if (!FindWindowById(ID_VIDEO_BOX_WIN))
         {
-            // FormVideoBox rodič používáš canvas (stejně jako message boxy)
-            form_video_box = new FormVideoBox(
-                canvas,
-                ID_VIDEO_BOX_WIN,
-                spell_data,
-                std::string(m_mission_end_req.movie_path.begin(), m_mission_end_req.movie_path.end()),
-                2
-            );
+            try
+            {
+                form_video_box = new FormVideoBox(
+                    canvas,
+                    ID_VIDEO_BOX_WIN,
+                    spell_data,
+                    std::string(m_mission_end_req.movie_path.begin(), m_mission_end_req.movie_path.end()),
+                    2
+                );
+                video_ok = true;
+            }
+            catch (const std::exception& ex)
+            {
+                wxLogMessage("StartMissionEndFlow: video failed: %s", ex.what());
+                form_video_box = nullptr;
+            }
         }
 
-        g_cutscene_handled = false;
-        canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+        if (video_ok)
+        {
+            g_cutscene_handled = false;
+            canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
+            return;
+        }
 
-        // až se video okno zavře, dojde CLOSE event na parent (viz FormVideoBox::OnClose)
-        // takže pokračování dáme do handleru:
-        canvas->Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCutsceneClosed, this, ID_VIDEO_BOX_WIN);
-        return;
+        // Video failed to load – fall through to strategic level
     }
 
     // 2) Bez videa – rovnou přejdi na strategickou
     OpenStrategicAndLoadNext();
 }
 
+void MainFrame::PlayCutsceneFromStrategic(const std::string& video_entry_name)
+{
+    if (video_entry_name.empty() || !spell_data)
+        return;
 
+    // Close existing video if any
+    if (form_video_box)
+    {
+        delete form_video_box;
+        form_video_box = nullptr;
+    }
+
+    try
+    {
+        form_video_box = new FormVideoBox(
+            canvas,
+            ID_VIDEO_BOX_WIN,
+            spell_data,
+            video_entry_name,
+            2  // zoom
+        );
+    }
+    catch (const std::exception& ex)
+    {
+        // Video not found or failed to load - log and continue
+        wxLogMessage("PlayCutsceneFromStrategic: %s", ex.what());
+    }
+}
+
+
+// Forward declarations for helpers defined later in this file
+static std::string FindLevelDefContainingMission(const std::string& missionStem);
 
 // map animation periodic refresh tick
 void MainFrame::OnTimer(wxTimerEvent& event)
@@ -1237,6 +1278,57 @@ void MainFrame::OnTimer(wxTimerEvent& event)
         {
             m_mission_end_flow = true;
             m_mission_end_req = req;
+
+            // If no strategic level is active (e.g. first mission from main menu),
+            // try to fill in movie_path and next_level_def from the parent LEVEL_XX.DEF.
+            // This ensures the video plays before the strategic level opens.
+            if (!m_strategicLevel && m_mission_end_req.movie_path.empty())
+            {
+                namespace fs = std::filesystem;
+                std::string missionStem = fs::path(spell_map->map_path).stem().string();
+                if (!missionStem.empty())
+                {
+                    std::string levelDefPath = FindLevelDefContainingMission(missionStem);
+                    if (!levelDefPath.empty())
+                    {
+                        LevelData currentLvl;
+                        std::string err;
+                        LevelLoader loader;
+                        if (loader.LoadLevelDef(levelDefPath, currentLvl, &err))
+                        {
+                            // Set outro video as movie_path so StartMissionEndFlow() plays it
+                            if (m_mission_end_req.success && !currentLvl.outro_video.empty() && currentLvl.outro_video != "none")
+                            {
+                                m_mission_end_req.movie_path = std::wstring(currentLvl.outro_video.begin(), currentLvl.outro_video.end());
+                            }
+
+                            // Set next_level_def so OpenStrategicAndLoadNext() can create the strategic level
+                            if (m_mission_end_req.next_level_def.empty())
+                            {
+                                // Check mission-specific next_level_def first
+                                std::string missionUpper = missionStem;
+                                for (char& c : missionUpper) c = (char)std::toupper((unsigned char)c);
+                                for (const auto& m : currentLvl.missions)
+                                {
+                                    std::string nameUp = m.name;
+                                    for (char& c : nameUp) c = (char)std::toupper((unsigned char)c);
+                                    if (nameUp == missionUpper && !m.next_level_def.empty() && m.next_level_def != "none")
+                                    {
+                                        m_mission_end_req.next_level_def = std::wstring(m.next_level_def.begin(), m.next_level_def.end());
+                                        break;
+                                    }
+                                }
+
+                                // Fall back to level-wide next_level_def
+                                if (m_mission_end_req.next_level_def.empty() && !currentLvl.next_level_def.empty() && currentLvl.next_level_def != "none")
+                                {
+                                    m_mission_end_req.next_level_def = std::wstring(currentLvl.next_level_def.begin(), currentLvl.next_level_def.end());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             StartMissionEndFlow();
         }
@@ -1294,6 +1386,74 @@ static std::string find_def_candidate(const std::string& name)
     return name; // fallback
 }
 
+// Find the LEVEL_XX.DEF that contains a given mission name (e.g. "M01_01A").
+// Scans LEVEL_01..LEVEL_99 in common locations.
+// Returns the full path to the LEVEL DEF, or empty if not found.
+static std::string FindLevelDefContainingMission(const std::string& missionStem)
+{
+    if (missionStem.empty())
+        return {};
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const std::string missionUpper = [&]() {
+        std::string s = missionStem;
+        for (char& c : s) c = (char)std::toupper((unsigned char)c);
+        return s;
+    }();
+
+    // Search directories
+    const fs::path cwd = fs::current_path(ec);
+    const std::vector<fs::path> dirs = {
+        cwd / "temp" / "COMMON",
+        cwd / "temp",
+        cwd
+    };
+
+    for (int lvl = 1; lvl <= 99; ++lvl)
+    {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "LEVEL_%02d.DEF", lvl);
+        const std::string levelName(buf);
+
+        for (const auto& dir : dirs)
+        {
+            fs::path candidate = dir / levelName;
+            if (!fs::exists(candidate, ec))
+                continue;
+
+            // Quick scan: load the LEVEL DEF and check if it references our mission
+            LevelData lvlData;
+            std::string err;
+            LevelLoader loader;
+            if (!loader.LoadLevelDef(candidate.string(), lvlData, &err))
+                continue;
+
+            for (const auto& m : lvlData.missions)
+            {
+                std::string nameUp = m.name;
+                for (char& c : nameUp) c = (char)std::toupper((unsigned char)c);
+                if (nameUp == missionUpper)
+                    return candidate.string();
+            }
+
+            // Also check territory mission tokens (they may reference the mission
+            // without the trailing variant letter, e.g. "m01_01" -> "M01_01A")
+            for (const auto& t : lvlData.territories)
+            {
+                std::string tokUp = t.mission;
+                for (char& c : tokUp) c = (char)std::toupper((unsigned char)c);
+                // Mission stem without variant letter
+                if (!tokUp.empty() && missionUpper.rfind(tokUp, 0) == 0)
+                    return candidate.string();
+            }
+        }
+    }
+
+    return {};
+}
+
 void MainFrame::OpenStrategicAndLoadNext()
 {
     const std::wstring nextW = m_mission_end_req.next_level_def;
@@ -1331,10 +1491,57 @@ void MainFrame::OpenStrategicAndLoadNext()
 
     // Fallback: no existing strategic level. Create one from next_level_def.
     // This path is used when a mission was launched outside the strategic UI
-    // (e.g., direct map open) or if the strategic window was lost.
+    // (e.g., direct map open, or first mission from main menu).
+    // Note: movie_path and next_level_def may have been enriched by OnTimer()
+    // from the parent LEVEL_XX.DEF before StartMissionEndFlow() was called.
     std::string nextDef = nextW.empty()
         ? std::string()
         : find_def_candidate(std::string(nextW.begin(), nextW.end()));
+
+    // If next_level_def is still empty, try to infer it from the current map's mission name.
+    // This is a safety net in case the OnTimer enrichment didn't find it.
+    if (nextDef.empty() && spell_map && spell_map->IsLoaded())
+    {
+        namespace fs = std::filesystem;
+        std::string missionStem = fs::path(spell_map->map_path).stem().string();
+        if (!missionStem.empty())
+        {
+            std::string levelDefPath = FindLevelDefContainingMission(missionStem);
+            if (!levelDefPath.empty())
+            {
+                LevelData currentLvl;
+                std::string err;
+                LevelLoader loader;
+                if (loader.LoadLevelDef(levelDefPath, currentLvl, &err))
+                {
+                    // Determine next level DEF
+                    std::string missionUpper = missionStem;
+                    for (char& c : missionUpper) c = (char)std::toupper((unsigned char)c);
+                    for (const auto& m : currentLvl.missions)
+                    {
+                        std::string nameUp = m.name;
+                        for (char& c : nameUp) c = (char)std::toupper((unsigned char)c);
+                        if (nameUp == missionUpper && !m.next_level_def.empty() && m.next_level_def != "none")
+                        {
+                            nextDef = find_def_candidate(m.next_level_def);
+                            break;
+                        }
+                    }
+
+                    if (nextDef.empty() && !currentLvl.next_level_def.empty() && currentLvl.next_level_def != "none")
+                    {
+                        nextDef = find_def_candidate(currentLvl.next_level_def);
+                    }
+
+                    // If still empty but success, open the current level's strategic view
+                    if (nextDef.empty() && m_mission_end_req.success)
+                    {
+                        nextDef = levelDefPath;
+                    }
+                }
+            }
+        }
+    }
 
     if (!nextDef.empty())
     {
