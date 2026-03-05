@@ -1162,6 +1162,9 @@ static std::vector<int> ChooseStartTerritories_NoBriefing(const LevelData& level
     return out;
 }
 
+static std::filesystem::path GetStrategicStatePath(const LevelData& level);
+static std::filesystem::path FindPreviousLevelSavePath(const LevelData& currentLevel);
+
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level, bool skipAutosave)
     : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
         wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
@@ -1200,39 +1203,71 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     CenterOnParent();
 
     // Default: start NEW strategic state (do NOT auto-load autosave).
-    // If autosave exists, ask user.
+    // If autosave exists or a previous level save is available, ask user.
     if (!skipAutosave)
     {
         namespace fs = std::filesystem;
         std::error_code ec;
         const auto autosave = GetStrategicStatePath(m_level);
+        const auto prevSave = FindPreviousLevelSavePath(m_level);
+        const bool hasAutosave = fs::exists(autosave, ec);
+        const bool hasPrevSave = !prevSave.empty();
 
-        if (fs::exists(autosave, ec))
+        if (hasAutosave || hasPrevSave)
         {
-            const int rc = wxMessageBox(
-                "Autosave for this level exists.\n\n"
-                "YES = Continue (load autosave)\n"
-                "NO  = Start new (keep old autosave as .bak)\n"
-                "CANCEL = Start new (do not touch autosave)",
-                "Strategic",
-                wxYES_NO | wxCANCEL | wxICON_QUESTION,
-                this);
+            enum { ACT_LOAD_AUTOSAVE, ACT_NEW_BAK, ACT_NEW_KEEP, ACT_CONTINUE_CAMPAIGN };
+            wxArrayString choices;
+            std::vector<int> choiceActions;
 
-            if (rc == wxYES)
+            if (hasAutosave)
             {
-                LoadStrategicState();
-            }
-            else if (rc == wxNO)
-            {
-                // Keep old file, start fresh; do NOT overwrite silently.
-                fs::path bak = autosave;
-                bak += ".bak";
-                fs::rename(autosave, bak, ec);
-                // Start new: keep ctor defaults. We won't create a new autosave until something changes.
+                choices.Add("Continue (load autosave)");
+                choiceActions.push_back(ACT_LOAD_AUTOSAVE);
+                choices.Add("Start new (keep old autosave as .bak)");
+                choiceActions.push_back(ACT_NEW_BAK);
+                choices.Add("Start new (do not touch autosave)");
+                choiceActions.push_back(ACT_NEW_KEEP);
             }
             else
             {
-                // CANCEL: start new, leave autosave untouched.
+                choices.Add("Start new");
+                choiceActions.push_back(ACT_NEW_KEEP);
+            }
+            if (hasPrevSave)
+            {
+                choices.Add("Continue the campaign (load progress from previous level)");
+                choiceActions.push_back(ACT_CONTINUE_CAMPAIGN);
+            }
+
+            wxSingleChoiceDialog dlg(this,
+                "Choose how to start this level:",
+                "Strategic", choices);
+            dlg.SetSelection(0);
+
+            if (dlg.ShowModal() == wxID_OK)
+            {
+                const int sel = dlg.GetSelection();
+                if (sel >= 0 && sel < (int)choiceActions.size())
+                {
+                    switch (choiceActions[sel])
+                    {
+                    case ACT_LOAD_AUTOSAVE:
+                        LoadStrategicState();
+                        break;
+                    case ACT_NEW_BAK:
+                    {
+                        fs::path bak = autosave;
+                        bak += ".bak";
+                        fs::rename(autosave, bak, ec);
+                        break;
+                    }
+                    case ACT_NEW_KEEP:
+                        break;
+                    case ACT_CONTINUE_CAMPAIGN:
+                        LoadPlayerStateFromPreviousLevel();
+                        break;
+                    }
+                }
             }
         }
     }
@@ -1305,6 +1340,8 @@ struct UnitStatePersistLoadView
 
 static thread_local const UnitStatePersistSaveView* g_unitStatePersistSave = nullptr;
 static thread_local UnitStatePersistLoadView* g_unitStatePersistLoad = nullptr;
+
+static std::filesystem::path FindPreviousLevelSavePath(const LevelData& currentLevel);
 
 static bool LoadStrategicStateFile(
     const std::filesystem::path& path,
@@ -8234,6 +8271,29 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level)
     return GetStrategicSaveDir(level) / "autosave.json";
 }
 
+// Find autosave.json from the most recent previous level (LEVEL_N-1, N-2, ... 1)
+static std::filesystem::path FindPreviousLevelSavePath(const LevelData& currentLevel)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string stem = fs::path(currentLevel.source_path).stem().string();
+    std::regex re(R"([Ll][Ee][Vv][Ee][Ll]_?(\d+))");
+    std::smatch m;
+    int currentNum = -1;
+    if (std::regex_search(stem, m, re) && m.size() >= 2)
+        currentNum = std::stoi(m[1].str());
+    if (currentNum <= 1)
+        return {};
+    for (int prev = currentNum - 1; prev >= 1; --prev)
+    {
+        std::string prevKey = "level_" + std::string(prev < 10 ? "0" : "") + std::to_string(prev);
+        fs::path savePath = fs::path(GetStableBaseDir()) / "save" / "strategic" / prevKey / "autosave.json";
+        if (fs::exists(savePath, ec))
+            return savePath;
+    }
+    return {};
+}
+
 // Extract a JSON array or object value for a given key, properly handling
 // nested brackets and quoted strings.  Returns the full block including
 // the outer delimiters ("[...]" or "{...}"), or "null", or empty string.
@@ -8883,6 +8943,161 @@ void StrategicLevelFrame::LoadStrategicState()
             SelectTerritoryById(m_selectedTerritory);
     }
 
+}
+
+void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
+{
+    const auto prevSave = FindPreviousLevelSavePath(m_level);
+    if (prevSave.empty())
+    {
+        wxMessageBox("No previous level save found.", "Continue campaign", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    // Load previous level save into temporary variables
+    int turn = 1, money = 0, research = 0, selected = -1;
+    PlayerProgress player{};
+    std::unordered_map<int, std::string> terrM;
+    std::unordered_map<int, int> terrL;
+    std::vector<LevelData::PlayerUnitAdd> units;
+    std::vector<CommanderRec> playerCmds;
+    std::vector<CommanderRec> availCmds;
+    int windowStart = 1, genCount = 0;
+    bool gm = false;
+    std::vector<int> owned;
+    std::unordered_map<int, TerritoryResourceState> terrRes;
+    std::string level_def, ts;
+
+    // Hook research persistence
+    int resActiveId = -1, resActiveIndex = -1, resAllocPerTurn = 0;
+    std::unordered_map<int, int> resProgressById;
+    std::unordered_set<int> resCompleted;
+
+    ResearchPersistLoadView rlv;
+    rlv.activeId = &resActiveId;
+    rlv.activeIndex = &resActiveIndex;
+    rlv.allocPerTurn = &resAllocPerTurn;
+    rlv.progressById = &resProgressById;
+    rlv.completed = &resCompleted;
+    ResearchPersistLoadView* prevR = g_researchPersistLoad;
+    g_researchPersistLoad = &rlv;
+
+    // Hook unit state persistence
+    std::vector<UnitInstanceState> loadedUnitStates;
+    UnitStatePersistLoadView ulv;
+    ulv.states = &loadedUnitStates;
+    UnitStatePersistLoadView* prevU = g_unitStatePersistLoad;
+    g_unitStatePersistLoad = &ulv;
+
+    const bool ok = LoadStrategicStateFile(prevSave, m_level, turn, money, research, selected, player,
+        terrM, terrL, units, playerCmds, availCmds, windowStart, genCount,
+        gm, owned, terrRes, &level_def, &ts);
+
+    g_unitStatePersistLoad = prevU;
+    g_researchPersistLoad = prevR;
+
+    if (!ok)
+    {
+        wxMessageBox("Failed to load previous level save.", "Continue campaign", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    // --- Transfer player state (keep current level's territory/mission defaults) ---
+    m_money = money;
+    m_research = research;
+    m_player = player;
+    m_playerUnits = std::move(units);
+    m_unitStates = std::move(loadedUnitStates);
+    m_playerCommanders = std::move(playerCmds);
+    m_availableCommanders.clear(); // pending offers don't carry over
+
+    // Transfer research state
+    m_researchActiveId = resActiveId;
+    m_researchActiveIndex = resActiveIndex;
+    m_researchAllocPerTurn = resAllocPerTurn;
+    m_researchProgressById = std::move(resProgressById);
+    m_researchCompleted = std::move(resCompleted);
+
+    // Enable game mode (campaign = game mode)
+    m_gameModeEnabled = true;
+    if (GetMenuBar())
+    {
+        auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
+        if (item) item->Check(m_gameModeEnabled);
+    }
+
+    // Ensure at least one owned territory (start territory for the new level)
+    if (m_ownedTerritories.empty())
+        m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level);
+    if (m_ownedTerritories.empty() && !m_level.territories.empty())
+        m_ownedTerritories.push_back(m_level.territories.front().id);
+
+    // Add start_units from the new level (bonus units the player receives at level start)
+    for (const auto& su : m_level.start_units)
+        m_playerUnits.push_back(su);
+
+    // Ensure unit states cover all roster entries (newly added start units need state)
+    while (m_unitStates.size() < m_playerUnits.size())
+    {
+        UnitInstanceState state;
+        state.uid = m_nextRosterUid++;
+        m_unitStates.push_back(state);
+    }
+
+    // Load cumulative research flags for the new level (game mode unit filtering)
+    {
+        namespace fs = std::filesystem;
+        fs::path defPath = fs::path(m_level.source_path);
+        m_levelResearchFlags = GetCumulativeResearchFlags(defPath);
+    }
+
+    // Load all-time loss stats from previous level's strategic_stats.json (if accessible)
+    // (level-scope stats start fresh for the new level)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec2;
+        fs::path prevDir = prevSave.parent_path().parent_path().parent_path(); // up from save/strategic/level_XX/
+        // Try common location for stats (same as FindStrategicStatsPath logic)
+        fs::path prevLevelDef = fs::path(level_def);
+        fs::path statsDir = prevLevelDef.parent_path();
+        if (statsDir.empty() || !fs::exists(statsDir, ec2))
+            statsDir = fs::current_path(ec2);
+        fs::path statsPath = statsDir / "strategic_stats.json";
+        if (fs::exists(statsPath, ec2))
+        {
+            std::ifstream sf(statsPath);
+            if (sf)
+            {
+                std::string sdata((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>());
+                auto extractBlock = [&](const char* key, LossBlock& out)
+                {
+                    std::regex re(std::string("\"") + key + "\"\\s*:\\s*\\{([^}]*)\\}");
+                    std::smatch sm;
+                    if (std::regex_search(sdata, sm, re) && sm.size() >= 2)
+                    {
+                        (void)ParseJsonIntField(sm[1].str(), "light", out.light);
+                        (void)ParseJsonIntField(sm[1].str(), "heavy", out.heavy);
+                        (void)ParseJsonIntField(sm[1].str(), "air", out.air);
+                        (void)ParseJsonIntField(sm[1].str(), "commanders", out.commanders);
+                    }
+                };
+                extractBlock("all_alliance", m_lossStats.alliance_all);
+                extractBlock("all_enemy", m_lossStats.enemy_all);
+                // Level-scope stats start fresh
+                m_lossStats.alliance_level = {};
+                m_lossStats.enemy_level = {};
+
+                (void)ParseJsonIntField(sdata, "missions_completed", m_stats.missions_completed);
+                (void)ParseJsonIntField(sdata, "missions_failed", m_stats.missions_failed);
+                (void)ParseJsonIntField(sdata, "territories_conquered", m_stats.territories_conquered);
+                (void)ParseJsonIntField(sdata, "territories_lost", m_stats.territories_lost);
+                (void)ParseJsonIntField(sdata, "turns_total", m_stats.turns_total);
+            }
+        }
+    }
+
+    // Persist the merged state immediately
+    SaveStrategicState();
 }
 
 void StrategicLevelFrame::SaveStrategicState() const

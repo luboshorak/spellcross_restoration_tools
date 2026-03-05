@@ -141,6 +141,7 @@ public:
 
     void LoadStrategicState();
     void SaveStrategicState() const;
+    void LoadPlayerStateFromPreviousLevel();
     wxString GetUnitDisplayName(int unit_id) const;
     bool EnsureUnitCostsLoaded();
     int GetUnitBuyCost(int unit_id) const;
