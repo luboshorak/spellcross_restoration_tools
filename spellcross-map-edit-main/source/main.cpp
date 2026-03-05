@@ -260,10 +260,11 @@ void MainFrame::SetGameModeUI(bool enable_game_mode)
 
 void MainFrame::OnOpenLevelDef(wxCommandEvent& ev)
 {
+    wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
     wxFileDialog dlg(
         this,
         "Open Level DEF",
-        "",
+        temp_dir,
         "",
         "Level DEF (*.def)|*.def|All files|*.*",
         wxFD_OPEN | wxFD_FILE_MUST_EXIST
@@ -600,10 +601,11 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
 // Load saved Strategic Level (strategic_state.json) and open the corresponding Level DEF.
 Bind(wxEVT_MENU, [this](wxCommandEvent&)
 {
+    wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
     wxFileDialog dlg(
         this,
         "Load Strategic Level (saved state)",
-        "",
+        temp_dir,
         "strategic_state.json",
         "Strategic State (strategic_state.json)|strategic_state.json|JSON files (*.json)|*.json|All files|*.*",
         wxFD_OPEN | wxFD_FILE_MUST_EXIST
@@ -755,10 +757,11 @@ void MainFrame::OnSaveGameState(wxCommandEvent& event)
     if (!spell_map || !spell_map->IsLoaded())
         return;
 
+    wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
     wxFileDialog dlg(
         this,
         "Save game state",
-        wxStandardPaths::Get().GetDocumentsDir(),
+        temp_dir,
         "",
         "Spellcross save (*.scsave)|*.scsave|JSON (*.json)|*.json|All files (*.*)|*.*",
         wxFD_SAVE | wxFD_OVERWRITE_PROMPT
@@ -1041,10 +1044,11 @@ void MainFrame::OnLoadGameState(wxCommandEvent& event)
 
 bool MainFrame::LoadGameStateFromDialog()
 {
+    wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
     wxFileDialog openFileDialog(
         this,
         "Load game state",
-        "",
+        temp_dir,
         "",
         "Spellcross save (*.scsave)|*.scsave",
         wxFD_OPEN | wxFD_FILE_MUST_EXIST
@@ -1802,9 +1806,18 @@ void MainFrame::OnOpenMap(wxCommandEvent& event)
 {
     // split path to folder and file
     std::filesystem::path last_path = spell_map->GetTopPath();
-    wstring dir = last_path.parent_path(); dir += wstring(L"\\");
-    wstring name = last_path.filename();
-    
+    wstring dir;
+    wstring name;
+    if(!last_path.empty() && std::filesystem::exists(last_path.parent_path()))
+    {
+        dir = last_path.parent_path(); dir += wstring(L"\\");
+        name = last_path.filename();
+    }
+    else
+    {
+        dir = (std::filesystem::current_path() / L"temp").wstring();
+    }
+
     // show open dialog
     wxFileDialog openFileDialog(this,_("Open Spellcross Map File"),dir,name,"Map script file (*.def)|*.def|Map data file (*.dta)|*.dta",
         wxFD_OPEN|wxFD_FILE_MUST_EXIST);
@@ -1842,8 +1855,17 @@ void MainFrame::OnSaveDTA(wxCommandEvent& event)
 
     // split path to folder and file    
     std::filesystem::path last_path = spell_map->map_path;
-    wstring dir = last_path.parent_path(); dir += wstring(L"\\");
-    wstring name = last_path.filename();
+    wstring dir;
+    wstring name;
+    if(!last_path.empty() && std::filesystem::exists(last_path.parent_path()))
+    {
+        dir = last_path.parent_path(); dir += wstring(L"\\");
+        name = last_path.filename();
+    }
+    else
+    {
+        dir = (std::filesystem::current_path() / L"temp").wstring();
+    }
 
     // show open dialog
     wxFileDialog saveFileDialog(this,_("Save Spellcross Map DTA file"),dir,name,"Map data file (*.dta)|*.dta",
@@ -1864,8 +1886,17 @@ void MainFrame::OnSaveDEF(wxCommandEvent& event)
 
     // split path to folder and file    
     std::filesystem::path last_path = spell_map->def_path;
-    wstring dir = last_path.parent_path(); dir += wstring(L"\\");
-    wstring name = last_path.filename();
+    wstring dir;
+    wstring name;
+    if(!last_path.empty() && std::filesystem::exists(last_path.parent_path()))
+    {
+        dir = last_path.parent_path(); dir += wstring(L"\\");
+        name = last_path.filename();
+    }
+    else
+    {
+        dir = (std::filesystem::current_path() / L"temp").wstring();
+    }
 
     // show open dialog
     wxFileDialog saveFileDialog(this,_("Save Spellcross Map DEF file"),dir,name,"Map script file (*.def)|*.def",

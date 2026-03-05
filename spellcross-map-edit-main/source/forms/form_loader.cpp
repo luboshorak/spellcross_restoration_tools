@@ -111,9 +111,9 @@ void FormLoader::Loader(std::wstring config_path,SpellData* &spell_data)
 	#endif
 
 	// spellcross data root path
-	wstring spelldata_path = char2wstring(ini.GetValue("SPELCROS","spell_path",""));
-	// spellcross data root path
-	wstring spellcd_path = char2wstring(ini.GetValue("SPELCROS","spellcd_path",""));
+	wstring spelldata_path = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("SPELCROS","spell_path","")));
+	// spellcross cd data root path
+	wstring spellcd_path = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("SPELCROS","spellcd_path","")));
 	// special data folder
 	wstring spec_folder = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("DATA","spec_data_path","")));
 	// units aux data path

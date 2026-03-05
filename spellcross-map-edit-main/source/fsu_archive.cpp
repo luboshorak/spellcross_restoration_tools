@@ -31,7 +31,9 @@ FSUarchive::FSUarchive(std::wstring &path,std::function<void(std::string)> statu
 {
 	// try open file
 	ifstream fr(path, ios::in | ios::binary | ios::ate);
-	
+	if (!fr.is_open())
+		throw runtime_error("FSUarchive: failed to open archive file!");
+
 	// read to local buffer and close
 	streampos flen = fr.tellg();
 	fr.seekg(0);
