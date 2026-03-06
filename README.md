@@ -14,7 +14,7 @@ Fanouškovský pokus **oživit a zpřístupnit starý Spellcross** modernější
 
 K dispozici je první veřejný release:
 
-**`Spellcross_Reloaded_v0.0.2`**
+[**`Spellcross_Reloaded_v0.0.2`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.2)
 
 Aktuální cíl tohoto buildu je prostý: dostat hru do stavu, kdy by měla být **dohratelná od začátku do konce kampaně**. To ale neznamená, že je hotová nebo stabilní.
 
