@@ -29,6 +29,7 @@ public:
     FormMainMenu(wxPanel* parent,
         wxWindowID win_id,
         SpellMap* spell_map,
+        SpellData* spell_data,
         std::function<void(FormMainMenuAction)> action_cb);
     ~FormMainMenu();
 
@@ -67,4 +68,7 @@ private:
     void OnMouseLeave(wxMouseEvent& event);
     void OnMouseClick(wxMouseEvent& event);
     void OnKeyDown(wxKeyEvent& event);
+    void OnOptionsAudio(wxCommandEvent& ev);
+
+    static constexpr int ID_MMENU_OPTIONS_AUDIO = 9901;
 };

@@ -273,6 +273,7 @@ private:
     FormMapUnits *form_units_list = NULL;
     FormSound *form_sounds = NULL;
     FormMainMenu *form_mmenu = NULL;
+    bool m_reopen_mmenu_after_video = false;
     
     // spellcross HUD interface stuff
     void OnPaintHUDbutton(wxPaintEvent& event);

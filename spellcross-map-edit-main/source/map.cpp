@@ -812,6 +812,7 @@ SpellMap::SpellMap()
 
 	game_mode = false;
 
+	spelldata = NULL;
 	pic = NULL;
 
 	last_gamma = 0.0;

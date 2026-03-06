@@ -114,11 +114,12 @@ class SpellData
 private:
 	int GenerateSpecialTiles();
 	int LoadAuxGraphics(FSarchive* fs,std::function<void(std::string)> status_item=NULL);
-	
+
 	FSarchive* common_fs;
 	FSarchive* terrain_fs;
 
 public:
+	FSarchive* GetCommonFS() { return common_fs; }
 	// data paths
 	std::wstring data_path;
 	std::wstring cd_data_path;

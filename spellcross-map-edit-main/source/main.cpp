@@ -105,6 +105,9 @@ namespace
     static std::filesystem::path FindSpellDataFile(const std::filesystem::path& root,
         const std::string& filename)
     {
+        namespace fs = std::filesystem;
+        fs::path temp_common = fs::current_path() / "temp" / "COMMON";
+
         const std::vector<std::filesystem::path> candidates = {
             root,
             root / "DATA",
@@ -112,6 +115,7 @@ namespace
             root / "DATA" / "COMMON",
             root / "CD",
             root / "DATA" / "CD",
+            temp_common,
         };
 
         for (const auto& dir : candidates)
@@ -749,7 +753,13 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
 
     /*SpellTextRec text("Experimental text message", SpellLang::CZE);
     ShowMessage(&text,true);*/
-    
+
+    // auto-open main menu at startup
+    CallAfter([this]() {
+        wxCommandEvent evt;
+        OnOpenMainMenu(evt);
+    });
+
 }
 
 void MainFrame::OnSaveGameState(wxCommandEvent& event)
@@ -990,10 +1000,16 @@ void MainFrame::OnClose(wxCloseEvent& ev)
     }
     else if(ev.GetId() == ID_VIDEO_BOX_WIN && form_video_box)
     {
-        // unit multi-action menu
-        //form_video_box->ResultCallback(); // exec result callback (calling it from here to have in this thread)
         delete form_video_box;
         form_video_box = NULL;
+        if (m_reopen_mmenu_after_video)
+        {
+            m_reopen_mmenu_after_video = false;
+            CallAfter([this]() {
+                wxCommandEvent evt;
+                OnOpenMainMenu(evt);
+            });
+        }
     }
     else if(ev.GetId() == ID_MAP_OPT_WIN && form_map_options)
     {
@@ -1079,7 +1095,7 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
     if(!canvas)
         return;
 
-    form_mmenu = new FormMainMenu(canvas, ID_MMENU_WIN, spell_map,
+    form_mmenu = new FormMainMenu(canvas, ID_MMENU_WIN, spell_map, spell_data,
         [this](FormMainMenuAction action) { OnMainMenuAction(action); });
 }
 
@@ -1132,16 +1148,100 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
             }
             case FormMainMenuAction::LoadGame:
             {
-                if(LoadGameStateFromDialog())
+                // extended dialog: scsave + strategic level json
+                wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
+                wxFileDialog dlg(
+                    this,
+                    "Load game",
+                    temp_dir,
+                    "",
+                    "All saves (*.scsave;*.json)|*.scsave;*.json|Spellcross save (*.scsave)|*.scsave|Strategic state (*.json)|*.json",
+                    wxFD_OPEN | wxFD_FILE_MUST_EXIST
+                );
+                if (dlg.ShowModal() == wxID_CANCEL)
+                    break;
+
+                std::wstring load_path = dlg.GetPath().ToStdWstring();
+                std::string ext_lower = to_lower(std::filesystem::path(load_path).extension().string());
+
+                if (ext_lower == ".json")
+                {
+                    // strategic level save
+                    namespace fs = std::filesystem;
+                    fs::path dir = fs::path(load_path).parent_path();
+                    std::vector<fs::path> defs;
+                    std::error_code ec;
+                    for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
+                    {
+                        if (ec) { ec.clear(); break; }
+                        if (!de.is_regular_file(ec) || ec) { ec.clear(); continue; }
+                        if (to_lower(de.path().extension().string()) == ".def")
+                            defs.push_back(de.path());
+                    }
+                    if (defs.empty())
+                    {
+                        wxMessageBox("No Level DEF found next to the selected JSON.", "Load", wxOK | wxICON_WARNING, this);
+                        break;
+                    }
+                    std::sort(defs.begin(), defs.end());
+                    auto itPref = std::find_if(defs.begin(), defs.end(), [](const fs::path& p)
+                    {
+                        return to_lower(p.filename().string()).find("level") != std::string::npos;
+                    });
+                    fs::path defPath = (itPref != defs.end()) ? *itPref : defs.front();
+
+                    LevelData lvl;
+                    std::string err;
+                    LevelLoader loader;
+                    if (!loader.LoadLevelDef(defPath.string(), lvl, &err))
+                    {
+                        wxMessageBox("Failed to load level DEF:\n" + err, "Load", wxOK | wxICON_ERROR, this);
+                        break;
+                    }
+                    auto* win = new StrategicLevelFrame(this, lvl);
+                    m_strategicLevel = win;
+                    win->Show();
+                    win->Raise();
+                }
+                else
+                {
+                    // classic scsave
+                    int r = spell_map->LoadGameStateFromFile(load_path);
+                    if (r)
+                    {
+                        wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()), "Load error", wxICON_ERROR | wxOK, this);
+                        break;
+                    }
                     SetGameModeUI(true);
+                }
                 break;
             }
             case FormMainMenuAction::Credits:
-                wxMessageBox("Credits not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+            {
+                if (!FindWindowById(ID_VIDEO_BOX_WIN) && spell_data)
+                {
+                    try {
+                        form_video_box = new FormVideoBox(canvas, ID_VIDEO_BOX_WIN, spell_data, "CREDITS.DPK", 2);
+                        m_reopen_mmenu_after_video = true;
+                    } catch (const std::exception&) {
+                        wxMessageBox("Cannot play CREDITS.DPK (video not found).", "Credits", wxOK | wxICON_WARNING, this);
+                    }
+                }
                 break;
+            }
             case FormMainMenuAction::Intro:
-                wxMessageBox("Intro not implemented yet.", "Main menu", wxOK | wxICON_INFORMATION, this);
+            {
+                if (!FindWindowById(ID_VIDEO_BOX_WIN) && spell_data)
+                {
+                    try {
+                        form_video_box = new FormVideoBox(canvas, ID_VIDEO_BOX_WIN, spell_data, "INTRO.CAN", 2);
+                        m_reopen_mmenu_after_video = true;
+                    } catch (const std::exception&) {
+                        wxMessageBox("Cannot play INTRO.CAN (video not found).", "Intro", wxOK | wxICON_WARNING, this);
+                    }
+                }
                 break;
+            }
             case FormMainMenuAction::Exit:
                 if(spell_map)
                     spell_map->Close();

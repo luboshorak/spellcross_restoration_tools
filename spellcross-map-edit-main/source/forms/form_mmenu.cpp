@@ -1,12 +1,16 @@
 #include "form_mmenu.h"
 
+#include <wx/wx.h>
 #include <wx/dcbuffer.h>
+#include <wx/dcgraph.h>
 #include <wx/frame.h>
 #include <wx/log.h>
+#include <wx/slider.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -53,6 +57,9 @@ std::filesystem::path FindFileCaseInsensitive(const std::filesystem::path& dir, 
 
 std::filesystem::path FindMenuFile(const std::filesystem::path& root, const std::string& filename)
 {
+    namespace fs = std::filesystem;
+    fs::path temp_common = fs::current_path() / "temp" / "COMMON";
+
     const std::vector<std::filesystem::path> candidates = {
         root,
         root / "DATA",
@@ -60,6 +67,7 @@ std::filesystem::path FindMenuFile(const std::filesystem::path& root, const std:
         root / "DATA" / "COMMON",
         root / "CD",
         root / "DATA" / "CD",
+        temp_common,
     };
 
     for (const auto& dir : candidates)
@@ -193,15 +201,30 @@ bool DecodeMainMenuPixels(const std::vector<unsigned char>& src, std::vector<uns
     return false;
 }
 
+bool LoadBytesFromFS(FSarchive* fs, const char* name, std::vector<unsigned char>& out)
+{
+    out.clear();
+    if (!fs) return false;
+    uint8_t* data = nullptr;
+    int size = 0;
+    if (fs->GetFile(name, &data, &size))
+        return false;
+    if (!data || size <= 0)
+        return false;
+    out.assign(data, data + size);
+    return true;
+}
+
 } // namespace
 
 FormMainMenu::FormMainMenu(wxPanel* parent,
     wxWindowID win_id,
     SpellMap* spell_map,
+    SpellData* spell_data,
     std::function<void(FormMainMenuAction)> action_cb)
 {
     m_spell_map = spell_map;
-    m_spelldata = spell_map ? spell_map->spelldata : nullptr;
+    m_spelldata = spell_data;
     m_action_cb = std::move(action_cb);
     m_hover_index = -1;
 
@@ -223,7 +246,25 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
     form->SetBackgroundStyle(wxBG_STYLE_PAINT);
     form->SetDoubleBuffered(true);
 
-    LayoutMenuItems(size);
+    // copy icon from parent top-level window
+    wxWindow* tlw = parent;
+    while (tlw && tlw->GetParent()) tlw = tlw->GetParent();
+    if (auto* frame_tlw = dynamic_cast<wxFrame*>(tlw))
+    {
+        wxIcon ico = frame_tlw->GetIcon();
+        if (ico.IsOk())
+            form->SetIcon(ico);
+    }
+
+    // menu bar: Options > Audio
+    auto* bar = new wxMenuBar();
+    auto* optMenu = new wxMenu();
+    optMenu->Append(ID_MMENU_OPTIONS_AUDIO, L"&Audio...\tCtrl+A");
+    bar->Append(optMenu, "&Options");
+    form->SetMenuBar(bar);
+    form->Bind(wxEVT_MENU, &FormMainMenu::OnOptionsAudio, this, ID_MMENU_OPTIONS_AUDIO);
+
+    LayoutMenuItems(form->GetClientSize());
 
     form->Bind(wxEVT_CLOSE_WINDOW, &FormMainMenu::OnClose, this);
     form->Bind(wxEVT_PAINT, &FormMainMenu::OnPaint, this);
@@ -246,6 +287,7 @@ FormMainMenu::~FormMainMenu()
         form->Unbind(wxEVT_LEAVE_WINDOW, &FormMainMenu::OnMouseLeave, this);
         form->Unbind(wxEVT_LEFT_UP, &FormMainMenu::OnMouseClick, this);
         form->Unbind(wxEVT_KEY_DOWN, &FormMainMenu::OnKeyDown, this);
+        form->Unbind(wxEVT_MENU, &FormMainMenu::OnOptionsAudio, this, ID_MMENU_OPTIONS_AUDIO);
         form->Destroy();
         form = nullptr;
     }
@@ -260,30 +302,40 @@ bool FormMainMenu::LoadBackground()
     if (!m_spelldata)
         return false;
 
-    namespace fs = std::filesystem;
-    fs::path root = fs::path(m_spelldata->spell_data_root);
-
     std::vector<unsigned char> lzBytes;
     std::vector<unsigned char> palBytes;
 
-    fs::path lzPath = FindMenuFile(root, "MAINMENU.LZ");
-    fs::path rawPath = FindMenuFile(root, "MAINMENU.BIN");
-    fs::path palPath = FindMenuFile(root, "MAINMENU.PAL");
+    // Try loading from common_fs archive first (data is already decompressed by DELZ_ALL)
+    FSarchive* cfs = m_spelldata->GetCommonFS();
+    bool got_img = LoadBytesFromFS(cfs, "MAINMENU.LZ", lzBytes);
+    if (!got_img)
+        got_img = LoadBytesFromFS(cfs, "MAINMENU.BIN", lzBytes);
+    bool got_pal = LoadBytesFromFS(cfs, "MAINMENU.PAL", palBytes);
 
-    if (palPath.empty())
-        return false;
-    if (lzPath.empty() && rawPath.empty())
-        return false;
-
-    if (!lzPath.empty())
+    // Fallback: search on disk
+    if (!got_img || !got_pal)
     {
-        if (!LoadFileBytes(lzPath, lzBytes))
-            return false;
-    }
-    else if (!LoadFileBytes(rawPath, lzBytes))
-        return false;
+        namespace fs = std::filesystem;
+        fs::path root = fs::path(m_spelldata->spell_data_root);
 
-    if (!LoadFileBytes(palPath, palBytes))
+        if (!got_img)
+        {
+            fs::path lzPath = FindMenuFile(root, "MAINMENU.LZ");
+            fs::path rawPath = FindMenuFile(root, "MAINMENU.BIN");
+            if (!lzPath.empty())
+                got_img = LoadFileBytes(lzPath, lzBytes);
+            else if (!rawPath.empty())
+                got_img = LoadFileBytes(rawPath, lzBytes);
+        }
+        if (!got_pal)
+        {
+            fs::path palPath = FindMenuFile(root, "MAINMENU.PAL");
+            if (!palPath.empty())
+                got_pal = LoadFileBytes(palPath, palBytes);
+        }
+    }
+
+    if (!got_img || !got_pal)
         return false;
 
     std::array<unsigned char, 256 * 3> pal256;
@@ -326,29 +378,40 @@ bool FormMainMenu::LoadPanel()
     if (!m_spelldata || !m_pal256_ok)
         return false;
 
-    namespace fs = std::filesystem;
-    fs::path root = fs::path(m_spelldata->spell_data_root);
-
-    fs::path lzPath = FindMenuFile(root, "MAINM_BG.LZ");
-    fs::path rawPath = FindMenuFile(root, "MAINM_BG.BIN");
-    if (lzPath.empty() && rawPath.empty())
-        return false;
-
     std::vector<unsigned char> bytes;
-    if (!lzPath.empty())
+
+    // Try loading from common_fs archive first (data is already decompressed by DELZ_ALL)
+    FSarchive* cfs = m_spelldata->GetCommonFS();
+    bool got = LoadBytesFromFS(cfs, "MAINM_BG.LZ", bytes);
+    if (!got)
+        got = LoadBytesFromFS(cfs, "MAINM_BG.BIN", bytes);
+
+    // Fallback: search on disk
+    if (!got)
     {
-        if (!LoadFileBytes(lzPath, bytes))
-            return false;
-        // try decode
-        LZWexpand delz(512 * 1024);
-        std::vector<uint8_t> decoded = delz.Decode((uint8_t*)bytes.data(), (uint8_t*)bytes.data() + bytes.size());
-        bytes.assign(decoded.begin(), decoded.end());
+        namespace fs = std::filesystem;
+        fs::path root = fs::path(m_spelldata->spell_data_root);
+
+        fs::path lzPath = FindMenuFile(root, "MAINM_BG.LZ");
+        fs::path rawPath = FindMenuFile(root, "MAINM_BG.BIN");
+        if (!lzPath.empty())
+        {
+            if (LoadFileBytes(lzPath, bytes))
+            {
+                LZWexpand delz(512 * 1024);
+                std::vector<uint8_t> decoded = delz.Decode((uint8_t*)bytes.data(), (uint8_t*)bytes.data() + bytes.size());
+                bytes.assign(decoded.begin(), decoded.end());
+                got = !bytes.empty();
+            }
+        }
+        else if (!rawPath.empty())
+        {
+            got = LoadFileBytes(rawPath, bytes);
+        }
     }
-    else
-    {
-        if (!LoadFileBytes(rawPath, bytes))
-            return false;
-    }
+
+    if (!got || bytes.empty())
+        return false;
 
     DecodedIndexed d;
     if (!DecodeIndexedMaybeHeader(bytes, d))
@@ -485,12 +548,18 @@ void FormMainMenu::OnPaint(wxPaintEvent& event)
     const wxSize cs = form->GetClientSize();
     LayoutMenuItems(cs);
 
-    // (Optional) debug: draw hover rect highlight
+    // hover highlight (transparent background with rounded corners)
     if (m_hover_index >= 0 && m_hover_index < (int)m_items.size())
     {
-        dc.SetPen(wxPen(wxColour(255, 255, 0), 2));
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-        dc.DrawRectangle(m_items[(size_t)m_hover_index].rect);
+        wxGCDC gdc(dc);
+        wxGraphicsContext* gc = gdc.GetGraphicsContext();
+        if (gc)
+        {
+            gc->SetPen(gc->CreatePen(wxGraphicsPenInfo(wxColour(200, 200, 200, 180)).Width(2)));
+            gc->SetBrush(gc->CreateBrush(wxBrush(wxColour(150, 150, 150, 50))));
+            const wxRect& r = m_items[(size_t)m_hover_index].rect;
+            gc->DrawRoundedRectangle(r.x, r.y, r.width, r.height, 6);
+        }
     }
 }
 
@@ -542,4 +611,55 @@ void FormMainMenu::OnKeyDown(wxKeyEvent& event)
         return;
     }
     event.Skip();
+}
+
+void FormMainMenu::OnOptionsAudio(wxCommandEvent& ev)
+{
+    if (!m_spelldata || !m_spelldata->sounds || !m_spelldata->sounds->channels || !m_spelldata->midi)
+        return;
+
+    const double oldSfx = m_spelldata->sounds->channels->GetVolume();
+    const double oldMusic = m_spelldata->midi->GetVolume();
+
+    wxDialog dlg(form, wxID_ANY, "Audio options", wxDefaultPosition, wxDefaultSize,
+        wxDEFAULT_DIALOG_STYLE);
+
+    auto* sizerTop = new wxBoxSizer(wxVERTICAL);
+
+    auto* lblMusic = new wxStaticText(&dlg, wxID_ANY, "Music volume");
+    auto* sldMusic = new wxSlider(&dlg, wxID_ANY,
+        (int)std::lround(oldMusic * 100.0), 0, 100,
+        wxDefaultPosition, wxSize(300, -1),
+        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+
+    auto* lblSfx = new wxStaticText(&dlg, wxID_ANY, "Sound volume");
+    auto* sldSfx = new wxSlider(&dlg, wxID_ANY,
+        (int)std::lround(oldSfx * 100.0), 0, 100,
+        wxDefaultPosition, wxSize(300, -1),
+        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+
+    sizerTop->Add(lblMusic, 0, wxALL, 8);
+    sizerTop->Add(sldMusic, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    sizerTop->Add(lblSfx, 0, wxALL, 8);
+    sizerTop->Add(sldSfx, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
+    sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
+    dlg.SetSizerAndFit(sizerTop);
+
+    auto applyVolumes = [&]() {
+        m_spelldata->midi->SetVolume(sldMusic->GetValue() / 100.0);
+        m_spelldata->sounds->channels->SetVolume(sldSfx->GetValue() / 100.0);
+    };
+
+    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyVolumes(); });
+    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyVolumes(); });
+
+    if (dlg.ShowModal() == wxID_OK)
+        applyVolumes();
+    else
+    {
+        m_spelldata->midi->SetVolume(oldMusic);
+        m_spelldata->sounds->channels->SetVolume(oldSfx);
+    }
 }
