@@ -259,41 +259,6 @@ void MainFrame::SetGameModeUI(bool enable_game_mode)
             spell_map->saves->LoadInitial();
         spell_map->ResetUnitEvents();
     }
-
-    UpdateMenuForGameMode();
-}
-
-void MainFrame::UpdateMenuForGameMode()
-{
-    auto* bar = GetMenuBar();
-    if (!bar)
-        return;
-
-    // Menu is restricted when editor is locked (default state).
-    // Console command GAMEMODEOFF unlocks it.
-    bool restricted = !m_editor_unlocked;
-
-    // File menu = index 0: disable entirely
-    bar->EnableTop(0, !restricted);
-
-    // Game menu = index 1: disable individual items except Save/Load game state
-    bar->Enable(ID_mmGameMode, !restricted);
-    bar->Enable(ID_mmResetViewMap, !restricted);
-    bar->Enable(ID_mmUnitViewMode, !restricted);
-    // ID_mmSaveGameState and ID_mmLoadGameState stay enabled always
-
-    // Edit menu = index 2: disable entirely
-    bar->EnableTop(2, !restricted);
-
-    // View menu = index 3: disable entirely
-    bar->EnableTop(3, !restricted);
-
-    // Tools menu = index 4: disable entirely
-    bar->EnableTop(4, !restricted);
-
-    // Options menu = index 5: always enabled (Audio/Screen accessible in game mode)
-
-    // Help menu = index 6: always enabled
 }
 
 
@@ -563,12 +528,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     // Help menu
     wxMenu* menuHelp = new wxMenu;
     menuHelp->Append(wxID_ABOUT);
-
-    // Options menu (accessible in game mode too)
-    wxMenu* menuOptions = new wxMenu;
-    menuOptions->Append(ID_OptionsAudio, "&Audio...", "Audio volume settings");
-    menuOptions->Append(ID_OptionsScreen, "&Screen...", "Brightness settings");
-
+    
     // Main menu
     wxMenuBar* menuBar = new wxMenuBar;    
     menuBar->Append(menuFile, "&File");
@@ -576,7 +536,6 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     menuBar->Append(menuEdit, "&Edit");
     menuBar->Append(menuView, "&View");
     menuBar->Append(menuTools,"&Tools");
-    menuBar->Append(menuOptions, "&Options");
     menuBar->Append(menuHelp, "&Help");
     SetMenuBar(menuBar);
     
@@ -775,8 +734,6 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
     Bind(wxEVT_MENU,&MainFrame::OnDeleteSel,this,ID_DeleteSel);
     Bind(wxEVT_MENU,&MainFrame::OnCreateNewObject,this,ID_CreateNewObject);
     Bind(wxEVT_MENU,&MainFrame::OnAddUnit,this,ID_AddUnit);
-    Bind(wxEVT_MENU,&MainFrame::OnOptionsAudio,this,ID_OptionsAudio);
-    Bind(wxEVT_MENU,&MainFrame::OnOptionsScreen,this,ID_OptionsScreen);
 
     spell_map->SetMessageInterface(bind(&MainFrame::ShowMessage,this,placeholders::_1,placeholders::_2,placeholders::_3), bind(&MainFrame::CheckMessageState,this));    
     
@@ -796,28 +753,6 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
 
     /*SpellTextRec text("Experimental text message", SpellLang::CZE);
     ShowMessage(&text,true);*/
-
-    // Restrict menus at startup (editor locked by default, GAMEMODEOFF unlocks)
-    UpdateMenuForGameMode();
-
-    // ESC handler via CHAR_HOOK — fires BEFORE menu accelerators,
-    // so ESC is not consumed by the disabled Edit > Clear buffer accelerator.
-    Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent& event) {
-        if (event.GetKeyCode() == WXK_ESCAPE
-            && !m_editor_unlocked
-            && !form_mmenu
-            && !form_unit_opts
-            && !form_message
-            && !form_video_box)
-        {
-            if (spell_map && spell_map->isGameMode())
-                spell_map->SetActiveGroup(0);
-            wxCommandEvent evt;
-            OnOpenMainMenu(evt);
-            return;
-        }
-        event.Skip();
-    });
 
     // auto-open main menu at startup
     CallAfter([this]() {
@@ -850,95 +785,6 @@ void MainFrame::OnSaveGameState(wxCommandEvent& event)
     int rc = spell_map->SaveGameStateToFile(path);
     if (rc != 0)
         wxMessageBox("Save game state failed!", "Error", wxICON_ERROR);
-}
-
-void MainFrame::OnOptionsAudio(wxCommandEvent& event)
-{
-    if (!spell_data || !spell_data->sounds || !spell_data->sounds->channels || !spell_data->midi)
-        return;
-
-    const double oldSfx = spell_data->sounds->channels->GetVolume();
-    const double oldMusic = spell_data->midi->GetVolume();
-
-    wxDialog dlg(this, wxID_ANY, "Audio", wxDefaultPosition, wxDefaultSize,
-        wxDEFAULT_DIALOG_STYLE);
-
-    auto* sizerTop = new wxBoxSizer(wxVERTICAL);
-
-    auto* lblMusic = new wxStaticText(&dlg, wxID_ANY, "Music volume");
-    auto* sldMusic = new wxSlider(&dlg, wxID_ANY,
-        (int)std::lround(oldMusic * 100.0), 0, 100,
-        wxDefaultPosition, wxSize(300, -1),
-        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
-
-    auto* lblSfx = new wxStaticText(&dlg, wxID_ANY, "Sound volume");
-    auto* sldSfx = new wxSlider(&dlg, wxID_ANY,
-        (int)std::lround(oldSfx * 100.0), 0, 100,
-        wxDefaultPosition, wxSize(300, -1),
-        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
-
-    sizerTop->Add(lblMusic, 0, wxALL, 8);
-    sizerTop->Add(sldMusic, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-    sizerTop->Add(lblSfx, 0, wxALL, 8);
-    sizerTop->Add(sldSfx, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-    auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
-    sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
-    dlg.SetSizerAndFit(sizerTop);
-
-    auto applyAudio = [&]() {
-        spell_data->midi->SetVolume(sldMusic->GetValue() / 100.0);
-        spell_data->sounds->channels->SetVolume(sldSfx->GetValue() / 100.0);
-    };
-
-    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAudio(); });
-    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAudio(); });
-
-    if (dlg.ShowModal() == wxID_OK)
-        applyAudio();
-    else
-    {
-        spell_data->midi->SetVolume(oldMusic);
-        spell_data->sounds->channels->SetVolume(oldSfx);
-    }
-}
-
-void MainFrame::OnOptionsScreen(wxCommandEvent& event)
-{
-    const double oldGamma = spell_map ? spell_map->GetGamma() : 1.3;
-
-    wxDialog dlg(this, wxID_ANY, "Screen", wxDefaultPosition, wxDefaultSize,
-        wxDEFAULT_DIALOG_STYLE);
-
-    auto* sizerTop = new wxBoxSizer(wxVERTICAL);
-
-    auto* lblBrightness = new wxStaticText(&dlg, wxID_ANY, "Brightness");
-    auto* sldBrightness = new wxSlider(&dlg, wxID_ANY,
-        (int)std::lround(oldGamma * 1000.0), 500, 2000,
-        wxDefaultPosition, wxSize(300, -1),
-        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
-
-    sizerTop->Add(lblBrightness, 0, wxALL, 8);
-    sizerTop->Add(sldBrightness, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-    auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
-    sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
-    dlg.SetSizerAndFit(sizerTop);
-
-    auto applyScreen = [&]() {
-        if (spell_map)
-            spell_map->SetGamma(sldBrightness->GetValue() * 0.001);
-    };
-
-    sldBrightness->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyScreen(); });
-
-    if (dlg.ShowModal() == wxID_OK)
-        applyScreen();
-    else
-    {
-        if (spell_map)
-            spell_map->SetGamma(oldGamma);
-    }
 }
 
 
@@ -1191,9 +1037,6 @@ void MainFrame::OnClose(wxCloseEvent& ev)
             delete form_mmenu;
             form_mmenu = NULL;
         }
-        // Return focus to canvas so ESC and other keys work
-        if(canvas)
-            canvas->SetFocus();
     }
     else
         ev.Skip();
@@ -1404,20 +1247,9 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                     spell_map->Close();
                 Close(true);
                 break;
-            case FormMainMenuAction::GameModeOff:
-                m_editor_unlocked = true;
-                if(spell_map && spell_map->IsLoaded() && spell_map->isGameMode())
-                    SetGameModeUI(false);
-                else
-                    UpdateMenuForGameMode();
-                break;
             default:
                 break;
         }
-
-        // Return focus to canvas so ESC and other keys work
-        if(canvas)
-            canvas->SetFocus();
     });
 }
 
@@ -3461,16 +3293,6 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
     }
 
     int key = event.GetKeyCode();
-
-    // ESC opens main menu when editor is locked
-    if(key == WXK_ESCAPE && !m_editor_unlocked)
-    {
-        if(spell_map->isGameMode())
-            spell_map->SetActiveGroup(0);
-        wxCommandEvent evt;
-        OnOpenMainMenu(evt);
-        return;
-    }
 
     // Group move hotkeys (game mode only)
     if(spell_map->isGameMode())

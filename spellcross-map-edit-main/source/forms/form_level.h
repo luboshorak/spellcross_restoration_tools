@@ -104,6 +104,7 @@ public:
     void OnLoadGame(wxCommandEvent& ev);
 
     void OnOptionsAudio(wxCommandEvent& ev);
+    void OnOptionsScreen(wxCommandEvent& ev);
 
     struct PlayerProgress
     {
@@ -749,6 +750,7 @@ public:
         ID_MENU_SAVE_GAME,
         ID_MENU_LOAD_GAME,
         ID_MENU_OPTIONS_AUDIO,
+        ID_MENU_OPTIONS_SCREEN,
         ID_MENU_GAME_MODE_TOGGLE,
         // Units management page IDs
         ID_BTN_UNITS,

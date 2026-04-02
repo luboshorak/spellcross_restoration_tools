@@ -6,7 +6,6 @@
 #include <wx/frame.h>
 #include <wx/log.h>
 #include <wx/slider.h>
-#include <wx/textdlg.h>
 
 #include <algorithm>
 #include <array>
@@ -260,15 +259,13 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
             form->SetIcon(ico);
     }
 
-    // menu bar: Options > Audio, Screen
+    // menu bar: Options > Audio
     auto* bar = new wxMenuBar();
     auto* optMenu = new wxMenu();
     optMenu->Append(ID_MMENU_OPTIONS_AUDIO, L"&Audio...\tCtrl+A");
-    optMenu->Append(ID_MMENU_OPTIONS_SCREEN, L"&Screen...\tCtrl+S");
     bar->Append(optMenu, "&Options");
     form->SetMenuBar(bar);
     form->Bind(wxEVT_MENU, &FormMainMenu::OnOptionsAudio, this, ID_MMENU_OPTIONS_AUDIO);
-    form->Bind(wxEVT_MENU, &FormMainMenu::OnOptionsScreen, this, ID_MMENU_OPTIONS_SCREEN);
 
     LayoutMenuItems(form->GetClientSize());
 
@@ -294,7 +291,6 @@ FormMainMenu::~FormMainMenu()
         form->Unbind(wxEVT_LEFT_UP, &FormMainMenu::OnMouseClick, this);
         form->Unbind(wxEVT_KEY_DOWN, &FormMainMenu::OnKeyDown, this);
         form->Unbind(wxEVT_MENU, &FormMainMenu::OnOptionsAudio,  this, ID_MMENU_OPTIONS_AUDIO);
-        form->Unbind(wxEVT_MENU, &FormMainMenu::OnOptionsScreen, this, ID_MMENU_OPTIONS_SCREEN);
         form->Destroy();
         form = nullptr;
     }
@@ -617,38 +613,7 @@ void FormMainMenu::OnKeyDown(wxKeyEvent& event)
         if (form) form->Close();
         return;
     }
-    // ~ key (backtick/tilde) opens console
-    int kc = event.GetKeyCode();
-    if (kc == '`' || kc == '~' || event.GetRawKeyCode() == 0xC0)
-    {
-        OnConsoleCommand();
-        return;
-    }
     event.Skip();
-}
-
-void FormMainMenu::OnConsoleCommand()
-{
-    wxTextEntryDialog dlg(form, "Enter command:", "Console", "");
-    if (dlg.ShowModal() != wxID_OK)
-        return;
-
-    std::string cmd = dlg.GetValue().ToStdString();
-    // trim whitespace
-    while (!cmd.empty() && cmd.front() == ' ') cmd.erase(cmd.begin());
-    while (!cmd.empty() && cmd.back() == ' ') cmd.pop_back();
-    // to upper
-    for (char& c : cmd) c = (char)std::toupper((unsigned char)c);
-
-    if (cmd == "GAMEMODEOFF")
-    {
-        if (m_action_cb)
-            m_action_cb(FormMainMenuAction::GameModeOff);
-    }
-    else if (!cmd.empty())
-    {
-        wxMessageBox("Unknown command: " + dlg.GetValue(), "Console", wxOK | wxICON_WARNING, form);
-    }
 }
 
 void FormMainMenu::OnOptionsAudio(wxCommandEvent& ev)
@@ -658,8 +623,9 @@ void FormMainMenu::OnOptionsAudio(wxCommandEvent& ev)
 
     const double oldSfx = m_spelldata->sounds->channels->GetVolume();
     const double oldMusic = m_spelldata->midi->GetVolume();
+    const double oldGamma = m_spell_map ? m_spell_map->GetGamma() : 1.3;
 
-    wxDialog dlg(form, wxID_ANY, "Audio", wxDefaultPosition, wxDefaultSize,
+    wxDialog dlg(form, wxID_ANY, "Options", wxDefaultPosition, wxDefaultSize,
         wxDEFAULT_DIALOG_STYLE);
 
     auto* sizerTop = new wxBoxSizer(wxVERTICAL);
@@ -676,47 +642,16 @@ void FormMainMenu::OnOptionsAudio(wxCommandEvent& ev)
         wxDefaultPosition, wxSize(300, -1),
         wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
 
-    sizerTop->Add(lblMusic, 0, wxALL, 8);
-    sizerTop->Add(sldMusic, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-    sizerTop->Add(lblSfx, 0, wxALL, 8);
-    sizerTop->Add(sldSfx, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
-    auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
-    sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
-    dlg.SetSizerAndFit(sizerTop);
-
-    auto applyAudio = [&]() {
-        m_spelldata->midi->SetVolume(sldMusic->GetValue() / 100.0);
-        m_spelldata->sounds->channels->SetVolume(sldSfx->GetValue() / 100.0);
-    };
-
-    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAudio(); });
-    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAudio(); });
-
-    if (dlg.ShowModal() == wxID_OK)
-        applyAudio();
-    else
-    {
-        m_spelldata->midi->SetVolume(oldMusic);
-        m_spelldata->sounds->channels->SetVolume(oldSfx);
-    }
-}
-
-void FormMainMenu::OnOptionsScreen(wxCommandEvent& ev)
-{
-    const double oldGamma = m_spell_map ? m_spell_map->GetGamma() : 1.3;
-
-    wxDialog dlg(form, wxID_ANY, "Screen", wxDefaultPosition, wxDefaultSize,
-        wxDEFAULT_DIALOG_STYLE);
-
-    auto* sizerTop = new wxBoxSizer(wxVERTICAL);
-
     auto* lblBrightness = new wxStaticText(&dlg, wxID_ANY, "Brightness");
     auto* sldBrightness = new wxSlider(&dlg, wxID_ANY,
         (int)std::lround(oldGamma * 1000.0), 500, 2000,
         wxDefaultPosition, wxSize(300, -1),
         wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
 
+    sizerTop->Add(lblMusic, 0, wxALL, 8);
+    sizerTop->Add(sldMusic, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    sizerTop->Add(lblSfx, 0, wxALL, 8);
+    sizerTop->Add(sldSfx, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     sizerTop->Add(lblBrightness, 0, wxALL, 8);
     sizerTop->Add(sldBrightness, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
@@ -724,17 +659,23 @@ void FormMainMenu::OnOptionsScreen(wxCommandEvent& ev)
     sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
     dlg.SetSizerAndFit(sizerTop);
 
-    auto applyScreen = [&]() {
+    auto applyAll = [&]() {
+        m_spelldata->midi->SetVolume(sldMusic->GetValue() / 100.0);
+        m_spelldata->sounds->channels->SetVolume(sldSfx->GetValue() / 100.0);
         if (m_spell_map)
             m_spell_map->SetGamma(sldBrightness->GetValue() * 0.001);
     };
 
-    sldBrightness->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyScreen(); });
+    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAll(); });
+    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAll(); });
+    sldBrightness->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAll(); });
 
     if (dlg.ShowModal() == wxID_OK)
-        applyScreen();
+        applyAll();
     else
     {
+        m_spelldata->midi->SetVolume(oldMusic);
+        m_spelldata->sounds->channels->SetVolume(oldSfx);
         if (m_spell_map)
             m_spell_map->SetGamma(oldGamma);
     }

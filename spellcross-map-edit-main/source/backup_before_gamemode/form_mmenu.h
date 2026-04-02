@@ -20,8 +20,7 @@ enum class FormMainMenuAction
     LoadGame,
     Credits,
     Intro,
-    Exit,
-    GameModeOff
+    Exit
 };
 
 class FormMainMenu
@@ -69,10 +68,7 @@ private:
     void OnMouseLeave(wxMouseEvent& event);
     void OnMouseClick(wxMouseEvent& event);
     void OnKeyDown(wxKeyEvent& event);
-    void OnConsoleCommand();
     void OnOptionsAudio(wxCommandEvent& ev);
-    void OnOptionsScreen(wxCommandEvent& ev);
 
     static constexpr int ID_MMENU_OPTIONS_AUDIO  = 9901;
-    static constexpr int ID_MMENU_OPTIONS_SCREEN = 9902;
 };

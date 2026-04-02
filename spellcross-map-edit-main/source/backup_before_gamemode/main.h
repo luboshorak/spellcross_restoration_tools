@@ -115,10 +115,6 @@ public:
     bool m_mission_end_flow = false;
     SpellMap::MissionEndRequest m_mission_end_req;
 
-    // Editor is locked by default (game mode UI). Console command GAMEMODEOFF unlocks it.
-    bool m_editor_unlocked = false;
-    void UpdateMenuForGameMode();
-
     // Strategic level reference for mission result callback
     class StrategicLevelFrame* m_strategicLevel = nullptr;
 
@@ -150,8 +146,6 @@ private:
     void OnSwitchGameMode(wxCommandEvent& event);
     void OnSaveGameState(wxCommandEvent& event);
     void OnLoadGameState(wxCommandEvent& event);
-    void OnOptionsAudio(wxCommandEvent& event);
-    void OnOptionsScreen(wxCommandEvent& event);
 
     void OnResetUnitView(wxCommandEvent& event);
     void OnSelectUnitView(wxCommandEvent& event);
@@ -427,9 +421,7 @@ enum
     ID_GenDMAobjectsMaps,
     ID_ViewVideo,
     ID_ViewMIDI,
-    ID_EditTileFlags,
-    ID_OptionsAudio,
-    ID_OptionsScreen
+    ID_EditTileFlags
 };
 
 

@@ -1399,6 +1399,7 @@ void StrategicLevelFrame::BuildMenu()
 
     auto* options = new wxMenu();
     options->Append(ID_MENU_OPTIONS_AUDIO, (L"&Audio...\tCtrl+O"));
+    options->Append(ID_MENU_OPTIONS_SCREEN, (L"&Screen...\tCtrl+B"));
     bar->Append(options, "&Options");
 
     auto* game = new wxMenu();
@@ -1410,6 +1411,7 @@ void StrategicLevelFrame::BuildMenu()
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnSaveGame, this, ID_MENU_SAVE_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnLoadGame, this, ID_MENU_LOAD_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsAudio, this, ID_MENU_OPTIONS_AUDIO);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsScreen, this, ID_MENU_OPTIONS_SCREEN);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnToggleGameMode, this, ID_MENU_GAME_MODE_TOGGLE);
 
 }
@@ -1833,12 +1835,11 @@ void StrategicLevelFrame::OnOptionsAudio(wxCommandEvent& ev)
         return;
     }
 
-    // uložíme původní hodnoty kvůli Cancel
-    const double oldSfx = m_spellData->sounds->channels->GetVolume(); // 0..1
-    const double oldMusic = m_spellData->midi->GetVolume();            // 0..1
+    const double oldSfx = m_spellData->sounds->channels->GetVolume();
+    const double oldMusic = m_spellData->midi->GetVolume();
 
-    wxDialog dlg(this, wxID_ANY, "Audio options", wxDefaultPosition, wxDefaultSize,
-        wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+    wxDialog dlg(this, wxID_ANY, "Audio", wxDefaultPosition, wxDefaultSize,
+        wxDEFAULT_DIALOG_STYLE);
 
     auto* sizerTop = new wxBoxSizer(wxVERTICAL);
 
@@ -1858,48 +1859,67 @@ void StrategicLevelFrame::OnOptionsAudio(wxCommandEvent& ev)
 
     sizerTop->Add(lblMusic, 0, wxALL, 8);
     sizerTop->Add(sldMusic, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
-
     sizerTop->Add(lblSfx, 0, wxALL, 8);
     sizerTop->Add(sldSfx, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
     sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
-
     dlg.SetSizerAndFit(sizerTop);
 
-    auto applyVolumes = [&]()
-        {
-            const double mv = sldMusic->GetValue() / 100.0;
-            const double sv = sldSfx->GetValue() / 100.0;
+    auto applyAudio = [&]() {
+        m_spellData->midi->SetVolume(sldMusic->GetValue() / 100.0);
+        m_spellData->sounds->channels->SetVolume(sldSfx->GetValue() / 100.0);
+    };
 
-            m_spellData->midi->SetVolume(mv);
-            m_spellData->sounds->channels->SetVolume(sv);
-        };
+    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAudio(); });
+    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyAudio(); });
 
-    // okamžitě aplikuj při posunu
-    sldMusic->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
-        {
-            applyVolumes();
-        });
-
-    sldSfx->Bind(wxEVT_SLIDER, [&](wxCommandEvent&)
-        {
-            applyVolumes();
-        });
-
-    // otevření dialogu
-    const int rc = dlg.ShowModal();
-
-    if (rc == wxID_OK)
-    {
-        // necháme nastavené (persistenci řeší MyApp::OnExit -> ini)
-        applyVolumes();
-    }
+    if (dlg.ShowModal() == wxID_OK)
+        applyAudio();
     else
     {
-        // Cancel -> vrať původní hodnoty
         m_spellData->midi->SetVolume(oldMusic);
         m_spellData->sounds->channels->SetVolume(oldSfx);
+    }
+}
+
+void StrategicLevelFrame::OnOptionsScreen(wxCommandEvent& ev)
+{
+    SpellMap* spellMap = m_main ? m_main->GetSpellMap() : nullptr;
+    const double oldGamma = spellMap ? spellMap->GetGamma() : 1.3;
+
+    wxDialog dlg(this, wxID_ANY, "Screen", wxDefaultPosition, wxDefaultSize,
+        wxDEFAULT_DIALOG_STYLE);
+
+    auto* sizerTop = new wxBoxSizer(wxVERTICAL);
+
+    auto* lblBrightness = new wxStaticText(&dlg, wxID_ANY, "Brightness");
+    auto* sldBrightness = new wxSlider(&dlg, wxID_ANY,
+        (int)std::lround(oldGamma * 1000.0),
+        500, 2000,
+        wxDefaultPosition, wxSize(300, -1),
+        wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+
+    sizerTop->Add(lblBrightness, 0, wxALL, 8);
+    sizerTop->Add(sldBrightness, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+
+    auto* btns = dlg.CreateButtonSizer(wxOK | wxCANCEL);
+    sizerTop->Add(btns, 0, wxALL | wxEXPAND, 8);
+    dlg.SetSizerAndFit(sizerTop);
+
+    auto applyScreen = [&]() {
+        if (spellMap)
+            spellMap->SetGamma(sldBrightness->GetValue() * 0.001);
+    };
+
+    sldBrightness->Bind(wxEVT_SLIDER, [&](wxCommandEvent&) { applyScreen(); });
+
+    if (dlg.ShowModal() == wxID_OK)
+        applyScreen();
+    else
+    {
+        if (spellMap)
+            spellMap->SetGamma(oldGamma);
     }
 }
 
