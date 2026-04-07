@@ -10,11 +10,11 @@ Fanouškovský pokus **oživit a zpřístupnit starý Spellcross** modernější
 
 ---
 
-## První release
+## Release
 
-K dispozici je první veřejný release:
+K dispozici je veřejný release:
 
-[**`Spellcross_Reloaded_v0.0.2`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.2)
+[**`Spellcross_Reloaded_v0.0.3`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.3)
 
 Aktuální cíl tohoto buildu je prostý: dostat hru do stavu, kdy by měla být **dohratelná od začátku do konce kampaně**. To ale neznamená, že je hotová nebo stabilní.
 
@@ -26,16 +26,17 @@ Tenhle release je určen hlavně pro průběžné testování, hledání chyb a 
 
 ---
 
-## Známé nedodělky a problémy v release 0.0.2
+## Známé nedodělky a problémy v release 0.0.3
 
 ### Herní logika
 - **Hierarchické začlenění jednotek** se zatím správně nepropisuje do hrací mapy.
 - **Upgrady jednotek** se zatím také nepropisují korektně do samotné hry / bojové mapy.
 - **Dočasné jednotky** nejsou hotové a jejich systémy aktuálně nefungují správně.
 - **Other Side counterattack / protiútoky** nejsou funkční.
+- **Deployment mod** není implementován - jednotky jsou na začátku mise deploynuty automaticky na startovací pozice
 
 ### Game mode / stabilita
-- Občas zlobí **Game Mode ON** a je potřeba ho ručně znovu zapnout v příslušné obrazovce, typicky na mapě nebo na strategické mapě.
+- **Game Mode ON** je v této verzi již nastaven automaticky - vypnout se dá z hlavního menu pomocí konzole (~) a příkazem GAMEMODEOFF
 - Může zlobit **přehrávání videí**.
 - AI nepřátel i aliančních jednotek je zatím spíš **demo verze AI** než hotová herní inteligence.
 - Kvůli tomu je momentálně **rozbitá obtížnost hry**.
