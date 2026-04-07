@@ -1241,6 +1241,21 @@ bool MainFrame::LoadGameStateFromDialog()
         return false;
     }
 
+    // Sync UI with game mode (LoadGameStateFromFile sets game_mode=1 internally,
+    // but UI elements like menu checkbox, ribbon panel, etc. need updating too)
+    if (spell_map->isGameMode())
+    {
+        if (GetMenuBar())
+        {
+            if (auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
+                item->Check(true);
+        }
+        if (ribbonBar)
+            ribbonBar->HidePanels();
+        if (canvas)
+            canvas->Refresh();
+    }
+
     return true;
 }
 
@@ -1369,7 +1384,21 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                         wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()), "Load error", wxICON_ERROR | wxOK, this);
                         break;
                     }
-                    SetGameModeUI(true);
+                    // Sync UI only: game_mode is already set by LoadGameStateFromFile.
+                    // Do NOT call SetGameModeUI(true) which would reset saves, fire
+                    // MissionStartEvent and destroy the loaded state.
+                    if (spell_map->isGameMode())
+                    {
+                        if (GetMenuBar())
+                        {
+                            if (auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
+                                item->Check(true);
+                        }
+                        if (ribbonBar)
+                            ribbonBar->HidePanels();
+                        if (canvas)
+                            canvas->Refresh();
+                    }
                 }
                 break;
             }

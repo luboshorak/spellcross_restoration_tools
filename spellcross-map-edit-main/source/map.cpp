@@ -1374,6 +1374,33 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		return 20;
 	}
 
+	// --- Enter game mode from loaded save ---
+	// The base map Load() above reset game_mode to 0 (editor mode).
+	// We must re-enable game mode, but WITHOUT running MissionStartEvent or
+	// resetting saves (the saved state is already fully initialized).
+	if (!game_mode)
+	{
+		game_mode = 1;
+
+		// ensure player units are ready
+		for (auto* u : units)
+		{
+			if (!u) continue;
+			u->in_placement = false;
+			u->was_moved = true;
+			if (!u->is_enemy)
+				u->ActivateUnit();
+		}
+
+		// refresh selection/range state
+		unit_selection_mod = true;
+		if (unit_selection)
+			g_attack_map_dirty_for = unit_selection;
+
+		// relink events to units (trigger events like DestroyUnit, SaveUnit, etc.)
+		events->ResetEvents();
+	}
+
 	return 0;
 }
 
@@ -6818,12 +6845,32 @@ void SpellMap::StartEnemyTurn()
     enemy_turn_prev_selection = unit_selection;
     enemy_turn_prev_sel_mod = unit_selection_mod;
 
-    enemy_turn_list.clear();
+	enemy_turn_list.clear();
+
+	// --- Safety cleanup: remove any dead units lingering in the units list ---
+	// (can happen if morph fails, race conditions, or state machine edge cases)
+	{
+		std::vector<MapUnit*> dead_list;
+		for (auto* u : units)
+		{
+			if (u && u->isDead())
+				dead_list.push_back(u);
+		}
+		for (auto* dead : dead_list)
+		{
+			auto extracted = ExtractUnit(dead);
+			if (extracted)
+				extracted->Kill();
+		}
+		if (!dead_list.empty())
+			SortUnits();
+	}
+
 	for (auto* u : units)
 	{
 		if (u && u->is_enemy)
 		{
-            // decay aggro memory once per enemy phase
+			// decay aggro memory once per enemy phase
 			if (u->ai_aggro_ttl > 0)
 			{
 				u->ai_aggro_ttl--;
@@ -6831,7 +6878,7 @@ void SpellMap::StartEnemyTurn()
 					u->ai_aggro_attacker_id = -1;
 			}
 			u->ResetAP(); // enemy starts with full AP
-            enemy_turn_list.push_back(u);
+			enemy_turn_list.push_back(u);
 		}
 		else if (u && !u->is_enemy)
 		{
@@ -6842,7 +6889,29 @@ void SpellMap::StartEnemyTurn()
 		}
 	}
 
-    enemy_turn_idx = 0;
+	// --- Enemy level scaling ---
+	// Ensure enemy units always have at least the same experience level
+	// as the highest player unit. This keeps difficulty in line with
+	// the original Spellcross feel as the player progresses.
+	{
+		int max_player_level = 1;
+		for (auto* u : units)
+		{
+			if (u && !u->is_enemy && u->experience_level > max_player_level)
+				max_player_level = u->experience_level;
+		}
+		for (auto* u : enemy_turn_list)
+		{
+			if (u && u->experience_level < max_player_level)
+			{
+				u->experience_level = max_player_level;
+				// update experience points to match the new level
+				u->experience = u->unit->GetExperiencePts(max_player_level);
+			}
+		}
+	}
+
+	enemy_turn_idx = 0;
     enemy_turn_running = true;
 
     // hide enemy in player view until they make contact again
@@ -7111,35 +7180,60 @@ bool SpellMap::PanicTurnStep()
 
 bool SpellMap::EnemyTurnStep()
 {
-	// schedule exactly one enemy action; returns true when something was scheduled
+	// Schedule exactly one enemy action; returns true when something was scheduled.
+	// Key: enemy_turn_idx does NOT advance until the current unit has exhausted
+	// all useful actions (attack + move), enabling multi-action per turn.
 	if (!enemy_turn_running)
 		return(false);
 
 	LockMap();
 
+	// --- Endgame hunt detection ---
+	// When very few enemies remain, all units switch to aggressive hunting
+	// to prevent the frustrating "last enemy hiding in a corner" scenario.
+	int alive_enemies = 0;
+	int alive_players = 0;
+	for (auto* u : units)
+	{
+		if (!u) continue;
+		if (u->is_enemy) alive_enemies++;
+		else alive_players++;
+	}
+	bool endgame_hunt = (alive_enemies > 0 && alive_enemies <= 2 && alive_players > 0);
+
 	while (enemy_turn_idx < enemy_turn_list.size())
 	{
-		MapUnit* enemy = enemy_turn_list[enemy_turn_idx++];
+		MapUnit* enemy = enemy_turn_list[enemy_turn_idx];
 		if (!enemy || !_ptr_in_units_list(units, enemy))
+		{
+			enemy_turn_idx++;
 			continue;
+		}
 
 		// skip if already busy or has no AP
 		if (IsUnitBusy(enemy) || enemy->action_points <= 0)
+		{
+			enemy_turn_idx++;
 			continue;
+		}
 
 		// enemy actions are driven by the selected unit state machine -> temporarily select this enemy
 		unit_selection = enemy;
 		unit_selection_mod = true;
 
-		// 1) try attack (only against targets within this unit's computed attack range)
+		// 1) try attack (scored target selection)
 		unit_view->CalcAttackRange(enemy, true);
 
 		MapUnit* best_target = nullptr;
-		int best_dist = INT_MAX;
+		double best_score = -1e9;
 
 		for (auto* u : units)
 		{
 			if (!u || u->is_enemy)
+				continue;
+
+			// skip dead units (not yet extracted from map)
+			if (u->isDead())
 				continue;
 
 			auto pos = ConvXY(u->coor);
@@ -7149,32 +7243,82 @@ bool SpellMap::EnemyTurnStep()
 			if (!enemy->unit->canAttack(u->unit))
 				continue;
 
-			// prefer closer targets
-			int dist = abs(enemy->coor.x - u->coor.x) + abs(enemy->coor.y - u->coor.y);
-			if (dist < best_dist)
+			// indirect fire: enforce minimum range for ground targets
+			if (enemy->unit->isIndirectFire() && u->unit->isLand())
 			{
-				best_dist = dist;
+				if (enemy->coor.Distance(u->coor) <= 2)
+					continue;
+			}
+
+			// --- Scored target selection ---
+			double score = 0.0;
+
+			// attack/defense ratio: prefer targets we can damage effectively
+			double atk = (double)enemy->GetAttack(u);
+			double def = (double)u->GetDefence();
+			double atk_ratio = (def > 0) ? (atk / def) : 3.0;
+			score += 10.0 * (std::min)(atk_ratio, 5.0);
+
+			// prefer wounded targets (finish them off)
+			double hp_max = (double)u->unit->GetHP();
+			double hp_cur = (double)u->man;
+			double health_pct = (hp_max > 0) ? (hp_cur / hp_max) : 1.0;
+			score += 15.0 * (1.0 - health_pct);
+
+			// slight distance preference (closer is better but not dominant)
+			double dist = enemy->coor.Distance(u->coor);
+			score -= 1.5 * dist;
+
+			// penalize entrenched targets (harder to damage)
+			score -= 4.0 * u->dig_level;
+
+			// prefer high-value targets: artillery, long-range units
+			if (u->unit->isIndirectFire())
+				score += 8.0;
+			if (u->unit->fire_range >= 6)
+				score += 4.0;
+
+			// prefer threatening targets (high attack values)
+			int max_target_atk = (std::max)({u->unit->attack_light, u->unit->attack_armored, u->unit->attack_air});
+			score += 0.1 * max_target_atk;
+
+			if (score > best_score)
+			{
+				best_score = score;
 				best_target = u;
 			}
 		}
 
 		if (best_target && StartAttack_NoHUD(enemy, best_target))
-
 		{
+			// don't advance index: come back for more actions after animation
 			ReleaseMap();
 			return(true);
 		}
 
 		// 1b) auto-land for "air units that can't attack from air" (e.g. Magotar)
-		// If landing is impossible on current tile (land unit stacked here), move to nearest landable neighbor of the target first.
+		// Magotar should primarily SCOUT, not rush to land.
+		// Landing only in specific conditions:
+		//   - endgame hunt mode (one of last enemies)
+		//   - adjacent target is critically weak (< 30% HP) and isolated
+		//   - no other enemy ground units are alive (no scouting role)
 		if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction())
 		{
-			// find adjacent player ground unit (melee trigger)
+			// count friendly ground units (determines if Magotar has a scouting role)
+			int friendly_ground_count = 0;
+			for (auto* u : units)
+			{
+				if (u && u->is_enemy && u != enemy && u->unit && u->unit->isLand() && !u->isDead())
+					friendly_ground_count++;
+			}
+			bool has_scout_role = (friendly_ground_count > 0);
+
+			// find adjacent player ground unit
 			MapUnit* adj = nullptr;
 			for (auto* u : units)
 			{
-				if (!u || u->is_enemy) continue;
-				if (!u->unit || !u->unit->isLand()) continue; // melee is against ground
+				if (!u || u->is_enemy || u->isDead()) continue;
+				if (!u->unit || !u->unit->isLand()) continue;
 				if (enemy->coor.Distance(u->coor) <= 1)
 				{
 					adj = u;
@@ -7182,148 +7326,275 @@ bool SpellMap::EnemyTurnStep()
 				}
 			}
 
+			// decide whether to land
+			bool should_land = false;
 			if (adj)
 			{
-				// landing morph type (aircraft down -> par3 in action_params[2])
 				auto morph_type = spelldata->units->GetUnit(enemy->unit->action_params[2]);
-
-				// only land if after morph we could actually attack that adjacent unit
 				if (morph_type && morph_type->canAttack(adj->unit))
 				{
-					auto has_land_unit = [&](MapXY t) -> bool
-						{
-							auto pxy = ConvXY(t); // ConvXY wants non-const ref in your codebase
-							for (auto* tu = Lunit[pxy]; tu; tu = tu->next)
-							{
-								if (tu == enemy) continue;
-								if (tu->unit && tu->unit->isLand())
-									return true;
-							}
-							return false;
-						};
+					double adj_health = (adj->unit->GetHP() > 0) ? (double)adj->man / adj->unit->GetHP() : 1.0;
 
-					auto has_air_unit_other = [&](MapXY t) -> bool
-						{
-							auto pxy = ConvXY(t);
-							for (auto* tu = Lunit[pxy]; tu; tu = tu->next)
-							{
-								if (tu == enemy) continue;
-								if (tu->unit && tu->unit->isAir())
-									return true;
-							}
-							return false;
-						};
+					// count player threats near landing spot
+					int player_threats_nearby = 0;
+					for (auto* u : units)
+					{
+						if (!u || u->is_enemy || u->isDead()) continue;
+						if (u == adj) continue;
+						if (u->unit && u->unit->isLand() && enemy->coor.Distance(u->coor) <= 3)
+							player_threats_nearby++;
+					}
 
-					// can we land right here? (no stacked land unit + terrain/object must allow the LAND morph)
-					auto can_land_at = [&](const MapXY& t) -> bool
+					if (endgame_hunt)
+						should_land = true; // endgame: land and fight
+					else if (!has_scout_role)
+						should_land = true; // no friendly ground units: scouting is pointless
+					else if (adj_health < 0.30 && player_threats_nearby == 0)
+						should_land = true; // safe opportunistic kill on isolated weak target
+				}
+			}
+
+			if (should_land && adj)
+			{
+				auto morph_type = spelldata->units->GetUnit(enemy->unit->action_params[2]);
+
+				auto has_land_unit = [&](MapXY t) -> bool
+					{
+						auto pxy = ConvXY(t);
+						for (auto* tu = Lunit[pxy]; tu; tu = tu->next)
+						{
+							if (tu == enemy) continue;
+							if (tu->unit && tu->unit->isLand())
+								return true;
+						}
+						return false;
+					};
+
+				auto has_air_unit_other = [&](MapXY t) -> bool
+					{
+						auto pxy = ConvXY(t);
+						for (auto* tu = Lunit[pxy]; tu; tu = tu->next)
+						{
+							if (tu == enemy) continue;
+							if (tu->unit && tu->unit->isAir())
+								return true;
+						}
+						return false;
+					};
+
+				auto can_land_at = [&](const MapXY& t) -> bool
+				{
+					if (!const_cast<MapXY&>(t).IsSelected())
+						return false;
+
+					if (has_land_unit(t))
+						return false;
+
+					auto pxy = ConvXY(const_cast<MapXY&>(t));
+					if (!morph_type->isWalk() && tiles[pxy].flags == 0x90)
+						return false;
+					if (!morph_type->isHover() && tiles[pxy].flags == 0x60)
+						return false;
+					if (tiles[pxy].flags && tiles[pxy].flags != 0x90 && tiles[pxy].flags != 0x60)
+						return false;
+
+					return true;
+				};
+
+				bool can_land_here = can_land_at(enemy->coor);
+
+				if (can_land_here)
+				{
+					enemy->action_points -= enemy->unit->action_ap;
+					enemy->PlayAction();
+
+					enemy->altitude = 100;
+					enemy->action_state = MapUnit::ACTION_STATE::AIR_LAND;
+
+					enemy->in_animation = enemy->unit->gr_base;
+					enemy->frame_stop = enemy->in_animation ? enemy->in_animation->anim.frames : 0;
+					enemy->frame = 0;
+					if (enemy->in_animation)
+						enemy->azimuth = enemy->in_animation->GetAnimAzim(enemy->in_animation->GetStaticAngle(enemy->azimuth));
+
+					enemy->ClearDigLevel();
+					enemy->ResetTurnsCounter();
+
+					ReleaseMap();
+					return true;
+				}
+
+				// cannot land here -> move towards nearest landable neighbor
+				auto find_path_unbounded = [&](MapXY dest) -> std::vector<AStarNode>
+					{
+						int ap_saved = enemy->action_points;
+						enemy->action_points = 200000;
+						auto path = unit_range->FindPath(enemy, dest);
+						enemy->action_points = ap_saved;
+						return path;
+					};
+
+				MapXY best_advance;
+				best_advance.Clear();
+				int best_rem = INT_MAX;
+				int best_cost = INT_MAX;
+
+				for (int dir = 0; dir < 8; dir++)
+				{
+					MapXY land_tile = GetNeighborTile8D(adj->coor, dir);
+					if (!land_tile.IsSelected())
+						continue;
+					if (!can_land_at(land_tile))
+						continue;
+					if (has_air_unit_other(land_tile))
+						continue;
+
+					auto path = find_path_unbounded(land_tile);
+					if (path.size() < 2)
+						continue;
+
+					MapXY advance = enemy->coor;
+					int adv_cost = 0;
+					for (int i = 1; i < (int)path.size(); i++)
+					{
+						if (path[i].g_cost <= enemy->action_points)
+						{
+							advance = path[i].pos;
+							adv_cost = path[i].g_cost;
+						}
+						else
+							break;
+					}
+
+					if (advance == enemy->coor)
+						continue;
+
+					int rem = advance.Distance(land_tile);
+					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
+					{
+						best_rem = rem;
+						best_cost = adv_cost;
+						best_advance = advance;
+					}
+				}
+
+				if (best_advance.IsSelected() && StartMove_NoRangeCheck(enemy, best_advance))
+				{
+					ReleaseMap();
+					return true;
+				}
+			}
+
+			// Magotar SCOUTING: if not landing, actively scout and share intel
+			// Fly around the map, discover player units, set aggro on nearby friendly ground units
+			if (has_scout_role && enemy->action_points > 0)
+			{
+				// first: check if we can see any player units and share intel with nearby friendlies
+				for (auto* player_u : units)
+				{
+					if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
+					if (enemy->coor.Distance(player_u->coor) <= (double)(enemy->unit->sdir + 1))
+					{
+						// spotted a player unit! Set aggro on nearby friendly ground units
+						AggroEnemiesAround(enemy->coor, player_u->coor, -1, 12, 4);
+					}
+				}
+
+				// scouting movement: fly toward nearest player unit but maintain distance (3+ tiles)
+				MapUnit* scout_target = nullptr;
+				double scout_dist = 1e9;
+				for (auto* u : units)
+				{
+					if (!u || u->is_enemy || u->isDead()) continue;
+					double d = enemy->coor.Distance(u->coor);
+					if (d < scout_dist) { scout_dist = d; scout_target = u; }
+				}
+
+				if (scout_target)
+				{
+					auto tile_free_for_air = [&](const MapXY& t) -> bool
 					{
 						if (!const_cast<MapXY&>(t).IsSelected())
 							return false;
-
-						if (has_land_unit(t))
-							return false;
-
-						// land-unit obstacle rules must use the *morphed* type (walk/hover)
 						auto pxy = ConvXY(const_cast<MapXY&>(t));
-						if (!morph_type->isWalk() && tiles[pxy].flags == 0x90)
-							return false;
-						if (!morph_type->isHover() && tiles[pxy].flags == 0x60)
-							return false;
-						if (tiles[pxy].flags && tiles[pxy].flags != 0x90 && tiles[pxy].flags != 0x60)
-							return false;
-
+						auto tile_unit = Lunit[pxy];
+						while (tile_unit)
+						{
+							if (tile_unit != enemy && tile_unit->unit && tile_unit->unit->isAir())
+								return false;
+							tile_unit = tile_unit->next;
+						}
 						return true;
 					};
 
-					bool can_land_here = can_land_at(enemy->coor);
-
-					if (can_land_here)
+					auto find_path_unbounded_scout = [&](const MapXY& dest) -> std::vector<AStarNode>
 					{
-						// perform the same sequence as OnHUDairLandTakeOff() (land branch)
-						enemy->action_points -= enemy->unit->action_ap;
-						enemy->PlayAction();
+						int ap_saved = enemy->action_points;
+						enemy->action_points = 200000;
+						auto path = unit_range->FindPath(enemy, dest);
+						enemy->action_points = ap_saved;
+						return path;
+					};
 
-						enemy->altitude = 100;
-						enemy->action_state = MapUnit::ACTION_STATE::AIR_LAND;
+					// if too close (< 3 tiles), try to move to a position 4-6 tiles away
+					// if too far, approach to about 4-5 tiles distance (scout range)
+					const double ideal_dist_min = 3.0;
+					const double ideal_dist_max = 6.0;
 
-						enemy->in_animation = enemy->unit->gr_base;
-						enemy->frame_stop = enemy->in_animation ? enemy->in_animation->anim.frames : 0;
-						enemy->frame = 0;
-						if (enemy->in_animation)
-							enemy->azimuth = enemy->in_animation->GetAnimAzim(enemy->in_animation->GetStaticAngle(enemy->azimuth));
+					MapXY best_scout_tile;
+					best_scout_tile.Clear();
+					int best_scout_rem = INT_MAX;
+					int best_scout_cost = INT_MAX;
 
-						enemy->ClearDigLevel();
-						enemy->ResetTurnsCounter();
+					MapXY goal = scout_target->coor;
 
-						ReleaseMap();
-						return true;
-					}
-
-					// cannot land here -> move towards nearest landable neighbor of adj (then land next step)
-					auto find_path_unbounded = [&](MapXY dest) -> std::vector<AStarNode>
-						{
-							int ap_saved = enemy->action_points;
-							enemy->action_points = 200000;
-							auto path = unit_range->FindPath(enemy, dest);
-							enemy->action_points = ap_saved;
-							return path;
-						};
-
-					MapXY best_advance;
-					best_advance.Clear();
-					int best_rem = INT_MAX;
-					int best_cost = INT_MAX;
-
+					// try positions around the target at ideal distance
 					for (int dir = 0; dir < 8; dir++)
 					{
-						MapXY land_tile = GetNeighborTile8D(adj->coor, dir);
-						if (!land_tile.IsSelected())
-							continue;
-
-						// must be landable (no stacked land unit + terrain/object must allow landing),
-						// and air-move must not collide with another air unit
-						if (!can_land_at(land_tile))
-							continue;
-						if (has_air_unit_other(land_tile))
-							continue;
-
-						auto path = find_path_unbounded(land_tile);
-						if (path.size() < 2)
-							continue;
-
-						// advance as far as possible this turn towards land_tile
-						MapXY advance = enemy->coor;
-						int adv_cost = 0;
-						for (int i = 1; i < (int)path.size(); i++)
+						// try several distances along each direction
+						MapXY t = goal;
+						for (int step = 0; step < 6; step++)
 						{
-							if (path[i].g_cost <= enemy->action_points)
+							t = GetNeighborTile8D(t, dir);
+							if (!t.IsSelected()) break;
+
+							double d = t.Distance(goal);
+							if (d < ideal_dist_min || d > ideal_dist_max) continue;
+							if (!tile_free_for_air(t)) continue;
+
+							auto path = find_path_unbounded_scout(t);
+							if (path.size() < 2) continue;
+
+							MapXY advance = enemy->coor;
+							int adv_cost = 0;
+							for (int i = 1; i < (int)path.size(); i++)
 							{
-								advance = path[i].pos;
-								adv_cost = path[i].g_cost;
+								if (path[i].g_cost <= enemy->action_points)
+								{
+									advance = path[i].pos;
+									adv_cost = path[i].g_cost;
+								}
+								else
+									break;
 							}
-							else
-								break;
-						}
 
-						if (advance == enemy->coor)
-							continue;
+							if (advance == enemy->coor) continue;
 
-						int rem = advance.Distance(land_tile);
-						if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
-						{
-							best_rem = rem;
-							best_cost = adv_cost;
-							best_advance = advance;
+							int rem = (int)advance.Distance(t);
+							if (rem < best_scout_rem || (rem == best_scout_rem && adv_cost < best_scout_cost))
+							{
+								best_scout_rem = rem;
+								best_scout_cost = adv_cost;
+								best_scout_tile = advance;
+							}
 						}
 					}
 
-					if (best_advance.IsSelected() && StartMove_NoRangeCheck(enemy, best_advance))
+					if (best_scout_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_scout_tile))
 					{
 						ReleaseMap();
-						return true;
+						return(true);
 					}
-
-					// if we couldn't find a landable neighbor (or couldn't move), fall through to aggro chase below
 				}
 			}
 		}
@@ -7344,34 +7615,189 @@ bool SpellMap::EnemyTurnStep()
 			if (!goal.IsSelected())
 				goal = enemy->ai_aggro_pos;
 
-			// invalid goal -> drop aggro
+			// invalid goal -> drop aggro and fall through to movement phase
 			if (!goal.IsSelected())
 			{
 				enemy->ai_aggro_ttl = 0;
 				enemy->ai_aggro_attacker_id = -1;
-				continue;
 			}
-
-			auto tile_free_for = [&](const MapXY& t) -> bool
+			else
 			{
+				auto tile_free_for = [&](const MapXY& t) -> bool
+				{
 					if (!(t.x >= 0 && t.y >= 0))
-					return false;
+						return false;
 
+					auto pxy = ConvXY(const_cast<MapXY&>(t));
+					auto tile_unit = Lunit[pxy];
+					while (tile_unit)
+					{
+						if ((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
+							(!enemy->unit->isAir() && !tile_unit->unit->isAir()))
+						{
+							return false;
+						}
+						tile_unit = tile_unit->next;
+					}
+					return true;
+				};
+
+				auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
+				{
+					int ap_saved = enemy->action_points;
+					enemy->action_points = 200000;
+					auto path = unit_range->FindPath(enemy, dest);
+					enemy->action_points = ap_saved;
+					return path;
+				};
+
+				// candidates: neighbors around goal (preferred), and goal itself (if empty)
+				std::vector<MapXY> cand;
+				cand.reserve(9);
+
+				for (int dir = 0; dir < 8; dir++)
+				{
+					MapXY t = GetNeighborTile8D(goal, dir);
+					if (tile_free_for(t))
+						cand.push_back(t);
+				}
+				if (tile_free_for(goal))
+					cand.push_back(goal);
+
+				MapXY best_tile;
+				best_tile.Clear();
+				int best_rem = INT_MAX;
+				int best_cost = INT_MAX;
+
+				for (auto& dest : cand)
+				{
+					auto path = find_path_unbounded(dest);
+					if (path.size() < 2)
+						continue;
+
+					// advance as far as possible this turn
+					MapXY advance = enemy->coor;
+					int adv_cost = 0;
+					for (int i = 1; i < (int)path.size(); i++)
+					{
+						if (path[i].g_cost <= enemy->action_points)
+						{
+							advance = path[i].pos;
+							adv_cost = path[i].g_cost;
+						}
+						else
+							break;
+					}
+
+					if (advance == enemy->coor)
+						continue;
+
+					int rem = advance.Distance(goal);
+					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
+					{
+						best_rem = rem;
+						best_cost = adv_cost;
+						best_tile = advance;
+					}
+				}
+
+				if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
+				{
+					ReleaseMap();
+					return(true);
+				}
+			}
+			// could not move via aggro -> fall through to active movement below
+		}
+
+// 3) Air intel sharing: any air unit flying near player units shares positions
+// with friendly ground units (simulates original Spellcross scouting feel)
+if (enemy->unit->isAir() && enemy->action_points > 0)
+{
+	for (auto* player_u : units)
+	{
+		if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
+		if (enemy->coor.Distance(player_u->coor) <= (double)(enemy->unit->sdir + 1))
+		{
+			AggroEnemiesAround(enemy->coor, player_u->coor, -1, 12, 3);
+		}
+	}
+}
+
+// ======================================================================
+// PHASE 4: ACTIVE MOVEMENT TOWARD TARGETS
+// ======================================================================
+// Units that couldn't attack or move via aggro/scout will try to
+// advance toward the nearest player unit. This is the key improvement
+// that makes the AI feel active and dangerous like in the original game.
+//
+// Behavior types modulate movement:
+// - ToughDefence: hold position (unless endgame hunt)
+// - WaitForContact: only advance if aggroed or sees enemies nearby
+// - All others + endgame: actively advance
+// - Skip movement if unit still has fire AP (prefer staying in position for next turn)
+{
+	bool should_advance = true;
+
+	// Don't move if unit still has shots left - it's better to hold position
+	// and fire again next turn than to move 1 tile pointlessly.
+	// Exception: if unit has NO targets in range at all, movement is useful.
+	if (enemy->GetFireCount() > 0 && best_target != nullptr)
+		should_advance = false;
+
+	// ToughDefence: hold position unless endgame hunt forces aggressive behavior
+	if (enemy->behave == MapUnitType::ToughDefence && !endgame_hunt)
+		should_advance = false;
+
+	// WaitForContact: only advance if this unit can see a player unit nearby
+	if (enemy->behave == MapUnitType::WaitForContact && !endgame_hunt && enemy->ai_aggro_ttl <= 0)
+	{
+		bool sees_player = false;
+		for (auto* u : units)
+		{
+			if (!u || u->is_enemy || u->isDead()) continue;
+			// soft fog-of-war cheat: AI detects units slightly beyond normal sight
+			if (enemy->coor.Distance(u->coor) <= (double)(enemy->unit->sdir + 2))
+			{
+				sees_player = true;
+				break;
+			}
+		}
+		if (!sees_player) should_advance = false;
+	}
+
+	if (should_advance && enemy->action_points > 0)
+	{
+		// find nearest player unit (soft fog cheat: AI knows approximate positions)
+		MapUnit* goal_unit = nullptr;
+		double goal_dist = 1e9;
+		for (auto* u : units)
+		{
+			if (!u || u->is_enemy || u->isDead()) continue;
+			double d = enemy->coor.Distance(u->coor);
+			if (d < goal_dist) { goal_dist = d; goal_unit = u; }
+		}
+
+		if (goal_unit)
+		{
+			auto tile_free_for_move = [&](const MapXY& t) -> bool
+			{
+				if (!(t.x >= 0 && t.y >= 0))
+					return false;
 				auto pxy = ConvXY(const_cast<MapXY&>(t));
 				auto tile_unit = Lunit[pxy];
 				while (tile_unit)
 				{
-					if ((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
-						(!enemy->unit->isAir() && !tile_unit->unit->isAir()))
-					{
+					if (tile_unit != enemy &&
+						((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
+						 (!enemy->unit->isAir() && !tile_unit->unit->isAir())))
 						return false;
-					}
 					tile_unit = tile_unit->next;
 				}
 				return true;
 			};
 
-			auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
+			auto find_path_unbounded_move = [&](const MapXY& dest) -> std::vector<AStarNode>
 			{
 				int ap_saved = enemy->action_points;
 				enemy->action_points = 200000;
@@ -7380,31 +7806,29 @@ bool SpellMap::EnemyTurnStep()
 				return path;
 			};
 
-			// candidates: neighbors around goal (preferred), and goal itself (if empty)
-			std::vector<MapXY> cand;
-			cand.reserve(9);
-
+			MapXY goal = goal_unit->coor;
+			std::vector<MapXY> move_cand;
+			move_cand.reserve(9);
 			for (int dir = 0; dir < 8; dir++)
 			{
 				MapXY t = GetNeighborTile8D(goal, dir);
-				if (tile_free_for(t))
-					cand.push_back(t);
+				if (tile_free_for_move(t))
+					move_cand.push_back(t);
 			}
-			if (tile_free_for(goal))
-				cand.push_back(goal);
+			if (tile_free_for_move(goal))
+				move_cand.push_back(goal);
 
-			MapXY best_tile;
-			best_tile.Clear();
-			int best_rem = INT_MAX;
-			int best_cost = INT_MAX;
+			MapXY best_move_tile;
+			best_move_tile.Clear();
+			int best_move_rem = INT_MAX;
+			int best_move_cost = INT_MAX;
 
-			for (auto& dest : cand)
+			for (auto& dest : move_cand)
 			{
-				auto path = find_path_unbounded(dest);
+				auto path = find_path_unbounded_move(dest);
 				if (path.size() < 2)
 					continue;
 
-				// advance as far as possible this turn
 				MapXY advance = enemy->coor;
 				int adv_cost = 0;
 				for (int i = 1; i < (int)path.size(); i++)
@@ -7421,216 +7845,27 @@ bool SpellMap::EnemyTurnStep()
 				if (advance == enemy->coor)
 					continue;
 
-				int rem = advance.Distance(goal);
-				if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
+				int rem = (int)advance.Distance(goal);
+				if (rem < best_move_rem || (rem == best_move_rem && adv_cost < best_move_cost))
 				{
-					best_rem = rem;
-					best_cost = adv_cost;
-					best_tile = advance;
+					best_move_rem = rem;
+					best_move_cost = adv_cost;
+					best_move_tile = advance;
 				}
 			}
 
-			if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
+			if (best_move_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_move_tile))
 			{
+				// movement scheduled - don't advance index: after move, try attack from new position
 				ReleaseMap();
 				return(true);
-			}
-
-			// could not move -> keep aggro but do nothing this unit
-			continue;
-		}
-
-// 3) scout behavior for air units that must land to attack (Magotar)
-// - default: patrol around spawn/home (perimeter scouting)
-// - engage only when player ground unit is close enough (prevents "bee-line" across the whole map)
-if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction() &&
-	enemy->unit->attack_light <= 0 && enemy->unit->attack_armored <= 0)
-{
-	MapUnit* nearest_ground = nullptr;
-	int best_dist = INT_MAX;
-
-	for (auto* u : units)
-	{
-		if (!u || u->is_enemy) continue;
-		if (!u->unit || !u->unit->isLand()) continue;
-
-		int dist = enemy->coor.Distance(u->coor);
-		if (dist < best_dist)
-		{
-			best_dist = dist;
-			nearest_ground = u;
-		}
-	}
-
-	auto tile_free_for_air = [&](const MapXY& t) -> bool
-	{
-		if (!const_cast<MapXY&>(t).IsSelected())
-			return false;
-
-		auto pxy = ConvXY(const_cast<MapXY&>(t));
-		auto tile_unit = Lunit[pxy];
-		while (tile_unit)
-		{
-			// air units can't stack with other air units
-			if (tile_unit != enemy && tile_unit->unit && tile_unit->unit->isAir())
-				return false;
-
-			tile_unit = tile_unit->next;
-		}
-		return true;
-	};
-
-	auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
-	{
-		int ap_saved = enemy->action_points;
-		enemy->action_points = 200000;
-		auto path = unit_range->FindPath(enemy, dest);
-		enemy->action_points = ap_saved;
-		return path;
-	};
-
-	// engage only when close (or if already aggroed by attack logic above)
-	const int AGGRO_DIST = 6;
-	const bool engage = (nearest_ground && best_dist <= AGGRO_DIST);
-
-	if (engage)
-	{
-		// close enough -> approach the nearest ground unit (to set up landing next turn)
-		std::vector<MapXY> cand;
-		cand.reserve(9);
-		MapXY goal = nearest_ground->coor;
-
-		for (int dir = 0; dir < 8; dir++)
-		{
-			MapXY t = GetNeighborTile8D(goal, dir);
-			if (tile_free_for_air(t))
-				cand.push_back(t);
-		}
-		if (tile_free_for_air(goal))
-			cand.push_back(goal);
-
-		MapXY best_tile;
-		best_tile.Clear();
-		int best_rem = INT_MAX;
-		int best_cost = INT_MAX;
-
-		for (auto& dest : cand)
-		{
-			auto path = find_path_unbounded(dest);
-			if (path.size() < 2)
-				continue;
-
-			// advance as far as possible this turn
-			MapXY advance = enemy->coor;
-			int adv_cost = 0;
-			for (int i = 1; i < (int)path.size(); i++)
-			{
-				if (path[i].g_cost <= enemy->action_points)
-				{
-					advance = path[i].pos;
-					adv_cost = path[i].g_cost;
-				}
-				else
-					break;
-			}
-
-			if (advance == enemy->coor)
-				continue;
-
-			int rem = advance.Distance(goal);
-			if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
-			{
-				best_rem = rem;
-				best_cost = adv_cost;
-				best_tile = advance;
-			}
-		}
-
-		if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
-		{
-			ReleaseMap();
-			return(true);
-		}
-	}
-	else
-	{
-		// far away -> perimeter patrol around home
-		struct PatrolState
-		{
-			MapXY home;
-			MapXY waypoint;
-			int radius = 8;
-			int stuck = 0;
-		};
-
-		static std::unordered_map<int, PatrolState> magotar_patrol;
-
-		auto& st = magotar_patrol[enemy->id];
-		if (!st.home.IsSelected())
-		{
-			st.home = enemy->coor;
-			st.waypoint.Clear();
-			st.radius = 8;
-			st.stuck = 0;
-		}
-
-		auto pick_waypoint = [&]() -> MapXY
-		{
-			for (int tries = 0; tries < 40; ++tries)
-			{
-				int dx = (rand() % (2 * st.radius + 1)) - st.radius;
-				int dy = (rand() % (2 * st.radius + 1)) - st.radius;
-				MapXY t(st.home.x + dx, st.home.y + dy);
-
-				if (!t.IsSelected())
-					continue;
-				if (st.home.Distance(t) < 2 || st.home.Distance(t) > st.radius)
-					continue;
-				if (!tile_free_for_air(t))
-					continue;
-
-				auto path = find_path_unbounded(t);
-				if (path.size() < 2)
-					continue;
-
-				return t;
-			}
-			MapXY none; none.Clear(); return none;
-		};
-
-		if (!st.waypoint.IsSelected() || enemy->coor.Distance(st.waypoint) <= 1 || st.stuck >= 3)
-		{
-			st.waypoint = pick_waypoint();
-			st.stuck = 0;
-		}
-
-		if (st.waypoint.IsSelected())
-		{
-			auto path = find_path_unbounded(st.waypoint);
-			if (path.size() >= 2)
-			{
-				MapXY advance = enemy->coor;
-				for (int i = 1; i < (int)path.size(); i++)
-				{
-					if (path[i].g_cost <= enemy->action_points)
-						advance = path[i].pos;
-					else
-						break;
-				}
-
-				if (advance == enemy->coor)
-					st.stuck++;
-				else if (StartMove_NoRangeCheck(enemy, advance))
-				{
-					ReleaseMap();
-					return(true);
-				}
 			}
 		}
 	}
 }
 
-// not aggroed and no visible target -> keep original behaviour (do nothing)
+// nothing more to do for this unit
+enemy_turn_idx++;
 continue;
 	}
 
@@ -7896,6 +8131,8 @@ MapUnit* SpellMap::GetCursorUnit(TScroll* scroll)
 	for (auto* unit : units)
 	{
 		if (unit->coor != pos)
+			continue;
+		if (unit->isDead())
 			continue;
 		if (!cur_unit || !unit->unit->isAir() == unit_sel_land_preference)
 			cur_unit = unit;
@@ -9964,6 +10201,10 @@ int SpellMap::CanUnitAttack(MapUnit* target)
 	if (!target)
 		return(false);
 
+	// dead units cannot be targeted
+	if (target->isDead())
+		return(false);
+
 	// attacking unit (selected)
 	auto attacker = GetSelectedUnit();
 	if (!attacker)
@@ -11177,7 +11418,7 @@ int SpellMap::Tick()
 			{
 				unit->attack_state = MapUnit::ATTACK_STATE::UPDATE;
 			}
-			else if (target->isDead() && target->unit && target->unit->gr_die)
+			else if (target->isDead() && target->unit && target->unit->gr_die && target->unit->die_anim_frames > 0)
 			{
 				// play die action
 				target->in_animation = target->unit->gr_die;
@@ -11187,22 +11428,29 @@ int SpellMap::Tick()
 			}
 			else
 			{
-				// no die
+				// no die animation or zero frames -> skip directly to UPDATE
 				unit->attack_state = MapUnit::ATTACK_STATE::UPDATE;
 			}
 		}
 		else if (unit->attack_state == MapUnit::ATTACK_STATE::DIE && tick_40ms)
 		{
-			// play die animation
-			unit->frame++;
-			if (unit->frame >= unit->frame_stop || !unit->in_animation)
+			// play die animation (animation data is on the target, not the attacker)
+			if (target && target->in_animation)
 			{
-				// stop anim
-				unit->in_animation = NULL;
-				unit->frame = 0;
+				target->frame++;
+				if (target->frame >= target->frame_stop)
+				{
+					// stop anim
+					target->in_animation = NULL;
+					target->frame = 0;
+					unit->attack_state = MapUnit::ATTACK_STATE::UPDATE;
+				}
+			}
+			else
+			{
+				// no valid target or animation -> finish immediately
 				unit->attack_state = MapUnit::ATTACK_STATE::UPDATE;
 			}
-
 		}
 		else if (unit->attack_state == MapUnit::ATTACK_STATE::UPDATE)
 		{
@@ -11210,15 +11458,23 @@ int SpellMap::Tick()
 			if (target && target->isDead())
 			{
 				// update unit after attack
+				bool need_extract = true;
 
 				if (target->unit->die_action_id == SpellUnitRec::DIE_ACTION::MORPH)
 				{
 					// morph unit
 					auto new_type = spelldata->units->GetUnit(target->unit->die_action_params[2]);
 					if (new_type)
+					{
 						target->MorphUnit(new_type, 50);
+						// check if morph resulted in a living unit
+						if (!target->isDead())
+							need_extract = false;
+					}
+					// else: morph type not found -> fall through to extract
 				}
-				else
+
+				if (need_extract)
 				{
 					// kill target unit
 					auto dead = ExtractUnit(target);
@@ -11231,10 +11487,23 @@ int SpellMap::Tick()
 						if (kill_evt)
 							event_list.push_back(kill_evt);
 					}
+
+					// clear stale pointer - target memory is freed by Kill()
+					unit->attack_target = NULL;
+					target = NULL;
+
 					SortUnits();
 
 					// update view mask
 					unit_view->PrepareUnitsViewMask();
+
+					// rebuild shared fog-of-war after unit removal
+					if (isGameMode())
+					{
+						unit_view->ClearUnitsView();
+						unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true);
+						HideEnemiesOutsidePlayerView(this, unit_view);
+					}
 				}
 			}
 			else if (!target)
@@ -11503,17 +11772,19 @@ int SpellMap::Tick()
 				// waiting to finish sound
 				unit->action_state = MapUnit::ACTION_STATE::IDLE;
 
+				// save references before destroying attacker
+				MapUnit* parent_ref = unit->parent;
+
 				// destroy attacker unit
-				if (unit->parent)
-					SelectUnit(unit->parent); // siwth to parent
+				if (parent_ref)
+					SelectUnit(parent_ref); // switch to parent
 				else
 					OnHUDnextUnit(); // or switch to next unit
 				RemoveUnit(unit);
+				// unit is now deleted - do NOT access it
 
-				//
 				unit_view->RestoreUnitsView();
-				//SortUnits();
-				unit->was_moved = true; // this will force range recalculation				
+				SortUnits();
 
 				InvalidateHUDbuttons();
 			}
@@ -11577,6 +11848,14 @@ int SpellMap::Tick()
 		SortUnits();
 		unit_range->FindRange(unit);
 		unit_view->CalcAttackRange(unit);
+
+		// rebuild shared fog-of-war from ALL allied units on any selection/movement change
+		if (isGameMode() && unit && !unit->is_enemy)
+		{
+			unit_view->ClearUnitsView();
+			unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true);
+			HideEnemiesOutsidePlayerView(this, unit_view);
+		}
 	}
 
 	// try fetch unread view events

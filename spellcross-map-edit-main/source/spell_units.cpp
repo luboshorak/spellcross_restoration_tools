@@ -1645,6 +1645,8 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 // render vertical bar indictator (for GUIs)
 void MapUnit::RenderVertBar(uint8_t* buffer,uint8_t* buf_end,int buf_x_size,int pos_x,int pos_y,int size_x,int size_y,double level,uint8_t color)
 {
+	if (level <= 0.0)
+		return;
 	int pix = min(max((int)(level*size_y), 1),size_y);
 	for(int y = pos_y + size_y - 1; y > pos_y + size_y - pix; y--)
 		for(int x = pos_x; x < pos_x+size_x; x++)
@@ -2113,18 +2115,34 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 	wound = max(wound,0.0);
 	kill = max(kill,0.0);
 
-	// --- anti one-shot for entrenched units ---
-	if (target->dig_level > 0 && !target->unit->isSingleMan())
+	// --- anti one-shot caps ---
+	if (!target->unit->isSingleMan())
 	{
 		const int hp = target->unit->GetHP();
 
-		int max_kill = (int)ceil(hp * 0.25);
-		if (max_kill < 1) max_kill = 1;
-		if (kill > (double)max_kill) kill = (double)max_kill;
+		if (target->dig_level > 0)
+		{
+			// entrenched: strong cap (max 25% kills, 35% wounds per hit)
+			int max_kill = (int)ceil(hp * 0.25);
+			if (max_kill < 1) max_kill = 1;
+			if (kill > (double)max_kill) kill = (double)max_kill;
 
-		int max_wound = (int)ceil(hp * 0.35);
-		if (max_wound < 1) max_wound = 1;
-		if (wound > (double)max_wound) wound = (double)max_wound;
+			int max_wound = (int)ceil(hp * 0.35);
+			if (max_wound < 1) max_wound = 1;
+			if (wound > (double)max_wound) wound = (double)max_wound;
+		}
+		else
+		{
+			// not entrenched: softer cap to prevent absurd one-shot wipes
+			// (max 40% kills, 50% wounds per hit)
+			int max_kill = (int)ceil(hp * 0.40);
+			if (max_kill < 1) max_kill = 1;
+			if (kill > (double)max_kill) kill = (double)max_kill;
+
+			int max_wound = (int)ceil(hp * 0.50);
+			if (max_wound < 1) max_wound = 1;
+			if (wound > (double)max_wound) wound = (double)max_wound;
+		}
 	}
 
 	// reduce HP
