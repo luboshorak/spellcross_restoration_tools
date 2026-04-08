@@ -1252,6 +1252,19 @@ bool MainFrame::LoadGameStateFromDialog()
         }
         if (ribbonBar)
             ribbonBar->HidePanels();
+
+        // hide editor overlays
+        if(menuView)
+        {
+            if(menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
+            if(menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
+            if(menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
+        }
+        wxCommandEvent dummy;
+        OnViewLayer(dummy);
+
+        UpdateMenuForGameMode();
+
         if (canvas)
             canvas->Refresh();
     }
@@ -1396,6 +1409,19 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                         }
                         if (ribbonBar)
                             ribbonBar->HidePanels();
+
+                        // hide editor overlays
+                        if(menuView)
+                        {
+                            if(menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
+                            if(menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
+                            if(menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
+                        }
+                        wxCommandEvent dummyEvt;
+                        OnViewLayer(dummyEvt);
+
+                        UpdateMenuForGameMode();
+
                         if (canvas)
                             canvas->Refresh();
                     }

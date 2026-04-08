@@ -10868,6 +10868,60 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
         if (idx < m_rosterRowUids.size())
             m_rosterRowUids.erase(m_rosterRowUids.begin() + idx);
     }
+
+    // --- Rescued special units (e.g. Commando from first level) ---
+    // Surviving SpecUnit units that were NOT in the sent roster are rescued units
+    // from the tactical map (e.g. SaveUnit event). Add them to the player's strategic roster.
+    {
+        // build set of survivors already matched to sent roster entries
+        std::unordered_set<MapUnit*> matched_survivors;
+        {
+            std::unordered_map<int, size_t> cidx2;
+            for (size_t si = 0; si < sent.size(); ++si)
+            {
+                const size_t roster_idx = sent[si];
+                if (roster_idx >= m_playerUnits.size()) continue;
+                const int tid = m_playerUnits[roster_idx].unit_id;
+                auto it = survivors_by_type.find(tid);
+                size_t& ci = cidx2[tid];
+                if (it != survivors_by_type.end() && ci < it->second.size())
+                {
+                    matched_survivors.insert(it->second[ci]);
+                    ci++;
+                }
+            }
+        }
+
+        for (auto* s : survivors)
+        {
+            if (matched_survivors.count(s)) continue; // already matched to roster
+            if (s->spec_type != MapUnitType::SpecUnit) continue; // only SpecUnit
+
+            // this is a rescued special unit - add to player roster
+            LevelData::PlayerUnitAdd pu;
+            pu.unit_id = s->unit->type_id;
+            pu.count = s->man;
+            int max_man = s->unit ? s->unit->cnt : 0;
+            if (max_man > 0)
+                pu.health = std::max(1, (s->man * 100 + max_man / 2) / max_man);
+            else
+                pu.health = 100;
+            pu.extra = "-";
+            m_playerUnits.push_back(pu);
+
+            // add matching unit state with experience from tactical map
+            UnitInstanceState state;
+            state.uid = m_nextRosterUid++;
+            state.experience = s->experience;
+            state.level = s->experience_level;
+            state.cooldown_turns = 1;
+            m_unitStates.push_back(state);
+
+            if (!m_rosterRowUids.empty())
+                m_rosterRowUids.push_back(state.uid);
+        }
+    }
+
     return mission_enemy_losses;
 }
 

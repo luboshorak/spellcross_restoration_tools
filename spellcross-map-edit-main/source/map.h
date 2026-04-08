@@ -275,6 +275,12 @@ public:
 		bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
 		bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
 		bool IsUnitBusy(MapUnit* unit);
+		// reaction fire: player units automatically fire back during enemy turn
+		struct ReactionFireEntry { MapUnit* shooter; MapUnit* target; };
+		std::vector<ReactionFireEntry> reaction_fire_queue;
+		MapUnit* reaction_fire_restore_selection = nullptr;
+		void CheckReactionFire(MapUnit* enemy_unit);
+		bool ProcessReactionFire();
 		// map state
 		bool is_valid;
 		// last error string
@@ -657,6 +663,7 @@ public:
 			void Halt(bool clear_tasks=false);
 			void Resume(bool resume=true);
 			void FindRange(MapUnit* unit);
+			void WaitIdle();
 			void ResultLock(bool state);
 			vector<AStarNode> FindPath(MapUnit* unit,MapXY target);
 
