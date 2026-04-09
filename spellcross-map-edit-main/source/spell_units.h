@@ -564,6 +564,7 @@ public:
 	MapXY ai_aggro_pos;          // last known attacker position
 	int ai_aggro_ttl;            // enemy turns to keep chasing (0 = inactive)
 	int ai_aggro_attacker_id;    // attacker unit id if known, otherwise -1
+	bool ai_alerted = false;     // set per enemy turn: unit sees player or chain-of-sight to spotter
 
 	// pointer to next unit to draw (for correct render order)
 	MapUnit* next;

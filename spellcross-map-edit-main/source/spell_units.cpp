@@ -1087,6 +1087,7 @@ MapUnit::MapUnit(SpellMap *map)
 	ai_aggro_pos.Clear();
 	ai_aggro_ttl = 0;
 	ai_aggro_attacker_id = -1;
+	ai_alerted = false;
 
 	altitude = 100;
 
@@ -1134,6 +1135,7 @@ MapUnit::MapUnit(MapUnit& obj,bool relink_event_trigger)
 	ai_aggro_pos.Clear();
 	ai_aggro_ttl = 0;
 	ai_aggro_attacker_id = -1;
+	ai_alerted = false;
 }
 
 // clear sound refs
@@ -1163,8 +1165,8 @@ MapUnit::~MapUnit()
 	for(auto &trig_event: trig_events)	
 	{
 		// unlink SeeUnit() event link
-		trig_event->trig_unit = NULL;
-		//trig_event = NULL;
+		if(trig_event)
+			trig_event->trig_unit = NULL;
 	}
 }
 
@@ -2226,6 +2228,8 @@ SpellMapEventRec *MapUnit::Kill()
 		// mark as done
 		evt->is_done = true;		
 	}
+	// clear so destructor won't re-process
+	trig_events.clear();
 
 	// destroy this unit
 	delete this;

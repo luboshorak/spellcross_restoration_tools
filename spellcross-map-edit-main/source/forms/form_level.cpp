@@ -1218,31 +1218,63 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
             enum { ACT_LOAD_AUTOSAVE, ACT_NEW_BAK, ACT_NEW_KEEP, ACT_CONTINUE_CAMPAIGN };
             wxArrayString choices;
             std::vector<int> choiceActions;
+            int defaultSelection = 0;
+
+            // --- Standard campaign choices ---
 
             if (hasAutosave)
             {
                 choices.Add("Continue (load autosave)");
                 choiceActions.push_back(ACT_LOAD_AUTOSAVE);
-                choices.Add("Start new (keep old autosave as .bak)");
-                choiceActions.push_back(ACT_NEW_BAK);
-                choices.Add("Start new (do not touch autosave)");
-                choiceActions.push_back(ACT_NEW_KEEP);
             }
-            else
-            {
-                choices.Add("Start new");
-                choiceActions.push_back(ACT_NEW_KEEP);
-            }
+
             if (hasPrevSave)
             {
                 choices.Add("Continue the campaign (load progress from previous level)");
                 choiceActions.push_back(ACT_CONTINUE_CAMPAIGN);
             }
 
+            // --- Debug-only choices ---
+
+            if (hasAutosave)
+            {
+                choices.Add("[DEBUG] Start new (keep old autosave as .bak)");
+                choiceActions.push_back(ACT_NEW_BAK);
+                choices.Add("[DEBUG] Start new (do not touch autosave)");
+                choiceActions.push_back(ACT_NEW_KEEP);
+            }
+            else
+            {
+                choices.Add("[DEBUG] Start new (fresh state)");
+                choiceActions.push_back(ACT_NEW_KEEP);
+            }
+
+            // --- Default selection logic ---
+            // Autosave takes priority: it means the player was already playing this level.
+            // prevSave only = player just arrived at this level from the previous one.
+            // After the very first mission (New Game), neither exists and this
+            // dialog is skipped entirely via skipAutosave=true.
+            if (hasAutosave)
+            {
+                for (int i = 0; i < (int)choiceActions.size(); i++)
+                {
+                    if (choiceActions[i] == ACT_LOAD_AUTOSAVE) { defaultSelection = i; break; }
+                }
+            }
+            else if (hasPrevSave)
+            {
+                for (int i = 0; i < (int)choiceActions.size(); i++)
+                {
+                    if (choiceActions[i] == ACT_CONTINUE_CAMPAIGN) { defaultSelection = i; break; }
+                }
+            }
+
             wxSingleChoiceDialog dlg(this,
-                "Choose how to start this level:",
-                "Strategic", choices);
-            dlg.SetSelection(0);
+                "Choose how to start this level:\n\n"
+                "Options marked [DEBUG] are for testing only\n"
+                "and are not part of normal campaign progression.",
+                "Strategic Level", choices);
+            dlg.SetSelection(defaultSelection);
 
             if (dlg.ShowModal() == wxID_OK)
             {

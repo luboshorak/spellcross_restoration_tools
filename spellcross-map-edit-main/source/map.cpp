@@ -1104,10 +1104,10 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	{
 		// OPRAVA: Použij callback který nastaví pending flag když uživatel zavře message box
 		// Toto je spolehlivější než polling přes m_msg_checker
-		m_msg_creator(m_mission_end_req.text, true, [this](bool /*result*/) {
+		// false = jen tlačítko OK (ne YES/NO) pro mission accomplished/failed
+		m_msg_creator(m_mission_end_req.text, false, [this](bool /*result*/) {
 			m_mission_end_ack = true;
 			m_mission_end_req.pending = true;
-			// Note: wxLogMessage není dostupný v map.cpp, ale pending flag je teď nastaven
 		});
 		m_mission_end_shown = true;
 	}
@@ -6940,11 +6940,49 @@ void SpellMap::StartEnemyTurn()
 		}
 	}
 
-	enemy_turn_idx = 0;
-    enemy_turn_running = true;
+	// --- Compute alertness via sight chains ---
+	// Phase 1: mark enemies that directly see a player unit
+	for (auto* enemy : enemy_turn_list)
+	{
+		enemy->ai_alerted = false;
+		for (auto* player_u : units)
+		{
+			if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
+			if (enemy->coor.Distance(player_u->coor) <= (double)enemy->unit->sdir)
+			{
+				enemy->ai_alerted = true;
+				break;
+			}
+		}
+	}
+	// Phase 2: BFS propagation - enemy that can see an alerted enemy becomes alerted too
+	{
+		bool changed = true;
+		while (changed)
+		{
+			changed = false;
+			for (auto* enemy : enemy_turn_list)
+			{
+				if (enemy->ai_alerted) continue;
+				for (auto* other : enemy_turn_list)
+				{
+					if (!other->ai_alerted) continue;
+					if (enemy->coor.Distance(other->coor) <= (double)enemy->unit->sdir)
+					{
+						enemy->ai_alerted = true;
+						changed = true;
+						break;
+					}
+				}
+			}
+		}
+	}
 
-    // hide enemy in player view until they make contact again
-    unit_selection_mod = true;
+	enemy_turn_idx = 0;
+	enemy_turn_running = true;
+
+	// hide enemy in player view until they make contact again
+	unit_selection_mod = true;
 
     ReleaseMap();
 
@@ -6988,7 +7026,10 @@ void SpellMap::EndEnemyTurn()
 			panic_units.push_back(u);
 	}
 
-	// If player has no units left -> end game mode
+	// If player has no units left -> do NOT exit game mode yet.
+	// CheckAndTriggerMissionEnd() (called later in Tick) will detect
+	// the failure and show the mission failed message. Game mode
+	// is cleaned up during the mission-end flow transition.
 	if (!has_alliance)
 	{
 		unit_selection = nullptr;
@@ -6997,7 +7038,6 @@ void SpellMap::EndEnemyTurn()
 		enemy_turn_prev_sel_mod = false;
 		ReleaseMap();
 
-		SetGameMode(0); // exits game mode
 		InvalidateHUDbuttons();
 		return;
 	}
@@ -7298,9 +7338,9 @@ bool SpellMap::EnemyTurnStep()
 			double health_pct = (hp_max > 0) ? (hp_cur / hp_max) : 1.0;
 			score += 15.0 * (1.0 - health_pct);
 
-			// slight distance preference (closer is better but not dominant)
+			// distance preference (closer targets strongly preferred to prevent bypassing front-line)
 			double dist = enemy->coor.Distance(u->coor);
-			score -= 1.5 * dist;
+			score -= 3.0 * dist;
 
 			// penalize entrenched targets (harder to damage)
 			score -= 4.0 * u->dig_level;
@@ -7652,6 +7692,8 @@ bool SpellMap::EnemyTurnStep()
 
 
 		// 2) if this unit was attacked recently -> chase last-known attacker position (ignore LOS)
+		//    BUT: if a closer player unit exists, redirect to that unit
+		//    This prevents enemies from walking past front-line to chase back-line attackers
 		if (enemy->ai_aggro_ttl > 0)
 		{
 			MapXY goal;
@@ -7674,6 +7716,18 @@ bool SpellMap::EnemyTurnStep()
 			}
 			else
 			{
+				// Redirect aggro to closer player unit if one is significantly nearer
+				double aggro_dist = enemy->coor.Distance(goal);
+				for (auto* u : units)
+				{
+					if (!u || u->is_enemy || u->isDead()) continue;
+					double d = enemy->coor.Distance(u->coor);
+					if (d < aggro_dist * 0.7)
+					{
+						goal = u->coor;
+						aggro_dist = d;
+					}
+				}
 				auto tile_free_for = [&](const MapXY& t) -> bool
 				{
 					if (!(t.x >= 0 && t.y >= 0))
@@ -7778,15 +7832,11 @@ if (enemy->unit->isAir() && enemy->action_points > 0)
 // ======================================================================
 // PHASE 4: ACTIVE MOVEMENT TOWARD TARGETS
 // ======================================================================
-// Units that couldn't attack or move via aggro/scout will try to
-// advance toward the nearest player unit. This is the key improvement
-// that makes the AI feel active and dangerous like in the original game.
-//
-// Behavior types modulate movement:
-// - All ground units ALWAYS prefer attack over movement
-// - Movement only happens when no target is in fire range or fire AP is depleted
-// - ToughDefence: hold position (unless endgame hunt)
-// - WaitForContact: only advance if aggroed or sees enemies nearby
+// Ground units only advance when they have contact with player units:
+// - Direct sight on a player unit, or
+// - Chain-of-sight through other alerted enemy units, or
+// - Aggro from being attacked recently
+// Air units always scout freely. ToughDefence always holds position.
 {
 	bool should_advance = true;
 
@@ -7799,31 +7849,50 @@ if (enemy->unit->isAir() && enemy->action_points > 0)
 	if (enemy->behave == MapUnitType::ToughDefence && !endgame_hunt)
 		should_advance = false;
 
-	// WaitForContact: only advance if this unit can see a player unit nearby
-	if (enemy->behave == MapUnitType::WaitForContact && !endgame_hunt && enemy->ai_aggro_ttl <= 0)
+	// Ground units: only advance if alerted (sight chain) or aggroed (was attacked)
+	if (should_advance && !enemy->unit->isAir() && !endgame_hunt)
 	{
-		bool sees_player = false;
-		for (auto* u : units)
-		{
-			if (!u || u->is_enemy || u->isDead()) continue;
-			// soft fog-of-war cheat: AI detects units slightly beyond normal sight
-			if (enemy->coor.Distance(u->coor) <= (double)(enemy->unit->sdir + 2))
-			{
-				sees_player = true;
-				break;
-			}
-		}
-		if (!sees_player) should_advance = false;
+		if (!enemy->ai_alerted && enemy->ai_aggro_ttl <= 0)
+			should_advance = false;
 	}
 
 	if (should_advance && enemy->action_points > 0)
 	{
-		// find nearest player unit (soft fog cheat: AI knows approximate positions)
+		// find nearest player unit visible to this enemy or its alerted sight chain
 		MapUnit* goal_unit = nullptr;
 		double goal_dist = 1e9;
 		for (auto* u : units)
 		{
 			if (!u || u->is_enemy || u->isDead()) continue;
+
+			bool visible_to_chain = false;
+
+			// air units and endgame hunt: allow global knowledge
+			if (enemy->unit->isAir() || endgame_hunt)
+			{
+				visible_to_chain = true;
+			}
+			// aggro target: enemy knows last attacker position
+			else if (enemy->ai_aggro_ttl > 0)
+			{
+				visible_to_chain = true;
+			}
+			else
+			{
+				// check if this player unit is within sight of any alerted enemy
+				for (auto* spotter : enemy_turn_list)
+				{
+					if (!spotter->ai_alerted) continue;
+					if (spotter->coor.Distance(u->coor) <= (double)spotter->unit->sdir)
+					{
+						visible_to_chain = true;
+						break;
+					}
+				}
+			}
+
+			if (!visible_to_chain) continue;
+
 			double d = enemy->coor.Distance(u->coor);
 			if (d < goal_dist) { goal_dist = d; goal_unit = u; }
 		}
@@ -10183,9 +10252,9 @@ void SpellMap::ViewRange::Worker()
 		// clear potentially visible tiles (temps)
 		if (is_fire)
 		{
-			// fire range mode:
+			// fire range mode: keep only tiles with confirmed LOS (5) or indirect fire (6+)
 			for (auto& tile : units_view)
-				if (tile < 2)
+				if (tile < 5)
 					tile = 0;
 			// no can fire to my own pos
 			units_view[map->ConvXY(ref_pos)] = 0;
