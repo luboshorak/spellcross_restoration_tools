@@ -14,7 +14,7 @@ Fanouškovský pokus **oživit a zpřístupnit starý Spellcross** modernější
 
 K dispozici je veřejný release:
 
-[**`Spellcross_Reloaded_v0.0.3`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.3)
+[**`Spellcross_Reloaded_v0.0.4`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.4)
 
 Aktuální cíl tohoto buildu je prostý: dostat hru do stavu, kdy by měla být **dohratelná od začátku do konce kampaně**. To ale neznamená, že je hotová nebo stabilní.
 
@@ -26,13 +26,13 @@ Tenhle release je určen hlavně pro průběžné testování, hledání chyb a 
 
 ---
 
-## Známé nedodělky a problémy v release 0.0.3
+## Známé nedodělky a problémy v release 0.0.4
 
 ### Herní logika
 - **Hierarchické začlenění jednotek** se zatím správně nepropisuje do hrací mapy.
 - **Upgrady jednotek** se zatím také nepropisují korektně do samotné hry / bojové mapy.
 - **Dočasné jednotky** nejsou hotové a jejich systémy aktuálně nefungují správně.
-- **Other Side counterattack / protiútoky** nejsou funkční.
+- **Other Side counterattack / protiútoky** nejsou plně funkční.
 - **Deployment mod** není implementován - jednotky jsou na začátku mise deploynuty automaticky na startovací pozice
 
 ### Game mode / stabilita
