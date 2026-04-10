@@ -136,6 +136,7 @@ public:
     SpellData* spell_data;
 
 private:
+    void OnMapConsoleCommand();
     void OnViewLayer(wxCommandEvent& event);
     void OnOpenMap(wxCommandEvent& event);
     void OnSaveMap(wxCommandEvent& event);

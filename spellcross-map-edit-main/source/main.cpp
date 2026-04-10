@@ -258,6 +258,10 @@ void MainFrame::SetGameModeUI(bool enable_game_mode)
         if(spell_map->saves)
             spell_map->saves->LoadInitial();
         spell_map->ResetUnitEvents();
+
+        // Restore status bar when leaving game mode
+        if (GetStatusBar() && !GetStatusBar()->IsShown())
+            GetStatusBar()->Show();
     }
 
     UpdateMenuForGameMode();
@@ -1939,8 +1943,35 @@ void MainFrame::OpenStrategicAndLoadNext()
         }
         else
         {
-            auto* win = new StrategicLevelFrame(this, lvl);
-            m_strategicLevel = win;  // Store reference
+            // Check if player saved the commando in the first mission (unit type 3 = Komando)
+            // If so, add a bonus commando unit to the new level's roster
+            std::vector<LevelData::PlayerUnitAdd> bonus_units;
+            if (spell_map && spell_map->IsLoaded())
+            {
+                for (auto* u : spell_map->units)
+                {
+                    if (!u || u->is_enemy || u->isDead()) continue;
+                    // Unit type 3 = Komando (commando), check if it survived the mission
+                    if (u->unit && u->unit->type_id == 3)
+                    {
+                        LevelData::PlayerUnitAdd bonus;
+                        bonus.unit_id = 3;
+                        bonus.count = 1;
+                        bonus.health = 100;
+                        bonus.extra = "-";
+                        bonus_units.push_back(bonus);
+                        break; // only one bonus commando
+                    }
+                }
+            }
+
+            // Create strategic level with skipAutosave=true (no debug dialog)
+            auto* win = new StrategicLevelFrame(this, lvl, true);
+            m_strategicLevel = win;
+
+            // Start fresh game mode directly (campaign progression)
+            win->StartFreshGameMode(bonus_units);
+
             win->Show();
             win->Raise();
         }
@@ -3491,15 +3522,23 @@ void MainFrame::OnCanvasMouseMove(wxMouseEvent& event)
     // update map selection
     MapXY mxy = spell_map->GetSelection();
     int elev = spell_map->GetElevation();
-    SetStatusText(wxString::Format(wxT("x=%d"),mxy.x),0);
-    SetStatusText(wxString::Format(wxT("y=%d"),mxy.y),1);
-    SetStatusText(wxString::Format(wxT("z=%d"),elev),2);
-    SetStatusText(wxString::Format(wxT("xy=%d"),spell_map->ConvXY(mxy)),3);
-    SetStatusText(wxString::Format(wxT("L1: %s"),spell_map->GetL1tileName()),4);
-    SetStatusText(wxString::Format(wxT("L2: %s"),spell_map->GetL2tileName()),5);
-    //int height, flags, code;
-    auto [flags,height,code] = spell_map->GetTileFlags();
-    SetStatusText(wxString::Format(wxT("(0x%02X)"),code),6);
+
+    // Hide debug status bar info in game mode
+    if (!spell_map->isGameMode())
+    {
+        SetStatusText(wxString::Format(wxT("x=%d"),mxy.x),0);
+        SetStatusText(wxString::Format(wxT("y=%d"),mxy.y),1);
+        SetStatusText(wxString::Format(wxT("z=%d"),elev),2);
+        SetStatusText(wxString::Format(wxT("xy=%d"),spell_map->ConvXY(mxy)),3);
+        SetStatusText(wxString::Format(wxT("L1: %s"),spell_map->GetL1tileName()),4);
+        SetStatusText(wxString::Format(wxT("L2: %s"),spell_map->GetL2tileName()),5);
+        auto [flags,height,code] = spell_map->GetTileFlags();
+        SetStatusText(wxString::Format(wxT("(0x%02X)"),code),6);
+    }
+    else if (GetStatusBar() && GetStatusBar()->IsShown())
+    {
+        GetStatusBar()->Hide();
+    }
 
     auto sel_evt = spell_map->GetSelectEvent();
     auto* unit = spell_map->GetSelectedUnit();
@@ -3575,6 +3614,13 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
 
     int key = event.GetKeyCode();
 
+    // ~ key (backtick/tilde) opens in-game console
+    if (key == '`' || key == '~' || event.GetRawKeyCode() == 0xC0)
+    {
+        OnMapConsoleCommand();
+        return;
+    }
+
     // ESC opens main menu when editor is locked
     if(key == WXK_ESCAPE && !m_editor_unlocked)
     {
@@ -3605,6 +3651,45 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
 
     // keep existing controls working
     event.Skip();
+}
+
+void MainFrame::OnMapConsoleCommand()
+{
+    wxTextEntryDialog dlg(this, "Enter command:", "Console", "");
+    if (dlg.ShowModal() != wxID_OK)
+        return;
+
+    std::string cmd = dlg.GetValue().ToStdString();
+    while (!cmd.empty() && cmd.front() == ' ') cmd.erase(cmd.begin());
+    while (!cmd.empty() && cmd.back() == ' ') cmd.pop_back();
+    for (char& c : cmd) c = (char)std::toupper((unsigned char)c);
+
+    if (cmd == "ALLDONE")
+    {
+        if (spell_map && spell_map->IsLoaded() && spell_map->isGameMode() && spell_map->events)
+        {
+            for (auto* evt : spell_map->events->GetEvents())
+            {
+                if (!evt) continue;
+                if (evt->is_objective && !evt->is_done)
+                    evt->is_done = true;
+            }
+            spell_map->CheckAndTriggerMissionEnd();
+            if (canvas) canvas->Refresh();
+        }
+    }
+    else if (cmd == "GAMEMODEOFF")
+    {
+        m_editor_unlocked = true;
+        if (spell_map && spell_map->IsLoaded() && spell_map->isGameMode())
+            SetGameModeUI(false);
+        else
+            UpdateMenuForGameMode();
+    }
+    else if (!cmd.empty())
+    {
+        wxMessageBox("Unknown command: " + dlg.GetValue(), "Console", wxOK | wxICON_WARNING, this);
+    }
 }
 
 

@@ -12142,13 +12142,15 @@ int SpellMap::Tick()
 	// Show MissionStartText briefing on first available tick (after video/message finishes)
 	if (m_start_text_pending && m_msg_creator && m_msg_checker && !m_msg_checker())
 	{
-		if (spelldata && spelldata->texts)
+		m_start_text_pending = false;
+
+		// Show the explicit MissionStartText (works for missions 2+ where text resource exists)
+		if (spelldata && spelldata->texts && !params.start_text.empty())
 		{
 			SpellTextRec* start_txt = spelldata->texts->GetText(params.start_text);
 			if (start_txt)
 				m_msg_creator(start_txt, false, NULL);
 		}
-		m_start_text_pending = false;
 	}
 
 	// try process pending events

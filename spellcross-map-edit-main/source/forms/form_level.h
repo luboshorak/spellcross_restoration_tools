@@ -143,6 +143,10 @@ public:
     void LoadStrategicState();
     void SaveStrategicState() const;
     void LoadPlayerStateFromPreviousLevel();
+
+    // Start a fresh game mode for this level (no save loading, no debug dialog).
+    // bonus_units: extra units the player earned from the previous mission (e.g. rescued commando).
+    void StartFreshGameMode(const std::vector<LevelData::PlayerUnitAdd>& bonus_units = {});
     wxString GetUnitDisplayName(int unit_id) const;
     bool EnsureUnitCostsLoaded();
     int GetUnitBuyCost(int unit_id) const;

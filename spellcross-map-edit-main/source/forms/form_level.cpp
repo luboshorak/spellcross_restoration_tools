@@ -1325,6 +1325,47 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
 }
 
+void StrategicLevelFrame::StartFreshGameMode(const std::vector<LevelData::PlayerUnitAdd>& bonus_units)
+{
+    // Enable game mode
+    m_gameModeEnabled = true;
+    if (GetMenuBar())
+    {
+        auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
+        if (item) item->Check(m_gameModeEnabled);
+    }
+
+    // Set start territories as owned
+    m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level);
+    if (m_ownedTerritories.empty() && !m_level.territories.empty())
+        m_ownedTerritories.push_back(m_level.territories.front().id);
+
+    // Add bonus units from previous mission (e.g. rescued commando)
+    for (const auto& bu : bonus_units)
+        m_playerUnits.push_back(bu);
+
+    // Load cumulative research flags
+    {
+        namespace fs = std::filesystem;
+        fs::path defPath = fs::path(m_level.source_path);
+        m_levelResearchFlags = GetCumulativeResearchFlags(defPath);
+    }
+
+    // Apply territory visibility
+    ApplyTerritoryVisibility();
+
+    // Rebuild background with game mode borders
+    TryLoadBackground();
+
+    // Process immediate level events (AbsTime(-1) = fires right away, e.g. E02_0001 intro text)
+    ProcessLevelEvents();
+
+    // Save initial state
+    SaveStrategicState();
+
+    RefreshUI();
+}
+
 static std::filesystem::path GetStableBaseDir() {
     return std::filesystem::current_path();
 }
