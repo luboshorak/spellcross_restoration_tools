@@ -128,7 +128,11 @@ public:
 
     // Play a cutscene video (called from Strategic Level)
     void PlayCutsceneFromStrategic(const std::string& video_entry_name);
-   
+
+    // Message display (used by SpellMap and StrategicLevelFrame)
+    void ShowMessage(SpellTextRec *message, bool is_yesno, std::function<void(bool)> exit_cb=NULL);
+    bool CheckMessageState();
+
     SpellData* spell_data;
 
 private:
@@ -254,8 +258,7 @@ private:
         form_units_list != NULL ||
         form_mmenu != NULL); };
 
-    void ShowMessage(SpellTextRec *message, bool is_yesno, std::function<void(bool)> exit_cb=NULL);
-    bool CheckMessageState();
+    // (ShowMessage / CheckMessageState moved to public section)
 
     // tick timer
     wxTimer m_timer;

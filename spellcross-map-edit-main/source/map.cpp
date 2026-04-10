@@ -6893,23 +6893,7 @@ void SpellMap::StartEnemyTurn()
 	enemy_turn_list.clear();
 
 	// --- Safety cleanup: remove any dead units lingering in the units list ---
-	// (can happen if morph fails, race conditions, or state machine edge cases)
-	{
-		std::vector<MapUnit*> dead_list;
-		for (auto* u : units)
-		{
-			if (u && u->isDead())
-				dead_list.push_back(u);
-		}
-		for (auto* dead : dead_list)
-		{
-			auto extracted = ExtractUnit(dead);
-			if (extracted)
-				extracted->Kill();
-		}
-		if (!dead_list.empty())
-			SortUnits();
-	}
+	CleanupDeadUnits();
 
 	for (auto* u : units)
 	{
@@ -7014,6 +6998,9 @@ void SpellMap::EndEnemyTurn()
 	// clear any pending reaction fire
 	reaction_fire_queue.clear();
 	reaction_fire_restore_selection = nullptr;
+
+	// Remove any dead units that weren't cleaned up during attack processing
+	CleanupDeadUnits();
 
 	// restore player AP for alliance
 	bool has_alliance = false;
@@ -10542,6 +10529,26 @@ int SpellMap::FinishUnits()
 	return(0);
 }
 
+// Remove any dead units (man==0) still lingering in the units list.
+// Must be called outside of iteration over the units vector.
+void SpellMap::CleanupDeadUnits()
+{
+	std::vector<MapUnit*> dead_list;
+	for (auto* u : units)
+	{
+		if (u && u->isDead())
+			dead_list.push_back(u);
+	}
+	for (auto* dead : dead_list)
+	{
+		auto extracted = ExtractUnit(dead);
+		if (extracted)
+			extracted->Kill();
+	}
+	if (!dead_list.empty())
+		SortUnits();
+}
+
 // returns true when tile is in the normally visible area of map, false for the dark map bevel
 bool SpellMap::TileIsVisible(int x, int y)
 {
@@ -12127,6 +12134,10 @@ int SpellMap::Tick()
 	// add new events to pending list
 	if (!new_events.empty())
 		event_list.insert(event_list.end(), new_events.begin(), new_events.end());
+
+	// Cleanup dead units that weren't removed during attack state machine
+	// (e.g. units killed by player attack whose die animation already finished)
+	CleanupDeadUnits();
 
 	// Show MissionStartText briefing on first available tick (after video/message finishes)
 	if (m_start_text_pending && m_msg_creator && m_msg_checker && !m_msg_checker())

@@ -906,6 +906,7 @@ public:
 			UNIT_OPT_ATTACK = 16
 		};
 		int FinishUnits();
+		void CleanupDeadUnits();
 		std::vector<MapXY> UpdateDestructible(MapXY target_pos);
 		std::vector<MapSprite*> GetDestructibleList(MapXY target_pos);
 

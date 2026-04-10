@@ -1848,7 +1848,8 @@ void MainFrame::OpenStrategicAndLoadNext()
     // → offer retry or return to main menu
     if (!m_mission_end_req.success)
     {
-        std::wstring currentDefPath = spell_map ? spell_map->GetTopPath() : L"";
+        m_mission_end_flow = false;
+        m_mission_end_req = SpellMap::MissionEndRequest();
 
         int result = wxMessageBox(
             L"Mission failed!\nDo you want to retry the mission?",
@@ -1857,23 +1858,19 @@ void MainFrame::OpenStrategicAndLoadNext()
             this
         );
 
-        if (result == wxYES && !currentDefPath.empty())
+        if (result == wxYES)
         {
-            // Retry: reload the same mission
-            if (LoadMapFromDefPath(currentDefPath, {}))
-                SetGameModeUI(true);
+            // Retry = same as NewGame from main menu
+            wxCommandEvent dummy;
+            OnMainMenuAction(FormMainMenuAction::NewGame);
         }
         else
         {
-            // Return to main menu
-            if (spell_map && spell_map->isGameMode())
-                SetGameModeUI(false);
-
+            // Show main menu over current state
             wxCommandEvent dummy;
             OnOpenMainMenu(dummy);
         }
 
-        m_mission_end_flow = false;
         return;
     }
 

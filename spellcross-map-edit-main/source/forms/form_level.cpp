@@ -8293,8 +8293,11 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 
     // Check timeouts (auto-BAD for territories)
     CheckTimeouts();
-    
-    // Check counter-attacks
+
+    // Process Level Events from DEF (counter-attacks, reinforcements, texts, etc.)
+    ProcessLevelEvents();
+
+    // Check counter-attacks (legacy territory-based)
     CheckCounterAttacks();
     
     // Update stats
@@ -11164,6 +11167,209 @@ void StrategicLevelFrame::CheckCounterAttacks()
             }
         }
     }
+}
+
+void StrategicLevelFrame::ProcessLevelEvents()
+{
+    if (!m_gameModeEnabled)
+        return;
+
+    // Collect events to trigger this turn (may chain via RunEvents)
+    std::vector<int> to_trigger;
+
+    for (const auto& evt : m_level.events)
+    {
+        if (m_triggeredLevelEvents.count(evt.id))
+            continue; // already triggered
+
+        bool should_fire = false;
+
+        if (evt.abs_time)
+        {
+            // AbsTime: fires at absolute turn number
+            if (evt.time_value >= 0 && m_turn >= evt.time_value)
+                should_fire = true;
+        }
+        else if (evt.time_value >= 0)
+        {
+            // Time(N): fires N turns after activation
+            auto act_it = m_activatedEvents.find(evt.id);
+            if (act_it != m_activatedEvents.end())
+            {
+                int target_turn = act_it->second + evt.time_value;
+                if (m_turn >= target_turn)
+                    should_fire = true;
+            }
+        }
+        else
+        {
+            // time_value == -1: event is condition-only, check WaitForTerritories
+            if (!evt.wait_for_territories.empty())
+            {
+                bool all_owned = true;
+                for (int tid : evt.wait_for_territories)
+                {
+                    if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) == m_ownedTerritories.end())
+                    {
+                        all_owned = false;
+                        break;
+                    }
+                }
+                if (all_owned)
+                    should_fire = true;
+            }
+        }
+
+        // WaitForTerritories gate (for AbsTime/Time events that also have this condition)
+        if (should_fire && !evt.wait_for_territories.empty() && (evt.abs_time || evt.time_value >= 0))
+        {
+            bool all_owned = true;
+            for (int tid : evt.wait_for_territories)
+            {
+                if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) == m_ownedTerritories.end())
+                {
+                    all_owned = false;
+                    break;
+                }
+            }
+            if (!all_owned)
+                should_fire = false;
+        }
+
+        if (should_fire)
+            to_trigger.push_back(evt.id);
+    }
+
+    // Process triggered events (may chain via RunEvents)
+    std::set<int> processed_this_turn;
+    std::vector<int> queue = to_trigger;
+
+    while (!queue.empty())
+    {
+        int eid = queue.back();
+        queue.pop_back();
+
+        if (m_triggeredLevelEvents.count(eid) || processed_this_turn.count(eid))
+            continue;
+
+        // Find event by id
+        const LevelEvent* evt = nullptr;
+        for (const auto& e : m_level.events)
+        {
+            if (e.id == eid) { evt = &e; break; }
+        }
+        if (!evt)
+            continue;
+
+        m_triggeredLevelEvents.insert(eid);
+        processed_this_turn.insert(eid);
+
+        // --- Execute event actions ---
+
+        // Show EventText in strategic level window (not on the tactical map canvas)
+        if (!evt->text_id.empty() && m_spellData && m_spellData->texts)
+        {
+            std::string text_name = evt->text_id;
+            SpellTextRec* txt = m_spellData->texts->GetText(text_name);
+            if (txt)
+            {
+                // Use the text content for a dialog in the strategic level window
+                wxString msg = txt->text.empty()
+                    ? wxString::FromUTF8(text_name)
+                    : wxString(txt->text);
+                wxMessageBox(msg, "Event", wxOK | wxICON_INFORMATION, this);
+            }
+        }
+
+        // ChangeMission
+        if (evt->change_mission_territory >= 0 && !evt->change_mission_name.empty())
+        {
+            m_territoryCurrentMission[evt->change_mission_territory] = to_lower(evt->change_mission_name);
+        }
+
+        // AddUnitToPlayer
+        for (const auto& ua : evt->add_units)
+        {
+            LevelData::PlayerUnitAdd pu;
+            pu.unit_id = ua.unit_id;
+            pu.count = ua.count;
+            pu.health = ua.health;
+            pu.extra = ua.name;
+            m_playerUnits.push_back(pu);
+        }
+
+        // SetResearchFlag
+        for (int flag : evt->research_flags)
+        {
+            if (std::find(m_level.research_flags.begin(), m_level.research_flags.end(), flag) == m_level.research_flags.end())
+                m_level.research_flags.push_back(flag);
+        }
+
+        // SetPlayersTerritory
+        if (evt->set_player_territory >= 0)
+        {
+            int tid = evt->set_player_territory;
+            if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) == m_ownedTerritories.end())
+            {
+                m_ownedTerritories.push_back(tid);
+                ApplyTerritoryVisibility();
+            }
+        }
+
+        // RunEvents: activate referenced events
+        for (int run_id : evt->run_events)
+        {
+            if (!m_triggeredLevelEvents.count(run_id) && !processed_this_turn.count(run_id))
+            {
+                // For Time-based events, record activation turn
+                m_activatedEvents[run_id] = m_turn;
+                queue.push_back(run_id);
+            }
+        }
+
+        // Army: counter-attack on a player-owned territory
+        if (!evt->armies.empty() && !m_ownedTerritories.empty())
+        {
+            // Pick a target territory for the counter-attack
+            // Prefer the most recently conquered territory
+            int target_tid = m_ownedTerritories.back();
+
+            // Select the territory visually
+            SelectTerritoryById(target_tid);
+            MarkOverlayDirty();
+
+            int result = wxMessageBox(
+                wxString::Format(
+                    "COUNTER-ATTACK!\n\n"
+                    "Enemy forces are attacking territory %d!\n\n"
+                    "Defend this territory?",
+                    target_tid
+                ),
+                "Counter-Attack",
+                wxYES_NO | wxICON_EXCLAMATION,
+                this
+            );
+
+            if (result == wxYES)
+            {
+                // Player will defend — set territory for launch
+                RefreshUI();
+            }
+            else
+            {
+                // Player refuses to defend — lose the territory
+                auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), target_tid);
+                if (it != m_ownedTerritories.end())
+                    m_ownedTerritories.erase(it);
+
+                m_stats.territories_lost++;
+                ApplyTerritoryVisibility();
+                MarkOverlayDirty();
+            }
+        }
+    }
+
+    MarkOverlayDirty();
 }
 
 void StrategicLevelFrame::ShowBriefing(int territory_id)

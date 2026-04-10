@@ -353,6 +353,40 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
                 curEvent.armies.push_back(std::move(a));
                 continue;
             }
+            if (cmd == "WaitForTerritories" && !args.empty()) {
+                for (auto& s : args) {
+                    int v = 0; if (parse_int(s, v)) curEvent.wait_for_territories.push_back(v);
+                }
+                continue;
+            }
+            if (cmd == "RunEvents" && !args.empty()) {
+                for (auto& s : args) {
+                    int v = 0; if (parse_int(s, v)) curEvent.run_events.push_back(v);
+                }
+                continue;
+            }
+            if (cmd == "ChangeMission" && args.size() >= 2) {
+                parse_int(args[0], curEvent.change_mission_territory);
+                curEvent.change_mission_name = args[1];
+                continue;
+            }
+            if (cmd == "AddUnitToPlayer" && args.size() >= 3) {
+                LevelEvent::UnitAdd ua;
+                parse_int(args[0], ua.unit_id);
+                parse_int(args[1], ua.count);
+                parse_int(args[2], ua.health);
+                if (args.size() >= 4) ua.name = args[3];
+                curEvent.add_units.push_back(ua);
+                continue;
+            }
+            if (cmd == "SetResearchFlag" && args.size() >= 1) {
+                int v = 0; if (parse_int(args[0], v)) curEvent.research_flags.push_back(v);
+                continue;
+            }
+            if (cmd == "SetPlayersTerritory" && args.size() >= 1) {
+                parse_int(args[0], curEvent.set_player_territory);
+                continue;
+            }
 
             unknown_here();
             continue;

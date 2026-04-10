@@ -205,6 +205,14 @@ public:
     
     // Check and trigger counter-attacks (called in OnEndTurn)
     void CheckCounterAttacks();
+
+    // Process Level Events from DEF (AbsTime/Time events with armies, texts, etc.)
+    void ProcessLevelEvents();
+
+    // Track which level events have been triggered (by event id)
+    std::set<int> m_triggeredLevelEvents;
+    // Events activated by RunEvents (id -> activation turn for Time-based events)
+    std::unordered_map<int, int> m_activatedEvents;
     
     // Show briefing for territory before mission launch
     void ShowBriefing(int territory_id);

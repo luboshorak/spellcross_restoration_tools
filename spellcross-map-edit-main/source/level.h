@@ -71,6 +71,31 @@ struct LevelEvent {
     int time_value = 0;         // mùže být -1
     std::string text_id;        // EventText(E02_0001)
     std::vector<LevelEventArmy> armies;
+
+    // WaitForTerritories(11,12) - event only fires after these territories are conquered
+    std::vector<int> wait_for_territories;
+
+    // RunEvents(5,6,7,8) - trigger these events when this event fires
+    std::vector<int> run_events;
+
+    // ChangeMission(territory_id, mission_name)
+    int change_mission_territory = -1;
+    std::string change_mission_name;
+
+    // AddUnitToPlayer(unit_id, count, health, name)
+    struct UnitAdd {
+        int unit_id = 0;
+        int count = 0;
+        int health = 0;
+        std::string name;
+    };
+    std::vector<UnitAdd> add_units;
+
+    // SetResearchFlag(N)
+    std::vector<int> research_flags;
+
+    // SetPlayersTerritory(N)
+    int set_player_territory = -1;
 };
 
 struct LevelData {
