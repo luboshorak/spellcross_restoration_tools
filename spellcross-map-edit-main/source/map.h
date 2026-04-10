@@ -249,6 +249,9 @@ public:
 	bool m_mission_end_fired = false;   // jednorázová pojistka: mission end už byl vyvolán
 	std::unique_ptr<SpellTextRec> m_mission_end_fallback_text; // fallback text if not found in data
 
+	// MissionStartText pending display (shown on first available Tick after video etc.)
+	bool m_start_text_pending = false;
+
 	// Objective completion notification queue
 	std::vector<std::unique_ptr<SpellTextRec>> m_objective_notify_queue;
 	bool m_objective_notify_active = false; // a notification message is currently displayed

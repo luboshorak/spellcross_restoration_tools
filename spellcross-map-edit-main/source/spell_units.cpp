@@ -2225,8 +2225,10 @@ SpellMapEventRec *MapUnit::Kill()
 		evt->trig_unit = NULL;
 		trig_event = NULL;
 
-		// mark as done
-		evt->is_done = true;		
+		// For objective events (TransportUnit, SaveUnit, etc.) killing the trigger unit
+		// means the objective FAILED, not succeeded — do NOT mark as done.
+		if (!evt->is_objective)
+			evt->is_done = true;
 	}
 	// clear so destructor won't re-process
 	trig_events.clear();

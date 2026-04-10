@@ -271,6 +271,11 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
                 out.intro_video = args[0];
                 continue;
             }
+            // PlayStartCANAnim - intro video levelu (CAN format)
+            if (cmd == "PlayStartCANAnim" && args.size() >= 1) {
+                out.intro_video = args[0];
+                continue;
+            }
             // PlayEndDeltaAnim na úrovni levelu - outro video
             if (cmd == "PlayEndDeltaAnim" && args.size() >= 1) {
                 out.outro_video = args[0];

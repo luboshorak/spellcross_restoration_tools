@@ -1005,22 +1005,18 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	{
 		MapUnit* commander = nullptr;
 
+		// Look for the SpecUnit (commander/key unit) or is_commander flagged unit
 		for (auto* u : units)
 		{
 			if (!u) continue;
 			if (u->is_enemy) continue;
-			if (u->is_commander) { commander = u; break; }
-		}
-		if (!commander)
-		{
-			for (auto* u : units)
+			if (u->is_commander || u->spec_type == MapUnitType::SpecUnit)
 			{
-				if (!u) continue;
-				if (u->is_enemy) continue;
 				commander = u;
 				break;
 			}
 		}
+		// No fallback — if the commander/SpecUnit is dead, mission cannot succeed this way
 
 		if (commander)
 		{
@@ -1036,7 +1032,7 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		}
 	}
 
-	// --- failure condition: all alliance units dead ---
+	// --- failure condition: all alliance units dead OR key objective unit killed ---
 	bool failure = false;
 	if (!success)
 	{
@@ -1049,6 +1045,23 @@ void SpellMap::CheckAndTriggerMissionEnd()
 		}
 		if (!any_alive)
 			failure = true;
+
+		// Check if any objective's key unit was killed (TransportUnit/SaveUnit with dead trig_unit)
+		if (!failure && events)
+		{
+			for (auto* e : events->GetEvents())
+			{
+				if (!e) continue;
+				if (!e->is_objective) continue;
+				if (!e->isTransportSave()) continue;
+				// trig_unit is NULL (unit died) and objective was not completed
+				if (!e->trig_unit && !e->is_done)
+				{
+					failure = true;
+					break;
+				}
+			}
+		}
 	}
 
 	if (!success && !failure)
@@ -1637,6 +1650,7 @@ void SpellMap::Close()
 	m_mission_end_ack = false;
 	m_mission_end_req = MissionEndRequest();
 	m_mission_end_fired = false;
+	m_start_text_pending = false;
 
 	SetDefaultRenderFilter(NULL);
 	SetRenderFilter(NULL);
@@ -12114,6 +12128,18 @@ int SpellMap::Tick()
 	if (!new_events.empty())
 		event_list.insert(event_list.end(), new_events.begin(), new_events.end());
 
+	// Show MissionStartText briefing on first available tick (after video/message finishes)
+	if (m_start_text_pending && m_msg_creator && m_msg_checker && !m_msg_checker())
+	{
+		if (spelldata && spelldata->texts)
+		{
+			SpellTextRec* start_txt = spelldata->texts->GetText(params.start_text);
+			if (start_txt)
+				m_msg_creator(start_txt, false, NULL);
+		}
+		m_start_text_pending = false;
+	}
+
 	// try process pending events
 	ProcEventsList(event_list);
 	CheckObjectiveNotifications();
@@ -12610,6 +12636,11 @@ int SpellMap::MissionStartEvent()
 		// check if everything is done and mark it as done eventually
 		evt->isDone();
 	}
+
+	// Queue MissionStartText to be shown on first available Tick (after video etc.)
+	if (!params.start_text.empty())
+		m_start_text_pending = true;
+
 	return(0);
 }
 

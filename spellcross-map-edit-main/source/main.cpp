@@ -1284,6 +1284,8 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
         [this](FormMainMenuAction action) { OnMainMenuAction(action); });
 }
 
+static std::string FindLevelDefContainingMission(const std::string& missionStem);
+
 void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 {
     // Defer the actual work so that the mouse-click event handler in
@@ -1310,6 +1312,32 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                     wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
                     break;
                 }
+
+                // Play level intro video (L_01.CAN or similar) before the first mission
+                {
+                    std::string levelDefPath = FindLevelDefContainingMission("M01_01A");
+                    if (!levelDefPath.empty())
+                    {
+                        LevelData lvlIntro;
+                        std::string err;
+                        LevelLoader loader;
+                        if (loader.LoadLevelDef(levelDefPath, lvlIntro, &err) &&
+                            !lvlIntro.intro_video.empty() && lvlIntro.intro_video != "none")
+                        {
+                            if (!FindWindowById(ID_VIDEO_BOX_WIN) && spell_data)
+                            {
+                                try {
+                                    form_video_box = new FormVideoBox(
+                                        canvas, ID_VIDEO_BOX_WIN, spell_data,
+                                        lvlIntro.intro_video, 2);
+                                } catch (const std::exception&) {
+                                    // intro video not found — continue without it
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if(LoadMapFromDefPath(def_path.wstring(), {}))
                     SetGameModeUI(true);
                 break;
@@ -1813,6 +1841,39 @@ void MainFrame::OpenStrategicAndLoadNext()
 
         // Exit game mode UI (return to editor-like state for strategic view)
         // Note: strategic level handles its own game mode state
+        return;
+    }
+
+    // Mission failed without strategic level (e.g. first mission from main menu)
+    // → offer retry or return to main menu
+    if (!m_mission_end_req.success)
+    {
+        std::wstring currentDefPath = spell_map ? spell_map->GetTopPath() : L"";
+
+        int result = wxMessageBox(
+            L"Mission failed!\nDo you want to retry the mission?",
+            L"Mission Failed",
+            wxYES_NO | wxICON_QUESTION,
+            this
+        );
+
+        if (result == wxYES && !currentDefPath.empty())
+        {
+            // Retry: reload the same mission
+            if (LoadMapFromDefPath(currentDefPath, {}))
+                SetGameModeUI(true);
+        }
+        else
+        {
+            // Return to main menu
+            if (spell_map && spell_map->isGameMode())
+                SetGameModeUI(false);
+
+            wxCommandEvent dummy;
+            OnOpenMainMenu(dummy);
+        }
+
+        m_mission_end_flow = false;
         return;
     }
 
@@ -3581,10 +3642,10 @@ void MainFrame::ShowMessage(SpellTextRec *message,bool is_yesno,std::function<vo
     //auto text = spell_data->texts->GetText("u0101_07");
     form_message = new FormMsgBox(canvas, ID_MSG_WIN, spell_data, spell_map, message, (is_yesno)?(FormMsgBox::SpellMsgOptions::YESNO):(FormMsgBox::SpellMsgOptions::NONE), exit_cb);
 }
-// return true if some message still exist
+// return true if some message still exist or a video is playing
 bool MainFrame::CheckMessageState()
 {
-    return(form_message != NULL);    
+    return(form_message != NULL || form_video_box != NULL);    
 }
 
 
