@@ -513,6 +513,13 @@ public:
     wxBitmap m_bgBitmap;
     bool m_hasBg = false;
 
+    // Original VMM_FULL strategic-map frame. The level bitmap is drawn into
+    // its 379x259 viewport, preserving the original DOS layout and hit-test.
+    wxBitmap m_mapChromeBitmap;
+    wxBitmap m_mapChromeBitmapScaled;
+    int m_mapChromeScaledW = -1;
+    int m_mapChromeScaledH = -1;
+
     // statistics model (integrated from former form_strategic.*)
     std::vector<CommanderRankRec> m_ranks;
     LossStats m_lossStats;
@@ -578,6 +585,11 @@ public:
     wxSimplebook* m_midBook = nullptr;
     wxPanel* m_midRosterPanel = nullptr;
     wxPanel* m_midResearchPanel = nullptr;
+    // FACTORY/STATS artwork spans the complete 575 px strategic surface.
+    // These companion pages keep its x=412..574 part visible instead of
+    // leaving the map roster over the right-hand half of those screens.
+    wxPanel* m_midResourcesPanel = nullptr;
+    wxPanel* m_midStatsPanel = nullptr;
     wxPanel* m_researchPanel = nullptr; // left-side page (details + progress)
 
     wxListCtrl* m_researchList = nullptr;

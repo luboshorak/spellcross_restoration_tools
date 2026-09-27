@@ -169,6 +169,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include=".github\copilot-instructions.md" />
+    <None Include="tests\inspect_scsave.py" />
+    <None Include="tests\test_mission_events.py" />
+    <None Include="tests\test_view_events.py" />
     <None Include="wx\msw\blank.cur" />
     <None Include="wx\msw\bullseye.cur" />
     <None Include="wx\msw\cross.cur" />
@@ -340,6 +343,7 @@
       <FavorSizeOrSpeed>Neither</FavorSizeOrSpeed>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -361,6 +365,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
+      <DisableSpecificWarnings>4996</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

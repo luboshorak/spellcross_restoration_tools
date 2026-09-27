@@ -138,6 +138,7 @@ public:
 	SpellUnits* units;
 	// palettes
 	uint8_t map_pal[256][3]; /* map environment common pal (index: 128 - 255) */
+	uint8_t strategy_pal[256][3]; /* strategic screens and VM_* resources */
 	// fonts
 	SpellFont* font;
 	SpellFont* font7;
@@ -169,7 +170,6 @@ public:
 	int BuildSpriteContextOfMaps(wstring folder,string terrain_name,std::function<void(std::string)> status_cb);	
 	int BuildHouseObjectsOfMaps(wstring folder,string terrain_name,std::function<void(std::string)> status_cb);
 };
-
 
 
 

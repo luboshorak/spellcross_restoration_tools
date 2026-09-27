@@ -308,6 +308,9 @@ string &SpellStringTable::GetRaw()
 
 SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path,std::function<void(std::string)> status_list,std::function<void(std::string)> status_item)
 {
+	std::memset(map_pal, 0, sizeof(map_pal));
+	std::memset(strategy_pal, 0, sizeof(strategy_pal));
+
 	font = NULL;
 	font7 = NULL;
 	units = NULL;
@@ -429,6 +432,25 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 		throw runtime_error("SYSTEM.PAL not found in COMMON.FS!");
 	}
 	std::memcpy(&map_pal[224][0],data,size);
+
+	// Strategic interface uses its own palette. STRATEGY.PAL supplies the full
+	// fallback, while the stone frame and VM_* controls use the shared 0..127
+	// range from _SHARED1.PAL (the original game assembles its screen palettes
+	// from these chunks).
+	if(common_fs->GetFile("STRATEGY.PAL", &data, &size) || size != 256*3)
+	{
+		// Older/incomplete data sets may not contain it. Preserve functionality,
+		// but use the deterministic map palette instead of uninitialised colours.
+		std::memcpy(strategy_pal, map_pal, sizeof(strategy_pal));
+		if(status_list)
+			status_list(" - STRATEGY.PAL missing; strategic graphics use map palette fallback.");
+	}
+	else
+	{
+		std::memcpy(strategy_pal, data, sizeof(strategy_pal));
+	}
+	if(!common_fs->GetFile("_SHARED1.PAL", &data, &size) && size == 128*3)
+		std::memcpy(&strategy_pal[0][0], data, size);
 	// load CURSOR.PAL palette chunk for maps - ###todo: not sure where to place this
 	/*if(common_fs->GetFile("CURSOR.PAL",&data,&size) || size != 6*3)
 	{
@@ -862,7 +884,10 @@ int SpellData::LoadAuxGraphics(FSarchive *fs,std::function<void(std::string)> st
 		else if(wildcmp("*.ICO",name) || wildcmp("*.BTN",name))
 		{
 			// ICO files (compression like in PNM files)			
-			gres.AddICO(data, flen, name,map_pal);
+			const bool strategic_resource =
+				wildcmp("VM*.ICO", name) || wildcmp("VM*.BTN", name) ||
+				strcmp(name, "LASTTERT.ICO") == 0;
+			gres.AddICO(data, flen, name, strategic_resource ? strategy_pal : map_pal);
 		}
 		else if(wildcmp("*.CUR",name))
 		{

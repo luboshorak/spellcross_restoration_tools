@@ -9,9 +9,56 @@
 #include <wx/stdpaths.h>
 
 #include <filesystem>
+#include <vector>
 
 #include "other.h"
 #include "simpleini.h"
+
+namespace
+{
+	std::filesystem::path ResolveConfiguredPath(const char* value,
+		const std::filesystem::path& config_path,
+		const std::filesystem::path& executable_dir)
+	{
+		namespace fs = std::filesystem;
+		if (!value || !*value)
+			return {};
+
+		const fs::path configured = char2wstring(value);
+		if (configured.is_absolute())
+			return configured.lexically_normal();
+
+		std::vector<fs::path> roots = {
+			fs::current_path(),
+			config_path.parent_path(),
+			executable_dir
+		};
+
+		for (fs::path dir : { config_path.parent_path(), executable_dir })
+		{
+			for (;;)
+			{
+				roots.push_back(dir);
+				const fs::path parent = dir.parent_path();
+				if (parent.empty() || parent == dir)
+					break;
+				dir = parent;
+			}
+		}
+
+		std::error_code ec;
+		for (const auto& root : roots)
+		{
+			const fs::path candidate = (root / configured).lexically_normal();
+			if (fs::exists(candidate, ec) && !ec)
+				return candidate;
+			ec.clear();
+		}
+
+		// Keep a deterministic path in diagnostics even when the item is missing.
+		return (fs::current_path() / configured).lexically_normal();
+	}
+}
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -104,20 +151,24 @@ void FormLoader::Loader(std::wstring config_path,SpellData* &spell_data)
 		return;
 	}
 
-	// get exec path
-	std::wstring exe_path = ::wxStandardPaths::Get().GetExecutablePath().ToStdWstring();	
-	#ifdef __WXMSW__
-		exe_path = std::filesystem::path(exe_path).parent_path();
-	#endif
+	const std::filesystem::path config_file = std::filesystem::absolute(config_path).lexically_normal();
+	const std::filesystem::path exe_path =
+		std::filesystem::path(::wxStandardPaths::Get().GetExecutablePath().ToStdWstring()).parent_path();
 
 	// spellcross data root path
-	wstring spelldata_path = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("SPELCROS","spell_path","")));
+	wstring spelldata_path = ResolveConfiguredPath(ini.GetValue("SPELCROS", "spell_path", ""), config_file, exe_path).wstring();
 	// spellcross cd data root path
-	wstring spellcd_path = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("SPELCROS","spellcd_path","")));
+	wstring spellcd_path = ResolveConfiguredPath(ini.GetValue("SPELCROS", "spellcd_path", ""), config_file, exe_path).wstring();
 	// special data folder
-	wstring spec_folder = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("DATA","spec_data_path","")));
+	wstring spec_folder = ResolveConfiguredPath(ini.GetValue("DATA", "spec_data_path", ""), config_file, exe_path).wstring();
 	// units aux data path
-	wstring units_aux_data_path = std::filesystem::path(exe_path) / std::filesystem::path(char2wstring(ini.GetValue("DATA","units_aux_data_path","")));
+	wstring units_aux_data_path = ResolveConfiguredPath(ini.GetValue("DATA", "units_aux_data_path", ""), config_file, exe_path).wstring();
+
+	UpdateList("Resolved runtime paths:");
+	UpdateList(string_format(" - config: %ls", config_file.wstring().c_str()));
+	UpdateList(string_format(" - game data: %ls", spelldata_path.c_str()));
+	UpdateList(string_format(" - CD data: %ls", spellcd_path.c_str()));
+	UpdateList(string_format(" - program data: %ls", spec_folder.c_str()));
 
 	// try load spellcross data
 	try{
@@ -135,10 +186,10 @@ void FormLoader::Loader(std::wstring config_path,SpellData* &spell_data)
 		// OPTIONAL: don't kill the whole loader, just continue
 		UpdateList(string_format(" - missing/failed, continuing without aux data (''%ls'')", units_aux_data_path.c_str()));
 
-		// pokud máš nìjaký flag, nastav ho:
+		// pokud mÃ¡Å¡ nÄ›jakÃ½ flag, nastav ho:
 		// spell_data->units_fsu->has_aux_data = false;
 
-		// a hlavnì NEVOLAT:
+		// a hlavnÄ› NEVOLAT:
 		// delete spell_data;
 		// spell_data = NULL;
 		// LoaderExit(true);
@@ -160,7 +211,7 @@ void FormLoader::Loader(std::wstring config_path,SpellData* &spell_data)
 		string sec_name = "TERRAIN::" + terr->name;
 
 		// try to load context
-		wstring cont_path = char2wstring(ini.GetValue(sec_name.c_str(),"context_path",""));
+		wstring cont_path = ResolveConfiguredPath(ini.GetValue(sec_name.c_str(), "context_path", ""), config_file, exe_path).wstring();
 		if(terr->InitSpriteContext(cont_path))
 		{
 			UpdateList(string_format("   - context ''%ls'' not found...",cont_path.c_str()));
@@ -221,7 +272,4 @@ void FormLoader::OnRefreshList(wxCommandEvent& event)
 	txtList->ShowPosition(txtList->GetLastPosition());
 	delete str;
 }
-
-
-
 

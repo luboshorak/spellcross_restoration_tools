@@ -112,6 +112,7 @@ public:
     int isSeePlace();
     int isSeeUnit();
     int isDone();
+    bool HasPendingActions() const;
     int isDestroyObject();
     int isTransportSave();
     int isTransportSaveDestroy();

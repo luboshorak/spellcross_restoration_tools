@@ -54,8 +54,9 @@ class MyApp : public wxApp
 {
 private:
     CSimpleIniA ini;
-    SpellMap* spell_map;
-    SpellData* spell_data;   
+    SpellMap* spell_map = nullptr;
+    SpellData* spell_data = nullptr;
+    std::wstring config_path;
 public:
     virtual bool OnInit();
     virtual int OnExit();

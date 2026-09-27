@@ -122,8 +122,21 @@ int SpellMapEventRec::isTransportSaveDestroy()
 {
 	return(evt_type == EVT_TRANSPORT_UNIT || evt_type == EVT_SAVE_UNIT || evt_type == EVT_DESTROY_UNIT);
 }
+bool SpellMapEventRec::HasPendingActions() const
+{
+	for(const auto& unit : units)
+		if(!unit.is_placed)
+			return(true);
+	for(const auto& text : texts)
+		if(!text.is_done)
+			return(true);
+	return(false);
+}
 int SpellMapEventRec::isDone()
 {
+	// Detection sets is_done before the queued units and messages are processed.
+	if(HasPendingActions())
+		return(false);
 	if(is_done)
 		return(is_done);
 
@@ -139,12 +152,6 @@ int SpellMapEventRec::isDone()
 		return(is_done);
 	}
 
-	for(auto & unit : units)
-		if(!unit.is_placed)
-			return(false);
-	for(auto& text : texts)
-		if(!text.is_done)
-			return(false);
 	if(!units.empty() || !texts.empty())
 		is_done = true;
 	return(is_done);

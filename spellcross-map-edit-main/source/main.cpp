@@ -59,6 +59,85 @@
 namespace
 {
 
+    static bool IsUsableConfig(const std::filesystem::path& path)
+    {
+        namespace fs = std::filesystem;
+
+        std::error_code ec;
+        if (!fs::is_regular_file(path, ec) || ec || fs::file_size(path, ec) == 0 || ec)
+            return false;
+
+        CSimpleIniA probe;
+        probe.SetUnicode();
+        if (probe.LoadFile(path.wstring().c_str()) != SI_OK)
+            return false;
+
+        const char* spell_path = probe.GetValue("SPELCROS", "spell_path", "");
+        return spell_path && *spell_path;
+    }
+
+    static std::filesystem::path FindRuntimeRoot(const std::filesystem::path& executable_dir,
+        const std::filesystem::path& startup_dir)
+    {
+        namespace fs = std::filesystem;
+
+        const auto find_from = [](fs::path dir) -> fs::path
+        {
+            std::error_code ec;
+            for (;;)
+            {
+                if (fs::is_regular_file(dir / "data" / "units.fsa", ec) && !ec)
+                    return dir;
+                ec.clear();
+
+                const fs::path parent = dir.parent_path();
+                if (parent.empty() || parent == dir)
+                    break;
+                dir = parent;
+            }
+            return {};
+        };
+
+        if (auto root = find_from(executable_dir); !root.empty())
+            return root;
+        if (auto root = find_from(startup_dir); !root.empty())
+            return root;
+        return executable_dir;
+    }
+
+    static std::filesystem::path FindConfigPath(const std::filesystem::path& executable_dir,
+        const std::filesystem::path& runtime_root,
+        const std::filesystem::path& startup_dir)
+    {
+        namespace fs = std::filesystem;
+
+        std::vector<fs::path> candidates = {
+            executable_dir / "config.ini",
+            runtime_root / "config.ini",
+            runtime_root / "source" / "config.ini",
+            startup_dir / "config.ini",
+            startup_dir / "source" / "config.ini"
+        };
+
+        fs::path dir = executable_dir;
+        for (;;)
+        {
+            candidates.push_back(dir / "config.ini");
+            candidates.push_back(dir / "source" / "config.ini");
+            const fs::path parent = dir.parent_path();
+            if (parent.empty() || parent == dir)
+                break;
+            dir = parent;
+        }
+
+        for (const auto& candidate : candidates)
+        {
+            if (IsUsableConfig(candidate))
+                return fs::absolute(candidate).lexically_normal();
+        }
+        return {};
+    }
+
     static std::string to_lower(std::string s)
     {
         for (char& ch : s)
@@ -340,13 +419,43 @@ bool MyApp::OnInit()
 {
     // for saving PNG file (among other stuff)
     wxInitAllImageHandlers();
-    
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path startup_dir = fs::current_path(ec);
+    ec.clear();
+    const fs::path executable_dir = fs::path(wxStandardPaths::Get().GetExecutablePath().ToStdWstring()).parent_path();
+    const fs::path runtime_root = FindRuntimeRoot(executable_dir, startup_dir);
+
+    // All legacy current_path() lookups now have one deterministic base.
+    fs::current_path(runtime_root, ec);
+    if (ec)
+    {
+        wxMessageBox(string_format("Cannot use the runtime data folder:\n%ls\n\n%s",
+            runtime_root.wstring().c_str(), ec.message().c_str()), "Startup error", wxICON_ERROR);
+        return false;
+    }
+
+    config_path = FindConfigPath(executable_dir, runtime_root, startup_dir).wstring();
+    if (config_path.empty())
+    {
+        wxMessageBox(string_format("No valid config.ini was found.\n\nRuntime folder:\n%ls\n\n"
+            "The file must contain a non-empty [SPELCROS] spell_path entry.",
+            runtime_root.wstring().c_str()), "Startup error", wxICON_ERROR);
+        return false;
+    }
+
     // load config.ini
     ini.SetUnicode();
-    ini.LoadFile("config.ini");
+    if (ini.LoadFile(config_path.c_str()) != SI_OK)
+    {
+        wxMessageBox(string_format("Loading configuration failed:\n%ls", config_path.c_str()),
+            "Startup error", wxICON_ERROR);
+        return false;
+    }
 
     // --- try load Spellcross data
-    FormLoader* form_loader = new FormLoader(NULL,spell_data,L"config.ini");
+    FormLoader* form_loader = new FormLoader(NULL, spell_data, config_path);
     bool data_ok = form_loader->ShowModal();
     delete form_loader;
     if(!data_ok)
@@ -410,7 +519,8 @@ int MyApp::OnExit()
     ini.SetLongValue("STATE", "music_volume", 100.0*spell_data->midi->GetVolume());
 
     // save INI
-    ini.SaveFile("config.ini");
+    if (!config_path.empty())
+        ini.SaveFile(config_path.c_str());
 
     // loose map
     delete spell_map;
@@ -1288,7 +1398,8 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
         [this](FormMainMenuAction action) { OnMainMenuAction(action); });
 }
 
-static std::string FindLevelDefContainingMission(const std::string& missionStem);
+static std::string FindLevelDefContainingMission(const std::string& missionStem,
+    const SpellData* spellData);
 
 void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 {
@@ -1319,7 +1430,7 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 
                 // Play level intro video (L_01.CAN or similar) before the first mission
                 {
-                    std::string levelDefPath = FindLevelDefContainingMission("M01_01A");
+                    std::string levelDefPath = FindLevelDefContainingMission("M01_01A", spell_data);
                     if (!levelDefPath.empty())
                     {
                         LevelData lvlIntro;
@@ -1616,7 +1727,8 @@ void MainFrame::PlayCutsceneFromStrategic(const std::string& video_entry_name)
 
 
 // Forward declarations for helpers defined later in this file
-static std::string FindLevelDefContainingMission(const std::string& missionStem);
+static std::string FindLevelDefContainingMission(const std::string& missionStem,
+    const SpellData* spellData);
 
 // map animation periodic refresh tick
 void MainFrame::OnTimer(wxTimerEvent& event)
@@ -1647,7 +1759,7 @@ void MainFrame::OnTimer(wxTimerEvent& event)
                 std::string missionStem = fs::path(spell_map->map_path).stem().string();
                 if (!missionStem.empty())
                 {
-                    std::string levelDefPath = FindLevelDefContainingMission(missionStem);
+                    std::string levelDefPath = FindLevelDefContainingMission(missionStem, spell_data);
                     if (!levelDefPath.empty())
                     {
                         LevelData currentLvl;
@@ -1727,34 +1839,30 @@ void MainFrame::OnCutsceneClosed(wxCloseEvent& ev)
     OpenStrategicAndLoadNext();
 }
 
-static std::string find_def_candidate(const std::string& name)
+static std::string find_def_candidate(const std::string& name, const SpellData* spellData)
 {
     namespace fs = std::filesystem;
 
-    // zkus pár běžných míst (podle toho, jak dumpuješ FS)
-    const fs::path candidates[] = {
-        fs::current_path() / "temp" / name,
-        fs::current_path() / "temp" / "COMMON" / name,
-        fs::current_path() / name
-    };
+    std::error_code ec;
+    const fs::path requested(name);
+    if (fs::exists(requested, ec) && fs::is_regular_file(requested, ec))
+        return fs::absolute(requested, ec).lexically_normal().string();
 
-    for (const auto& p : candidates)
-        if (fs::exists(p))
-            return p.string();
-
-    return name; // fallback
+    const fs::path root = spellData ? fs::path(spellData->spell_data_root) : fs::path();
+    const fs::path found = FindSpellDataFile(root, requested.filename().string());
+    return found.empty() ? std::string() : found.string();
 }
 
 // Find the LEVEL_XX.DEF that contains a given mission name (e.g. "M01_01A").
 // Scans LEVEL_01..LEVEL_99 in common locations.
 // Returns the full path to the LEVEL DEF, or empty if not found.
-static std::string FindLevelDefContainingMission(const std::string& missionStem)
+static std::string FindLevelDefContainingMission(const std::string& missionStem,
+    const SpellData* spellData)
 {
     if (missionStem.empty())
         return {};
 
     namespace fs = std::filesystem;
-    std::error_code ec;
 
     const std::string missionUpper = [&]() {
         std::string s = missionStem;
@@ -1762,13 +1870,9 @@ static std::string FindLevelDefContainingMission(const std::string& missionStem)
         return s;
     }();
 
-    // Search directories
-    const fs::path cwd = fs::current_path(ec);
-    const std::vector<fs::path> dirs = {
-        cwd / "temp" / "COMMON",
-        cwd / "temp",
-        cwd
-    };
+    // Search the configured installation first; FindSpellDataFile also keeps
+    // the project-local temp/COMMON export as a development fallback.
+    const fs::path root = spellData ? fs::path(spellData->spell_data_root) : fs::path();
 
     for (int lvl = 1; lvl <= 99; ++lvl)
     {
@@ -1776,37 +1880,34 @@ static std::string FindLevelDefContainingMission(const std::string& missionStem)
         std::snprintf(buf, sizeof(buf), "LEVEL_%02d.DEF", lvl);
         const std::string levelName(buf);
 
-        for (const auto& dir : dirs)
+        const fs::path candidate = FindSpellDataFile(root, levelName);
+        if (candidate.empty())
+            continue;
+
+        // Quick scan: load the LEVEL DEF and check if it references our mission
+        LevelData lvlData;
+        std::string err;
+        LevelLoader loader;
+        if (!loader.LoadLevelDef(candidate.string(), lvlData, &err))
+            continue;
+
+        for (const auto& m : lvlData.missions)
         {
-            fs::path candidate = dir / levelName;
-            if (!fs::exists(candidate, ec))
-                continue;
+            std::string nameUp = m.name;
+            for (char& c : nameUp) c = (char)std::toupper((unsigned char)c);
+            if (nameUp == missionUpper)
+                return candidate.string();
+        }
 
-            // Quick scan: load the LEVEL DEF and check if it references our mission
-            LevelData lvlData;
-            std::string err;
-            LevelLoader loader;
-            if (!loader.LoadLevelDef(candidate.string(), lvlData, &err))
-                continue;
-
-            for (const auto& m : lvlData.missions)
-            {
-                std::string nameUp = m.name;
-                for (char& c : nameUp) c = (char)std::toupper((unsigned char)c);
-                if (nameUp == missionUpper)
-                    return candidate.string();
-            }
-
-            // Also check territory mission tokens (they may reference the mission
-            // without the trailing variant letter, e.g. "m01_01" -> "M01_01A")
-            for (const auto& t : lvlData.territories)
-            {
-                std::string tokUp = t.mission;
-                for (char& c : tokUp) c = (char)std::toupper((unsigned char)c);
-                // Mission stem without variant letter
-                if (!tokUp.empty() && missionUpper.rfind(tokUp, 0) == 0)
-                    return candidate.string();
-            }
+        // Also check territory mission tokens (they may reference the mission
+        // without the trailing variant letter, e.g. "m01_01" -> "M01_01A")
+        for (const auto& t : lvlData.territories)
+        {
+            std::string tokUp = t.mission;
+            for (char& c : tokUp) c = (char)std::toupper((unsigned char)c);
+            // Mission stem without variant letter
+            if (!tokUp.empty() && missionUpper.rfind(tokUp, 0) == 0)
+                return candidate.string();
         }
     }
 
@@ -1885,7 +1986,7 @@ void MainFrame::OpenStrategicAndLoadNext()
     // from the parent LEVEL_XX.DEF before StartMissionEndFlow() was called.
     std::string nextDef = nextW.empty()
         ? std::string()
-        : find_def_candidate(std::string(nextW.begin(), nextW.end()));
+        : find_def_candidate(std::string(nextW.begin(), nextW.end()), spell_data);
 
     // If next_level_def is still empty, try to infer it from the current map's mission name.
     // This is a safety net in case the OnTimer enrichment didn't find it.
@@ -1895,7 +1996,7 @@ void MainFrame::OpenStrategicAndLoadNext()
         std::string missionStem = fs::path(spell_map->map_path).stem().string();
         if (!missionStem.empty())
         {
-            std::string levelDefPath = FindLevelDefContainingMission(missionStem);
+            std::string levelDefPath = FindLevelDefContainingMission(missionStem, spell_data);
             if (!levelDefPath.empty())
             {
                 LevelData currentLvl;
@@ -1912,14 +2013,14 @@ void MainFrame::OpenStrategicAndLoadNext()
                         for (char& c : nameUp) c = (char)std::toupper((unsigned char)c);
                         if (nameUp == missionUpper && !m.next_level_def.empty() && m.next_level_def != "none")
                         {
-                            nextDef = find_def_candidate(m.next_level_def);
+                            nextDef = find_def_candidate(m.next_level_def, spell_data);
                             break;
                         }
                     }
 
                     if (nextDef.empty() && !currentLvl.next_level_def.empty() && currentLvl.next_level_def != "none")
                     {
-                        nextDef = find_def_candidate(currentLvl.next_level_def);
+                        nextDef = find_def_candidate(currentLvl.next_level_def, spell_data);
                     }
 
                     // If still empty but success, open the current level's strategic view

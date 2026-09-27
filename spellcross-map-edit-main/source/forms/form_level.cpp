@@ -25,6 +25,23 @@
 #include <sstream>
 #include "LZ_spell.h"
 
+namespace
+{
+    // Geometry of the map frame inside the original 575x480 VMM_FULL screen.
+    constexpr int kStrategicScreenW = 575;
+    constexpr int kStrategicScreenH = 480;
+    constexpr int kMapChromeW = 412;
+    constexpr int kMapChromeH = 299;
+    constexpr int kMapViewportX = 17;
+    constexpr int kMapViewportY = 19;
+    constexpr int kMapViewportW = 379;
+    constexpr int kMapViewportH = 259;
+}
+
+static bool BuildStrategicScreenBitmap(SpellData* spellData, const char* resourceName, wxBitmap& outBmp);
+static bool BindStrategicScreenSlice(wxPanel* panel, SpellData* spellData,
+    const char* resourceName, const wxRect& sourceRect);
+
 // Best-effort background decoding.
 // Some LEVEL_XX.LZ files are *compressed* using Spellcross LZW variant.
 // LZ_spell.cpp provides the implementation; we forward-declare the minimal API here
@@ -598,11 +615,60 @@ static std::filesystem::path GetMenuIconPath()
     return std::filesystem::current_path() / "data" / "menu";
 }
 
-static wxBitmap LoadMenuIcon(const wxString& name, const wxSize& targetSize = wxDefaultSize)
+static const char* GetOriginalStrategicIconName(const wxString& name)
+{
+    if (name == "strategic_map") return "VM_MAP";
+    if (name == "hierarchy")     return "VM_HIER";
+    if (name == "units")         return "VM_UNIT";
+    if (name == "buy_sell")      return "VM_BUY";
+    if (name == "research")      return "VM_RESEA";
+    if (name == "info")          return "VM_INFO";
+    if (name == "resources")     return "VM_FACTO";
+    if (name == "statistics")    return "VM_STATI";
+    if (name == "options")       return "VM_OPTIO";
+    return nullptr;
+}
+
+static wxBitmap ScaleMenuIcon(wxBitmap bitmap, const wxSize& targetSize, wxImageResizeQuality quality)
+{
+    if (!bitmap.IsOk() || targetSize == wxDefaultSize ||
+        targetSize.GetWidth() <= 0 || targetSize.GetHeight() <= 0)
+        return bitmap;
+
+    wxImage img = bitmap.ConvertToImage();
+    const int srcW = img.GetWidth();
+    const int srcH = img.GetHeight();
+    if (srcW <= 0 || srcH <= 0)
+        return wxBitmap();
+
+    const double scaleX = (double)targetSize.GetWidth() / (double)srcW;
+    const double scaleY = (double)targetSize.GetHeight() / (double)srcH;
+    const double scale = std::min(scaleX, scaleY);
+    const int newW = std::max(1, (int)std::lround(srcW * scale));
+    const int newH = std::max(1, (int)std::lround(srcH * scale));
+    return wxBitmap(img.Scale(newW, newH, quality));
+}
+
+static wxBitmap LoadMenuIcon(SpellData* spellData, const wxString& name,
+    const wxSize& targetSize = wxDefaultSize)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
 
+    // Prefer the original Spellcross ICO resource already decoded from COMMON.FS.
+    if (spellData)
+    {
+        const char* resourceName = GetOriginalStrategicIconName(name);
+        SpellGraphicItem* item = resourceName ? spellData->gres.GetResource(resourceName) : nullptr;
+        if (item)
+        {
+            std::unique_ptr<wxBitmap> original(item->Render(true));
+            if (original && original->IsOk())
+                return ScaleMenuIcon(*original, targetSize, wxIMAGE_QUALITY_NEAREST);
+        }
+    }
+
+    // Development fallback for incomplete/foreign game-data installations.
     const fs::path dir = GetMenuIconPath();
     const fs::path pngPath = dir / (name.ToStdString() + ".png");
 
@@ -617,27 +683,12 @@ static wxBitmap LoadMenuIcon(const wxString& name, const wxSize& targetSize = wx
         return wxBitmap();
     }
 
-    // Scale to target size while preserving aspect ratio
-    if (targetSize != wxDefaultSize && targetSize.GetWidth() > 0 && targetSize.GetHeight() > 0)
-    {
-        const int srcW = img.GetWidth();
-        const int srcH = img.GetHeight();
-        if (srcW > 0 && srcH > 0)
-        {
-            const double scaleX = (double)targetSize.GetWidth() / (double)srcW;
-            const double scaleY = (double)targetSize.GetHeight() / (double)srcH;
-            const double scale = std::min(scaleX, scaleY);  // fit inside target, preserve aspect
-            const int newW = std::max(1, (int)std::lround(srcW * scale));
-            const int newH = std::max(1, (int)std::lround(srcH * scale));
-            img = img.Scale(newW, newH, wxIMAGE_QUALITY_HIGH);
-        }
-    }
-
-    return wxBitmap(img);
+    return ScaleMenuIcon(wxBitmap(img), targetSize, wxIMAGE_QUALITY_HIGH);
 }
 
 static wxBitmapButton* CreateStrategicBitmapButton(
     wxWindow* parent,
+    SpellData* spellData,
     int id,
     const wxString& iconName,
     const wxColour& background,
@@ -648,7 +699,7 @@ static wxBitmapButton* CreateStrategicBitmapButton(
     if (iconSize == wxDefaultSize)
         iconSize = wxSize(200, 44);  // default button size
 
-    wxBitmap bmp = LoadMenuIcon(iconName, iconSize);
+    wxBitmap bmp = LoadMenuIcon(spellData, iconName, iconSize);
 
     wxBitmapButton* btn;
     if (bmp.IsOk())
@@ -1062,7 +1113,7 @@ static void try_append_single_text(wxString& info, const std::filesystem::path& 
 // In some levels the campaign starting territory is NOT T01.
 // Heuristic: pick the first territory whose mission has no Briefing text file.
 // (In the original game, those typically represent the already-secured / home region.)
-static std::filesystem::path FindTextsDirForLevel(const LevelData& level)
+static std::filesystem::path FindTextsDirForLevel(const LevelData& level, const SpellData* spellData = nullptr)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -1073,7 +1124,23 @@ static std::filesystem::path FindTextsDirForLevel(const LevelData& level)
         {
             if (texts_dir.empty() && !p.empty() && fs::exists(p, ec) && fs::is_directory(p, ec))
                 texts_dir = p;
+            ec.clear();
         };
+
+    // The authoritative location is the game-data root resolved from config.ini.
+    // LEVEL_XX.DEF is normally a cached COMMON.FS export, so walking from its
+    // path cannot reach the installed DATA\Texts directory.
+    if (spellData)
+    {
+        const fs::path dataRoot = spellData->data_path;
+        const fs::path cdRoot = spellData->cd_data_path;
+        try_dir(dataRoot / "TEXTS");
+        try_dir(dataRoot / "Texts");
+        try_dir(dataRoot / "texts");
+        try_dir(cdRoot / "TEXTS");
+        try_dir(cdRoot / "Texts");
+        try_dir(cdRoot / "texts");
+    }
 
     // Walk up from level DEF location and try common layouts
     fs::path base = fs::path(level.source_path).parent_path();
@@ -1123,38 +1190,111 @@ static bool HasBriefingForMissionToken(const std::filesystem::path& texts_dir, c
     return fs::exists(p1, ec) || fs::exists(p2, ec) || fs::exists(p3, ec);
 }
 
-static int ChooseDefaultStartTerritoryId_NoBriefing(const LevelData& level)
+static std::vector<int> ReadExplicitStartTerritories(const LevelData& level)
+{
+    std::vector<int> result;
+    std::ifstream input(level.source_path, std::ios::binary);
+    if (input)
+    {
+        // Original DEFs may contain several Start(n) directives, while the
+        // legacy LevelData field retains only the last one.  Read all of them
+        // from the authoritative source so levels 03/04/05 start correctly.
+        const std::regex startRe(R"(\bStart\s*\(\s*(\d+)\s*\))",
+            std::regex_constants::icase);
+        std::string line;
+        while (std::getline(input, line))
+        {
+            const size_t comment = line.find(';');
+            if (comment != std::string::npos)
+                line.resize(comment);
+
+            std::smatch match;
+            if (!std::regex_search(line, match, startRe) || match.size() < 2)
+                continue;
+
+            const int id = std::stoi(match[1].str());
+            const bool known = std::any_of(level.territories.begin(), level.territories.end(),
+                [id](const LevelTerritory& territory) { return territory.id == id; });
+            if (known)
+                result.push_back(id);
+        }
+    }
+
+    // Custom/in-memory LevelData can have no readable source file.
+    if (result.empty() && level.start_territory > 0)
+        result.push_back(level.start_territory);
+
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+static int ChooseDefaultStartTerritoryId_NoBriefing(const LevelData& level, const SpellData* spellData = nullptr)
 {
     if (level.territories.empty())
         return 0;
 
-    const auto texts_dir = FindTextsDirForLevel(level);
+    const std::vector<int> explicitStarts = ReadExplicitStartTerritories(level);
+    if (!explicitStarts.empty())
+        return explicitStarts.front();
 
-    // 1) Prefer a territory whose mission has NO briefing file.
+    // LEVEL_XX.DEF explicitly uses intro mission "none" for territories already
+    // held at level start. Prefer that reliable metadata over a filesystem guess.
     for (const auto& t : level.territories)
     {
-        if (!HasBriefingForMissionToken(texts_dir, t.mission))
+        const std::string intro = to_lower(trim(t.intro_mission));
+        if (intro.empty() || intro == "none")
             return t.id;
     }
 
-    // 2) Fallback: first territory.
+    const auto texts_dir = FindTextsDirForLevel(level, spellData);
+
+    // Older/custom definitions may omit the explicit marker. Only use the
+    // briefing heuristic when the TEXTS directory was actually found.
+    if (!texts_dir.empty())
+    {
+        for (const auto& t : level.territories)
+        {
+            if (!HasBriefingForMissionToken(texts_dir, t.mission))
+                return t.id;
+        }
+    }
+
+    // Safe fallback: never mark every territory as owned because TEXTS is absent.
     return level.territories.front().id;
 }
 
-static std::vector<int> ChooseStartTerritories_NoBriefing(const LevelData& level)
+static std::vector<int> ChooseStartTerritories_NoBriefing(const LevelData& level, const SpellData* spellData = nullptr)
 {
-    std::vector<int> out;
+    std::vector<int> out = ReadExplicitStartTerritories(level);
     if (level.territories.empty())
         return out;
 
-    const auto texts_dir = FindTextsDirForLevel(level);
-
-    for (const auto& t : level.territories)
+    // Compatibility for older/custom definitions without Start(n): their
+    // already-held territories conventionally use intro mission "none".
+    if (out.empty())
     {
-        // "start territories" = those whose mission has NO briefing file
-        if (!HasBriefingForMissionToken(texts_dir, t.mission))
-            out.push_back(t.id);
+        for (const auto& t : level.territories)
+        {
+            const std::string intro = to_lower(trim(t.intro_mission));
+            if (intro.empty() || intro == "none")
+                out.push_back(t.id);
+        }
     }
+
+    // Compatibility fallback for older/custom definitions.
+    const auto texts_dir = FindTextsDirForLevel(level, spellData);
+    if (out.empty() && !texts_dir.empty())
+    {
+        for (const auto& t : level.territories)
+        {
+            if (!HasBriefingForMissionToken(texts_dir, t.mission))
+                out.push_back(t.id);
+        }
+    }
+
+    if (out.empty())
+        out.push_back(level.territories.front().id);
 
     // make deterministic & unique
     std::sort(out.begin(), out.end());
@@ -1336,13 +1476,20 @@ void StrategicLevelFrame::StartFreshGameMode(const std::vector<LevelData::Player
     }
 
     // Set start territories as owned
-    m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level);
+    m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level, m_spellData);
     if (m_ownedTerritories.empty() && !m_level.territories.empty())
         m_ownedTerritories.push_back(m_level.territories.front().id);
 
     // Add bonus units from previous mission (e.g. rescued commando)
     for (const auto& bu : bonus_units)
         m_playerUnits.push_back(bu);
+
+    while (m_unitStates.size() < m_playerUnits.size())
+    {
+        UnitInstanceState state;
+        state.uid = m_nextRosterUid++;
+        m_unitStates.push_back(state);
+    }
 
     // Load cumulative research flags
     {
@@ -1805,7 +1952,7 @@ void StrategicLevelFrame::MarkOverlayDirty()
     }
 }
 
-static int PickStartTerritoryIdForGameMode(const LevelData& level)
+static int PickStartTerritoryIdForGameMode(const LevelData& level, const SpellData* spellData = nullptr)
 {
     // 1) Some levels explicitly mark the "home" territory with an empty mission token.
     for (const auto& t : level.territories)
@@ -1814,7 +1961,7 @@ static int PickStartTerritoryIdForGameMode(const LevelData& level)
 
     // 2) Otherwise, pick the first territory that has NO briefing text file.
     // (This matches the original campaign behavior for e.g. LEVEL_07 where start != T01.)
-    const int byNoBrief = ChooseDefaultStartTerritoryId_NoBriefing(level);
+    const int byNoBrief = ChooseDefaultStartTerritoryId_NoBriefing(level, spellData);
     if (byNoBrief > 0)
         return byNoBrief;
 
@@ -1839,7 +1986,7 @@ void StrategicLevelFrame::ApplyTerritoryVisibility()
 
     // Ensure we always have a start territory; otherwise everything becomes "fog".
     if (m_ownedTerritories.empty())
-        m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+        m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level, m_spellData));
 
 
     auto mark = [&](int tid)
@@ -1874,7 +2021,7 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
         if (m_ownedTerritories.empty())
         {
             // Some levels start with MULTIPLE owned territories = those WITHOUT briefing
-            m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level);
+            m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level, m_spellData);
 
             // Fallback: at least one
             if (m_ownedTerritories.empty() && !m_level.territories.empty())
@@ -1885,14 +2032,29 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
 
     }
 
-    SaveStrategicState(); // persist into autosave.json
-
     // Rebuild background, because baked borders must be ON in editor mode and OFF in game mode.
     TryLoadBackground();
     ApplyTerritoryVisibility();
+
+    // Do not keep a hidden selection when campaign fog is enabled.  More
+    // importantly, rebuild the lower information panel immediately when the
+    // mode changes; otherwise it retained the previous mode's empty/brief
+    // text until the player clicked a second territory.
+    if (m_gameModeEnabled && m_selectedTerritory > 0 &&
+        (m_selectedTerritory >= (int)m_visibleTerritory.size() ||
+            m_visibleTerritory[m_selectedTerritory] == 0))
+    {
+        m_selectedTerritory = m_ownedTerritories.empty() ? -1 : m_ownedTerritories.front();
+    }
+
     CheckTimeouts();
     MarkOverlayDirty();
     RefreshUI();
+
+    if (m_selectedTerritory > 0)
+        SelectTerritoryById(m_selectedTerritory);
+
+    SaveStrategicState(); // persist the normalized mode/selection state
 
     if (m_mapCanvas) m_mapCanvas->Refresh();
     else if (m_mapPanel) m_mapPanel->Refresh();
@@ -2200,11 +2362,14 @@ void StrategicLevelFrame::BuildUI()
     m_mapCanvas->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnMapPaint, this);
     m_mapCanvas->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnMapLeftDown, this);
     m_mapCanvas->Bind(wxEVT_MOTION, &StrategicLevelFrame::OnMapMouseMove, this);
-    m_mapSizer->Add(m_mapCanvas, 3, wxALL | wxEXPAND, 8);
+    // VMM_FULL uses an exact 299:181 vertical split (map frame / briefing frame).
+    m_mapSizer->Add(m_mapCanvas, kMapChromeH, wxEXPAND);
 
     // Under-map panel: (optional) territory grid fallback + briefing/info text.
     auto* under = new wxPanel(m_mapPanel);
     under->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(under, m_spellData, "VMM_FULL.LZ",
+        wxRect(0, kMapChromeH, kMapChromeW, kStrategicScreenH - kMapChromeH));
     auto* underSizer = new wxBoxSizer(wxVERTICAL);
 
     // Territory buttons (fallback UI). When CLK is available (click map regions), this stays hidden.
@@ -2227,7 +2392,7 @@ void StrategicLevelFrame::BuildUI()
     m_territoryButtonsPanel->SetSizer(grid);
     // Hidden by default; TryLoadBackground() will show it only if CLK is missing.
     m_territoryButtonsPanel->Hide();
-    underSizer->Add(m_territoryButtonsPanel, 0, wxALL | wxEXPAND, 6);
+    underSizer->Add(m_territoryButtonsPanel, 0, wxEXPAND);
 
     // Briefing / mission info (read-only)
     auto* info = new wxTextCtrl(
@@ -2240,33 +2405,50 @@ void StrategicLevelFrame::BuildUI()
     info->SetFont(m_fontText);
     info->SetBackgroundColour(m_palette.background);
     info->SetForegroundColour(m_palette.text);
-    info->SetMinSize(wxSize(-1, 240));
-    underSizer->Add(info, 1, wxALL | wxEXPAND, 6);
+    info->SetMinSize(wxSize(1, 1));
+
+    // Inner opening of the original lower VMM frame: x=17..395, y=322..455.
+    // Proportional spacers keep it aligned at every window size.
+    underSizer->AddStretchSpacer(23);
+    auto* briefingRow = new wxBoxSizer(wxHORIZONTAL);
+    briefingRow->AddStretchSpacer(17);
+    briefingRow->Add(info, 379, wxEXPAND);
+    briefingRow->AddStretchSpacer(16);
+    underSizer->Add(briefingRow, 134, wxEXPAND);
+    underSizer->AddStretchSpacer(24);
 
     under->SetSizer(underSizer);
-    m_mapSizer->Add(under, 2, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+    m_mapSizer->Add(under, kStrategicScreenH - kMapChromeH, wxEXPAND);
 
     m_mapPanel->SetSizer(m_mapSizer);
 
     // --- Page 1: Hierarchy ---
     auto* hierarchyPanel = new wxPanel(m_leftBook);
     hierarchyPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(hierarchyPanel, m_spellData, "VMH_FULL.LZ",
+        wxRect(0, 0, kMapChromeW, kStrategicScreenH));
     BuildHierarchyPage(hierarchyPanel);
 
     // --- Page 2: Resources ---
     m_resourcesPanel = new wxPanel(m_leftBook);
     m_resourcesPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(m_resourcesPanel, m_spellData, "VMF_FULL.LZ",
+        wxRect(0, 0, kMapChromeW, kStrategicScreenH));
     BuildResourcesPage();
 
     // --- Page 3: Statistics (integrated into this frame) ---
     m_statsPanel = new wxPanel(m_leftBook);
     m_statsPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(m_statsPanel, m_spellData, "VMS_FULL.LZ",
+        wxRect(0, 0, kMapChromeW, kStrategicScreenH));
     BuildStatsPage();
 
 
     // --- Page 4: Research – left side (active research + browser detail) ---
     m_researchPanel = new wxPanel(m_leftBook);
     m_researchPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(m_researchPanel, m_spellData, "VMR_FULL.LZ",
+        wxRect(0, 0, kMapChromeW, kStrategicScreenH));
     // Must NOT contribute a large minimum size – wxSimplebook propagates minimums
     // from ALL pages, not just the visible one, which would push the right panel off screen.
     m_researchPanel->SetMinSize(wxSize(1, 1));
@@ -2323,6 +2505,8 @@ void StrategicLevelFrame::BuildUI()
     // --- Page 5: Info / Encyclopedia – left side (browser detail only) ---
     m_infoPanel = new wxPanel(m_leftBook);
     m_infoPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(m_infoPanel, m_spellData, "VMI_FULL.LZ",
+        wxRect(0, 0, kMapChromeW, kStrategicScreenH));
     m_infoPanel->SetMinSize(wxSize(1, 1));
     {
         auto* is = new wxBoxSizer(wxVERTICAL);
@@ -2348,7 +2532,7 @@ void StrategicLevelFrame::BuildUI()
     m_leftBook->AddPage(m_researchPanel, "Research", false);
     m_leftBook->AddPage(m_infoPanel, "Info", false);
 
-    mainSizer->Add(m_leftBook, 4, wxEXPAND);
+    mainSizer->Add(m_leftBook, kMapChromeW, wxEXPAND);
 
     // ============================================================
     // MIDDLE: player units (always visible)
@@ -2360,6 +2544,8 @@ void StrategicLevelFrame::BuildUI()
     m_midRosterPanel = new wxPanel(m_midBook);
     auto* mid = m_midRosterPanel;
     mid->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(mid, m_spellData, "VMM_FULL.LZ",
+        wxRect(kMapChromeW, 0, kStrategicScreenW - kMapChromeW, kStrategicScreenH));
     auto* midSizer = new wxBoxSizer(wxVERTICAL);
 
 
@@ -2425,6 +2611,8 @@ void StrategicLevelFrame::BuildUI()
     // --- Middle Research page – categorized list with yellow group headers ---
     m_midResearchPanel = new wxPanel(m_midBook);
     m_midResearchPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(m_midResearchPanel, m_spellData, "VMR_FULL.LZ",
+        wxRect(kMapChromeW, 0, kStrategicScreenW - kMapChromeW, kStrategicScreenH));
     m_midResearchPanel->SetMinSize(wxSize(1, 1));
     {
         auto* rs = new wxBoxSizer(wxVERTICAL);
@@ -2471,6 +2659,8 @@ void StrategicLevelFrame::BuildUI()
     // --- Middle Info/Encyclopedia page – categorized list (read-only browsing) ---
     m_midInfoPanel = new wxPanel(m_midBook);
     m_midInfoPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(m_midInfoPanel, m_spellData, "VMI_FULL.LZ",
+        wxRect(kMapChromeW, 0, kStrategicScreenW - kMapChromeW, kStrategicScreenH));
     m_midInfoPanel->SetMinSize(wxSize(1, 1));
     {
         auto* is = new wxBoxSizer(wxVERTICAL);
@@ -2513,18 +2703,34 @@ void StrategicLevelFrame::BuildUI()
     }
     m_midBook->AddPage(m_midInfoPanel, "Info", false);
 
-    mainSizer->Add(m_midBook, 1, wxEXPAND);
+    // FACTORY.LZ and STATS.LZ are 569 px wide and deliberately cross the
+    // left/middle split.  Give both screens a matching middle page so the
+    // original artwork remains continuous across x=0..574.
+    m_midResourcesPanel = new wxPanel(m_midBook);
+    m_midResourcesPanel->SetBackgroundColour(m_palette.background);
+    m_midResourcesPanel->SetMinSize(wxSize(1, 1));
+    BindStrategicScreenSlice(m_midResourcesPanel, m_spellData, "VMF_FULL.LZ",
+        wxRect(kMapChromeW, 0, kStrategicScreenW - kMapChromeW, kStrategicScreenH));
+    m_midBook->AddPage(m_midResourcesPanel, "Resources", false);
+
+    m_midStatsPanel = new wxPanel(m_midBook);
+    m_midStatsPanel->SetBackgroundColour(m_palette.background);
+    m_midStatsPanel->SetMinSize(wxSize(1, 1));
+    BindStrategicScreenSlice(m_midStatsPanel, m_spellData, "VMS_FULL.LZ",
+        wxRect(kMapChromeW, 0, kStrategicScreenW - kMapChromeW, kStrategicScreenH));
+    m_midBook->AddPage(m_midStatsPanel, "Statistics", false);
+
+    mainSizer->Add(m_midBook, kStrategicScreenW - kMapChromeW, wxEXPAND);
 
 
     // ============================================================
     // RIGHT: status + actions (always visible, consistent layout)
     // ============================================================
-    // Keep the right sidebar width consistent across all pages.
-    // If added with a proportional grow factor, buttons become excessively wide on larger resolutions.
-    const int kRightSidebarW = 180;
+    // The DOS screen is 575 px of content plus a 65 px control rail.
+    // Keep that exact 412:163:65 relationship while the window is resized.
     auto* right = new wxPanel(m_normalLayoutPanel);
     right->SetBackgroundColour(m_palette.background);
-    right->SetMinSize(wxSize(kRightSidebarW, -1));
+    right->SetMinSize(wxSize(1, 1));
     auto* rightSizer = new wxBoxSizer(wxVERTICAL);
 
     // Status box (Money / Research / Turn)
@@ -2579,7 +2785,7 @@ void StrategicLevelFrame::BuildUI()
             // Try to load icon - if found, hide text (text is fallback only)
             if (!iconName.empty())
             {
-                wxBitmap bmp = LoadMenuIcon(iconName, wxSize(32, 32));
+                wxBitmap bmp = LoadMenuIcon(m_spellData, iconName, wxSize(32, 32));
                 if (bmp.IsOk())
                 {
                     btn->SetBitmap(bmp);
@@ -2645,8 +2851,7 @@ void StrategicLevelFrame::BuildUI()
     rightSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
     right->SetSizer(rightSizer);
 
-    // Fixed-width sidebar (like original UI).
-    mainSizer->Add(right, 0, wxEXPAND);
+    mainSizer->Add(right, 65, wxEXPAND);
     m_normalLayoutPanel->SetSizer(mainSizer);
 
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
@@ -2675,17 +2880,14 @@ void StrategicLevelFrame::BuildUI()
 //  Buy / Sell page
 // ============================================================
 
-static constexpr wxUIntPtr kBuyHdrSentinel = static_cast<wxUIntPtr>(-1);
+static constexpr long kBuyHdrSentinel = -1L;
 static constexpr wxUIntPtr kBuyCmdBase = static_cast<wxUIntPtr>(0x40000000);
 
 void StrategicLevelFrame::BuildBuyPage()
 {
     if (!m_buyMainPanel) return;
 
-    // 3-column layout: left rosters + middle shop/info + right sidebar (status + all buttons)
-    // Keep the right sidebar width consistent with the rest of Strategic UI.
-    // If the sidebar is proportional, buttons become excessively wide on larger resolutions.
-    const int kSidebarW = 180;
+    // Original 640 px layout: 332 + 243 px content and a 65 px control rail.
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     // ---------------------------------------------------------------------
@@ -2693,6 +2895,8 @@ void StrategicLevelFrame::BuildBuyPage()
     // ---------------------------------------------------------------------
     auto* leftPanel = new wxPanel(m_buyMainPanel);
     leftPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(leftPanel, m_spellData, "VMB_FULL.LZ",
+        wxRect(0, 0, 332, kStrategicScreenH));
     auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 
     // Unit roster (top)
@@ -2740,14 +2944,16 @@ void StrategicLevelFrame::BuildBuyPage()
     }
 
     leftPanel->SetSizer(leftSizer);
-    // Left / Middle should split 50/50 (like other pages).
-    mainSizer->Add(leftPanel, 1, wxEXPAND);
+    // Original VMB layout splits at x=332 inside the 575 px strategic surface.
+    mainSizer->Add(leftPanel, 332, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // MIDDLE: Shop + info + buy/sell action
     // ---------------------------------------------------------------------
     auto* midPanel = new wxPanel(m_buyMainPanel);
     midPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(midPanel, m_spellData, "VMB_FULL.LZ",
+        wxRect(332, 0, kStrategicScreenW - 332, kStrategicScreenH));
     auto* midSizer = new wxBoxSizer(wxVERTICAL);
 
     // Tab toggles (Buy / Sell)
@@ -2790,7 +2996,7 @@ void StrategicLevelFrame::BuildBuyPage()
         const long row = ev.GetIndex();
         if (!m_buyShopList || row < 0) return;
         const wxUIntPtr data = m_buyShopList->GetItemData(row);
-        if (data == kBuyHdrSentinel) {
+        if (data == static_cast<wxUIntPtr>(kBuyHdrSentinel)) {
             m_buyShopList->SetItemState(row, 0, wxLIST_STATE_SELECTED);
             return;
         }
@@ -2834,15 +3040,14 @@ void StrategicLevelFrame::BuildBuyPage()
     midSizer->Add(m_btnBuyAction, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     midPanel->SetSizer(midSizer);
-    // Left / Middle 50/50
-    mainSizer->Add(midPanel, 1, wxEXPAND);
+    mainSizer->Add(midPanel, kStrategicScreenW - 332, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // RIGHT: Sidebar (status + all buttons) – no duplicates
     // ---------------------------------------------------------------------
     auto* sidePanel = new wxPanel(m_buyMainPanel);
     sidePanel->SetBackgroundColour(m_palette.background);
-    sidePanel->SetMinSize(wxSize(kSidebarW, -1));
+    sidePanel->SetMinSize(wxSize(1, 1));
     auto* sideSizer = new wxBoxSizer(wxVERTICAL);
 
     // Status box (Money / Research / Turn)
@@ -2896,7 +3101,7 @@ void StrategicLevelFrame::BuildBuyPage()
             // Try to load icon - if found, hide text (text is fallback only)
             if (!iconName.empty())
             {
-                wxBitmap bmp = LoadMenuIcon(iconName, wxSize(32, 32));
+                wxBitmap bmp = LoadMenuIcon(m_spellData, iconName, wxSize(32, 32));
                 if (bmp.IsOk())
                 {
                     btn->SetBitmap(bmp);
@@ -2975,8 +3180,7 @@ void StrategicLevelFrame::BuildBuyPage()
     sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     sidePanel->SetSizer(sideSizer);
-    // Fixed-width sidebar (like the normal right panel).
-    mainSizer->Add(sidePanel, 0, wxEXPAND);
+    mainSizer->Add(sidePanel, 65, wxEXPAND);
 
     m_buyMainPanel->SetSizer(mainSizer);
 }
@@ -3313,7 +3517,7 @@ void StrategicLevelFrame::OnBuyAction(wxCommandEvent&)
     const long sel = m_buyShopList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
     if (sel < 0) return;
     const wxUIntPtr data = m_buyShopList->GetItemData(sel);
-    if (data == kBuyHdrSentinel) return;
+    if (data == static_cast<wxUIntPtr>(kBuyHdrSentinel)) return;
 
     EnsureUnitCostsLoaded();
 
@@ -3375,9 +3579,6 @@ void StrategicLevelFrame::BuildUnitsPage()
 {
     if (!m_unitsMainPanel) return;
 
-    const int kSidebarW = 180;
-    const int kModeW = 150;
-
     auto* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     // ---------------------------------------------------------------------
@@ -3385,6 +3586,8 @@ void StrategicLevelFrame::BuildUnitsPage()
     // ---------------------------------------------------------------------
     auto* leftPanel = new wxPanel(m_unitsMainPanel);
     leftPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(leftPanel, m_spellData, "VMU_FULL.LZ",
+        wxRect(0, 0, 332, kStrategicScreenH));
     auto* leftSizer = new wxBoxSizer(wxVERTICAL);
 
     m_unitsRoster = new wxListCtrl(leftPanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
@@ -3433,14 +3636,15 @@ void StrategicLevelFrame::BuildUnitsPage()
     leftSizer->Add(m_unitsTempRoster, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     leftPanel->SetSizer(leftSizer);
-    mainSizer->Add(leftPanel, 2, wxEXPAND);
+    mainSizer->Add(leftPanel, 332, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // MIDDLE: Mode selector (Upgrade / Recruit / Info)
     // ---------------------------------------------------------------------
     auto* modePanel = new wxPanel(m_unitsMainPanel);
     modePanel->SetBackgroundColour(m_palette.background);
-    modePanel->SetMinSize(wxSize(kModeW, -1));
+    BindStrategicScreenSlice(modePanel, m_spellData, "VMU_FULL.LZ",
+        wxRect(332, 0, 80, kStrategicScreenH));
 
     auto* modeSizer = new wxBoxSizer(wxVERTICAL);
 
@@ -3470,13 +3674,15 @@ void StrategicLevelFrame::BuildUnitsPage()
 
     modeSizer->AddStretchSpacer(1);
     modePanel->SetSizer(modeSizer);
-    mainSizer->Add(modePanel, 0, wxEXPAND);
+    mainSizer->Add(modePanel, 80, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // CENTER: Upgrade panel (always visible) + Unit info panel + bottom controls
     // ---------------------------------------------------------------------
     auto* centerPanel = new wxPanel(m_unitsMainPanel);
     centerPanel->SetBackgroundColour(m_palette.background);
+    BindStrategicScreenSlice(centerPanel, m_spellData, "VMU_FULL.LZ",
+        wxRect(412, 0, kStrategicScreenW - 412, kStrategicScreenH));
     auto* centerSizer = new wxBoxSizer(wxVERTICAL);
 
     // ── Upgrade panel (top) ───────────────────────────────────────────────
@@ -3643,14 +3849,14 @@ void StrategicLevelFrame::BuildUnitsPage()
     centerSizer->Add(bottomRow, 0, wxEXPAND);
 
     centerPanel->SetSizer(centerSizer);
-    mainSizer->Add(centerPanel, 2, wxEXPAND);
+    mainSizer->Add(centerPanel, kStrategicScreenW - 412, wxEXPAND);
 
     // ---------------------------------------------------------------------
     // FAR RIGHT: Sidebar (status + navigation buttons)
     // ---------------------------------------------------------------------
     auto* sidePanel = new wxPanel(m_unitsMainPanel);
     sidePanel->SetBackgroundColour(m_palette.background);
-    sidePanel->SetMinSize(wxSize(kSidebarW, -1));
+    sidePanel->SetMinSize(wxSize(1, 1));
     auto* sideSizer = new wxBoxSizer(wxVERTICAL);
 
     // Status box
@@ -3704,7 +3910,7 @@ void StrategicLevelFrame::BuildUnitsPage()
             // Try to load icon - if found, hide text (text is fallback only)
             if (!iconName.empty())
             {
-                wxBitmap bmp = LoadMenuIcon(iconName, wxSize(32, 32));
+                wxBitmap bmp = LoadMenuIcon(m_spellData, iconName, wxSize(32, 32));
                 if (bmp.IsOk())
                 {
                     btn->SetBitmap(bmp);
@@ -3782,7 +3988,7 @@ void StrategicLevelFrame::BuildUnitsPage()
     sideSizer->Add(btnSizer, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
 
     sidePanel->SetSizer(sideSizer);
-    mainSizer->Add(sidePanel, 0, wxEXPAND);
+    mainSizer->Add(sidePanel, 65, wxEXPAND);
 
     m_unitsMainPanel->SetSizer(mainSizer);
 }
@@ -4735,29 +4941,42 @@ void StrategicLevelFrame::BuildHierarchyPage(wxPanel* parent)
 {
     auto* hs = new wxBoxSizer(wxVERTICAL);
 
-    auto* hTitle = CreateStrategicLabel(
-        parent,
-        { { "Units / Hierarchy", m_palette.heading, &m_fontHeading } },
-        m_fontHeading,
-        m_palette.shadow,
-        &m_palette.background);
-
-    hs->Add(hTitle, 0, wxALL, 8);
-
     m_hierarchyBook = new wxSimplebook(parent, wxID_ANY);
     m_hierarchyBook->SetBackgroundColour(m_palette.background);
     m_hierarchyBook->AddPage(BuildHierarchyBookPage(m_hierarchyBook, 1), "Page 1", true);
     m_hierarchyBook->AddPage(BuildHierarchyBookPage(m_hierarchyBook, 2), "Page 2", false);
-    hs->Add(m_hierarchyBook, 1, wxALL | wxEXPAND, 8);
+    hs->Add(m_hierarchyBook, 1, wxEXPAND);
+    parent->SetSizer(hs);
 
-    m_btnHierarchyPageToggle = new wxButton(parent, wxID_ANY, "Go to Page 2");
+    // HIERARCH.LZ reserves this button-sized opening in the lower-right
+    // decoration.  Keep a single overlay above both book pages and place it
+    // proportionally in the original 412x480 coordinate system.
+    m_btnHierarchyPageToggle = new wxButton(parent, wxID_ANY, "Part 2");
     m_btnHierarchyPageToggle->SetFont(m_fontText);
     m_btnHierarchyPageToggle->SetBackgroundColour(m_palette.buttonBackground);
     m_btnHierarchyPageToggle->SetForegroundColour(m_palette.buttonText);
     m_btnHierarchyPageToggle->Bind(wxEVT_BUTTON, &StrategicLevelFrame::OnHierarchyTogglePage, this);
-    hs->Add(m_btnHierarchyPageToggle, 0, wxALL | wxALIGN_RIGHT, 8);
 
-    parent->SetSizer(hs);
+    auto placeToggle = [parent, button = m_btnHierarchyPageToggle]()
+        {
+            if (!parent || !button)
+                return;
+            const wxSize size = parent->GetClientSize();
+            if (size.x <= 0 || size.y <= 0)
+                return;
+            const auto sx = [size](int x) { return x * size.x / kMapChromeW; };
+            const auto sy = [size](int y) { return y * size.y / kStrategicScreenH; };
+            button->SetSize(wxRect(sx(323), sy(439),
+                std::max(1, sx(72)), std::max(1, sy(28))));
+            button->Raise();
+        };
+    parent->Bind(wxEVT_SIZE,
+        [placeToggle](wxSizeEvent& ev)
+        {
+            ev.Skip();
+            placeToggle();
+        });
+    parent->CallAfter(placeToggle);
 }
 
 wxPanel* StrategicLevelFrame::BuildHierarchyFormation(wxWindow* parent,
@@ -4866,42 +5085,106 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
     {
     public:
         HierarchyCanvas(StrategicLevelFrame* owner, wxWindow* parent,
-            wxColour frameCol, wxColour lineCol)
+            wxColour frameCol, wxColour lineCol, const wxBitmap& background)
             : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
             , m_owner(owner)
             , m_frameCol(frameCol)
             , m_lineCol(lineCol)
+            , m_background(background)
         {
             SetBackgroundColour(owner->m_palette.background);
             SetBackgroundStyle(wxBG_STYLE_PAINT);
             Bind(wxEVT_PAINT, &HierarchyCanvas::OnPaint, this);
+            Bind(wxEVT_SIZE, &HierarchyCanvas::OnSize, this);
         }
 
         void AddLine(wxPoint a, wxPoint b) { m_lines.push_back({ a, b }); }
 
+        void AddPlacedWindow(wxWindow* window, const wxRect& logicalRect)
+        {
+            if (!window)
+                return;
+            m_placements.push_back({ window, logicalRect });
+            ApplyLayout();
+        }
+
+        void ApplyLayout()
+        {
+            const wxSize size = GetClientSize();
+            if (size.x <= 0 || size.y <= 0)
+                return;
+
+            for (const auto& placement : m_placements)
+            {
+                if (!placement.window)
+                    continue;
+                const wxRect& r = placement.logicalRect;
+                placement.window->SetSize(wxRect(
+                    r.x * size.x / kMapChromeW,
+                    r.y * size.y / kStrategicScreenH,
+                    std::max(1, r.width * size.x / kMapChromeW),
+                    std::max(1, r.height * size.y / kStrategicScreenH)));
+            }
+        }
+
     private:
+        struct Placement
+        {
+            wxWindow* window = nullptr;
+            wxRect logicalRect;
+        };
+
+        void OnSize(wxSizeEvent& ev)
+        {
+            ApplyLayout();
+            m_scaledBackground = wxBitmap();
+            ev.Skip();
+            Refresh(false);
+        }
+
         void OnPaint(wxPaintEvent&)
         {
             wxAutoBufferedPaintDC dc(this);
             dc.SetBackground(wxBrush(GetBackgroundColour()));
             dc.Clear();
 
-            //// Subtle frame around whole tree area
-            //const wxSize sz = GetClientSize();
-            //dc.SetPen(wxPen(m_frameCol, 1));
-            //dc.SetBrush(*wxTRANSPARENT_BRUSH);
-            //dc.DrawRectangle(0, 0, sz.x - 1, sz.y - 1);
+            const wxSize size = GetClientSize();
+            if (size.x <= 0 || size.y <= 0)
+                return;
 
-            // Tree connector lines
+            if (m_background.IsOk())
+            {
+                if (!m_scaledBackground.IsOk() ||
+                    m_scaledBackground.GetWidth() != size.x ||
+                    m_scaledBackground.GetHeight() != size.y)
+                {
+                    m_scaledBackground = wxBitmap(m_background.ConvertToImage().Scale(
+                        size.x, size.y, wxIMAGE_QUALITY_NEAREST));
+                }
+                if (m_scaledBackground.IsOk())
+                    dc.DrawBitmap(m_scaledBackground, 0, 0, false);
+                return; // the original asset already contains all tree lines
+            }
+
+            // Fallback for installations missing the original asset.
             dc.SetPen(wxPen(m_lineCol, 1));
             for (const auto& ln : m_lines)
-                dc.DrawLine(ln.first, ln.second);
+            {
+                dc.DrawLine(
+                    ln.first.x * size.x / kMapChromeW,
+                    ln.first.y * size.y / kStrategicScreenH,
+                    ln.second.x * size.x / kMapChromeW,
+                    ln.second.y * size.y / kStrategicScreenH);
+            }
         }
 
         StrategicLevelFrame* m_owner = nullptr;
         wxColour m_frameCol;
         wxColour m_lineCol;
+        wxBitmap m_background;
+        wxBitmap m_scaledBackground;
         std::vector<std::pair<wxPoint, wxPoint>> m_lines;
+        std::vector<Placement> m_placements;
     };
 
     // -------------------------------------------------------------------------
@@ -4909,38 +5192,31 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
     // -------------------------------------------------------------------------
     struct Layout
     {
-        // Scroller / canvas
-        int scrollStepY = 12;
-        int canvasW = 800;
-        int canvasH = 660;
-        int canvasMargin = 8;
+        // Native coordinates measured from HIERARCH.LZ after it is inserted at
+        // (6,8) in VMH_FULL.  The four columns and seven command groups now sit
+        // directly inside the rectangles painted by the DOS artwork.
+        int canvasW = kMapChromeW;
+        int canvasH = kStrategicScreenH;
+        int canvasMargin = 0;
 
-        int rightPadding = 20;     // padding from right edge for top commander column
-        int minCanvasW = 760;      // base (your current)
-        int minCanvasH = 720;
+        int x_units = 12;
+        int x_bcmd = 164;
+        int x_rcmd = 217;
+        int x_brig = 260;
 
-        // Columns (left to right)
-        int x_units = 20;     // unit slots (left stack)
-        int x_bcmd = 220;    // battalion commander column
-        int x_rcmd = 440;    // regiment commander column
-        int x_brig = 660;    // brigade commander column
+        int unitSlotW = 146;
+        int commandSlotW = 134;
+        int brigadeSlotW = 136;
+        int slotH = 18;
+        int gapY = 5;
+        int commandPairGapY = 2;
 
-        // Slot geometry
-        int slotW = 160;
-        int slotH = 26;       // you said you need 26
-        int gapY = 6;
-
-        // Regiment blocks vertical placement
-        int regTopY = 40;             // top Y of first regiment block
-        int regBlockHeight = 280;     // distance between regiments (was 320)
-        int regCommanderOffsetY = 40; // commander Y inside regiment block
-
-        // Battalion placement inside regiment block
-        int battalionPairGapY = 140;  // distance between 2 battalion groups within a regiment (tune)
-        int unitsStackOffsetY = 0;    // allows nudging unit stack down/up inside battalion group
-
-        // Optional: brigade node Y
-        int brigadeCommanderY = 120;
+        int regTopY = 25;
+        int regBlockHeight = 208;
+        int regCommanderOffsetY = 75;
+        int battalionPairGapY = 104;
+        int unitsStackOffsetY = 0;
+        int brigadeCommanderY = 207;
 
         // Connector line colors
         wxColour frameCol = wxColour(50, 80, 50);
@@ -4955,41 +5231,21 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
     // -------------------------------------------------------------------------
     auto* page = new wxWindow(parent, wxID_ANY);
     page->SetBackgroundColour(m_palette.background);
-    //page->SetScrollRate(0, L.scrollStepY);
 
-    auto* canvas = new HierarchyCanvas(this, page, L.frameCol, L.lineCol);
-    canvas->SetMinSize(wxSize(L.canvasW, L.canvasH));
-
-    auto computeCanvasWidth = [&]() -> int
-        {
-            // viewport width inside scroller (how much we can show without horizontal scroll)
-            int viewportW = page->GetClientSize().x - 2 * L.canvasMargin;
-            if (viewportW < 0) viewportW = 0;
-
-            // minimum width needed so right-most column is never clipped
-            const int needW = L.x_brig + L.slotW + L.rightPadding;
-
-            // final width = at least: base, viewport, and needed for right column
-            int w = std::max({ L.minCanvasW, viewportW, needW });
-            return w;
-        };
-
-    auto applyCanvasSize = [&]()
-        {
-            const int w = computeCanvasWidth();
-            canvas->SetMinSize(wxSize(w, L.minCanvasH));
-            canvas->SetSize(wxSize(w, L.minCanvasH));
-        };
-
-    // Keep top-level commander column always fully visible (stick to right edge)
-    L.x_brig = canvas->GetClientSize().x - L.slotW - L.rightPadding;
-    if (L.x_brig < L.x_rcmd + L.slotW + 40) // safety so it doesn't collide
-        L.x_brig = L.x_rcmd + L.slotW + 40;
+    wxBitmap hierarchyBackground;
+    BuildStrategicScreenBitmap(m_spellData, "VMH_FULL.LZ", hierarchyBackground);
+    auto* canvas = new HierarchyCanvas(
+        this, page, L.frameCol, L.lineCol, hierarchyBackground);
+    canvas->SetMinSize(wxSize(1, 1));
 
     // Helper to place slot widgets at exact coordinates.
     auto place = [&](int x, int y, const wxString& ph, const std::string& id, const std::string& type) {
         wxPanel* p = BuildHierarchySlot(canvas, ph, id, type);
-        p->SetSize(wxRect(x, y, L.slotW, L.slotH));
+        const int width = (x == L.x_units) ? L.unitSlotW
+            : ((x == L.x_brig) ? L.brigadeSlotW : L.commandSlotW);
+        const wxRect rect(x, y, width, L.slotH);
+        p->SetSize(rect);
+        canvas->AddPlacedWindow(p, rect);
         return p;
         };
 
@@ -5023,15 +5279,17 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
             place(L.x_units, y, "unit", id, "unit");
         }
 
-        // battalion commander + assigned unit
-        place(L.x_bcmd, y0 + 0 * (L.slotH + L.gapY), "commander",
+        // Battalion pair is centred beside its four-unit stack in the
+        // pre-painted HIERARCH.LZ openings.
+        const int yCommander = y0 + 23;
+        place(L.x_bcmd, yCommander, "commander",
             "battalion_" + std::to_string(bIndex) + "_commander", "commander");
-        place(L.x_bcmd, y0 + 1 * (L.slotH + L.gapY), "?",
+        place(L.x_bcmd, yCommander + L.slotH + L.commandPairGapY, "?",
             "battalion_" + std::to_string(bIndex) + "_commander_unit", "unit");
 
         // connector: units stack -> battalion commander
         const int yMidUnits = y0 + L.unitsStackOffsetY + 1 * (L.slotH + L.gapY) + L.slotH / 2;
-        canvas->AddLine(wxPoint(L.x_units + L.slotW - L.lineInset, yMidUnits),
+        canvas->AddLine(wxPoint(L.x_units + L.unitSlotW - L.lineInset, yMidUnits),
             wxPoint(L.x_bcmd + L.lineInset, yMidUnits));
     }
 
@@ -5045,16 +5303,16 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
 
         place(L.x_rcmd, yReg, "commander",
             "regiment_" + std::to_string(regimentIndex) + "_commander", "commander");
-        place(L.x_rcmd, yReg + (L.slotH + L.gapY), "?",
+        place(L.x_rcmd, yReg + L.slotH + L.commandPairGapY, "?",
             "regiment_" + std::to_string(regimentIndex) + "_unit", "unit");
 
         // connectors: both battalion commander nodes -> regiment commander
         const int b0 = rLocal * 2;
         const int b1 = rLocal * 2 + 1;
-        const int y0 = battalionTopY(b0) + L.slotH / 2;
-        const int y1 = battalionTopY(b1) + L.slotH / 2;
+        const int y0 = battalionTopY(b0) + 23 + L.slotH / 2;
+        const int y1 = battalionTopY(b1) + 23 + L.slotH / 2;
 
-        const int xFrom = L.x_bcmd + L.slotW - L.lineInset;
+        const int xFrom = L.x_bcmd + L.commandSlotW - L.lineInset;
         const int xTo = L.x_rcmd + L.lineInset;
         const int yTo = yReg + L.slotH / 2;
 
@@ -5070,11 +5328,11 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
 
         place(L.x_brig, yBrig, "commander",
             "brigade_" + std::to_string(brigadeIndex) + "_commander", "commander");
-        place(L.x_brig, yBrig + (L.slotH + L.gapY), "?",
+        place(L.x_brig, yBrig + L.slotH + L.commandPairGapY, "?",
             "brigade_" + std::to_string(brigadeIndex) + "_unit", "unit");
 
         // connectors: both regiment nodes -> brigade node
-        const int xFrom = L.x_rcmd + L.slotW - L.lineInset;
+        const int xFrom = L.x_rcmd + L.commandSlotW - L.lineInset;
         const int xTo = L.x_brig + L.lineInset;
 
         const int yR0 = L.regTopY + 0 * L.regBlockHeight + L.regCommanderOffsetY + L.slotH / 2;
@@ -5088,7 +5346,7 @@ wxWindow* StrategicLevelFrame::BuildHierarchyBookPage(wxWindow* parent, int brig
     auto* s = new wxBoxSizer(wxVERTICAL);
     s->Add(canvas, 1, wxEXPAND | wxALL, L.canvasMargin);
     page->SetSizer(s);
-    page->FitInside();
+    canvas->ApplyLayout();
     return page;
 }
 
@@ -5744,7 +6002,7 @@ void StrategicLevelFrame::OnHierarchyTogglePage(wxCommandEvent&)
     size_t current = m_hierarchyBook->GetSelection();
     size_t next = current == 0 ? 1 : 0;
     m_hierarchyBook->SetSelection(next);
-    m_btnHierarchyPageToggle->SetLabel(next == 0 ? "Go to Page 2" : "Back to Page 1");
+    m_btnHierarchyPageToggle->SetLabel(next == 0 ? "Part 2" : "Part 1");
 }
 
 void StrategicLevelFrame::OnRosterBeginDrag(wxListEvent& event)
@@ -6919,7 +7177,7 @@ void StrategicLevelFrame::RefreshResearchUI()
     // ItemData: (wxUIntPtr)-1 = group header row (not selectable)
     //           other values  = index into m_researchDb
     // ----------------------------------------------------------------
-    static constexpr wxUIntPtr kHdrSentinel = static_cast<wxUIntPtr>(-1);
+    static constexpr long kHdrSentinel = -1L;
 
     if (m_researchList)
     {
@@ -7126,7 +7384,7 @@ void StrategicLevelFrame::RefreshInfoUI()
     // ----------------------------------------------------------------
     // Categorized list (wxListCtrl)
     // ----------------------------------------------------------------
-    static constexpr wxUIntPtr kHdrSentinel = static_cast<wxUIntPtr>(-1);
+    static constexpr long kHdrSentinel = -1L;
 
     if (m_infoList)
     {
@@ -7271,6 +7529,8 @@ void StrategicLevelFrame::OnShowStrategicMap(wxCommandEvent&)
     if (m_unitsModeActive) LeaveUnitsMode();
     if (m_leftBook)
         m_leftBook->SetSelection(0);
+    if (m_midBook)
+        m_midBook->SetSelection(0);
 }
 
 void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
@@ -7280,6 +7540,8 @@ void StrategicLevelFrame::OnShowHierarchy(wxCommandEvent&)
     if (m_unitsModeActive) LeaveUnitsMode();
     if (m_leftBook)
         m_leftBook->SetSelection(1);
+    if (m_midBook)
+        m_midBook->SetSelection(0);
 }
 
 
@@ -7293,6 +7555,9 @@ void StrategicLevelFrame::OnShowResources(wxCommandEvent&)
     // Switch page FIRST so canvas has correct size when Refresh triggers paint
     if (m_leftBook)
         m_leftBook->SetSelection(2);
+    // Mid-book indices: 0 roster, 1 research, 2 info, 3 resources, 4 stats.
+    if (m_midBook)
+        m_midBook->SetSelection(3);
 
     m_overlayDirty = true;
     RefreshResourcesPage();   // fills table + triggers canvas Refresh internally
@@ -7303,6 +7568,11 @@ void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
     if (m_researchMode) LeaveResearchMode();
     if (m_infoMode) LeaveInfoMode();
     if (m_unitsModeActive) LeaveUnitsMode();
+    if (m_leftBook)
+        m_leftBook->SetSelection(3);
+    if (m_midBook)
+        m_midBook->SetSelection(4);
+
     // Ensure the stats page sees the latest state.
     SaveStrategicState();
     LoadRanksTable();
@@ -7310,8 +7580,6 @@ void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
     RecomputePlayerRank();
     RefreshStatsPage();
 
-    if (m_leftBook)
-        m_leftBook->SetSelection(3);
 }
 void StrategicLevelFrame::SelectTerritoryById(int territory_id)
 {
@@ -7431,13 +7699,34 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
         return;
     }
 
-    const double sx = (double)pw / (double)bw;
-    const double sy = (double)ph / (double)bh;
-    const double s = std::min(sx, sy);
-    const int dw = std::max(1, (int)std::lround((double)bw * s));
-    const int dh = std::max(1, (int)std::lround((double)bh * s));
-    const int ox = (pw - dw) / 2;
-    const int oy = (ph - dh) / 2;
+    int dw = 0;
+    int dh = 0;
+    int ox = 0;
+    int oy = 0;
+    if (!resourcesView && m_mapChromeBitmap.IsOk())
+    {
+        const double chromeScale = std::min(
+            (double)pw / (double)kMapChromeW,
+            (double)ph / (double)kMapChromeH);
+        const int chromeW = std::max(1, (int)std::lround(kMapChromeW * chromeScale));
+        const int chromeH = std::max(1, (int)std::lround(kMapChromeH * chromeScale));
+        const int chromeX = (pw - chromeW) / 2;
+        const int chromeY = (ph - chromeH) / 2;
+        ox = chromeX + (int)std::lround(kMapViewportX * chromeScale);
+        oy = chromeY + (int)std::lround(kMapViewportY * chromeScale);
+        dw = std::max(1, (int)std::lround(kMapViewportW * chromeScale));
+        dh = std::max(1, (int)std::lround(kMapViewportH * chromeScale));
+    }
+    else
+    {
+        const double sx = (double)pw / (double)bw;
+        const double sy = (double)ph / (double)bh;
+        const double mapScale = std::min(sx, sy);
+        dw = std::max(1, (int)std::lround((double)bw * mapScale));
+        dh = std::max(1, (int)std::lround((double)bh * mapScale));
+        ox = (pw - dw) / 2;
+        oy = (ph - dh) / 2;
+    }
 
     const wxPoint p = ev.GetPosition();
     if (p.x < ox || p.y < oy || p.x >= ox + dw || p.y >= oy + dh)
@@ -7459,14 +7748,16 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
 
     //SelectTerritoryById((int)tid);
 
-    const unsigned char tid = m_clkValues[(size_t)my * (size_t)m_clkW + (size_t)mx];
-    if (tid == 0)
+    const unsigned char rawClk = m_clkValues[(size_t)my * (size_t)m_clkW + (size_t)mx];
+    if (rawClk == 0)
         return;
 
     // CLK value can be either:
-    // - territory id (matches LevelTerritory::id), or
+    // - territory id (matches LevelTerritory::id),
+    // - a border pixel encoded as 128 + territory id, or
     // - 1-based region index (1..N) into m_level.territories
-    int chosenTerritoryId = (int)tid;
+    const int decodedClk = rawClk >= 129 ? (int)rawClk - 128 : (int)rawClk;
+    int chosenTerritoryId = decodedClk;
 
     auto isVisible = [&](int tid2) -> bool
         {
@@ -7502,11 +7793,17 @@ void StrategicLevelFrame::OnMapLeftDown(wxMouseEvent& ev)
         return;
     }
 
-    // 2) Fallback: treat tid as 1-based index
-    const size_t idx = (size_t)tid - 1;
+    // 2) Fallback: treat the decoded value as a 1-based region index.
+    const size_t idx = (size_t)decodedClk - 1;
     if (idx < m_level.territories.size())
     {
-        SelectTerritoryById(m_level.territories[idx].id);
+        const int fallbackId = m_level.territories[idx].id;
+        if (!isVisible(fallbackId))
+            return;
+        if (resourcesView &&
+            std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), fallbackId) == m_ownedTerritories.end())
+            return;
+        SelectTerritoryById(fallbackId);
         return;
     }
     // Out of range -> ignore click
@@ -7568,7 +7865,7 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         int timeoutRemaining = GetTerritoryTimeoutRemaining(t.id);
 
         // Resolve TEXTS dir
-        std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
+        std::filesystem::path texts_dir = FindTextsDirForLevel(m_level, m_spellData);
 
         if (hasCounterAttack)
         {
@@ -7611,7 +7908,7 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         if (itn != m_territoryLaunchCount.end())
             info << wxString::Format("Played: %d\n", itn->second);
 
-        std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
+        std::filesystem::path texts_dir = FindTextsDirForLevel(m_level, m_spellData);
 
         if (!texts_dir.empty())
         {
@@ -9018,6 +9315,34 @@ void StrategicLevelFrame::LoadStrategicState()
         m_gameModeEnabled = gm;
         m_ownedTerritories = std::move(owned);
 
+        // Repair saves produced by the old missing-TEXTS bug. It classified
+        // every territory as a starting territory; such a fresh state has all
+        // territories owned but no territory mission has ever been launched.
+        bool noMissionWasLaunched = true;
+        for (const auto& kv : m_territoryLaunchCount)
+        {
+            if (kv.second > 0)
+            {
+                noMissionWasLaunched = false;
+                break;
+            }
+        }
+        bool ownsEveryTerritory = !m_level.territories.empty();
+        for (const auto& territory : m_level.territories)
+        {
+            if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory.id) == m_ownedTerritories.end())
+            {
+                ownsEveryTerritory = false;
+                break;
+            }
+        }
+        if (noMissionWasLaunched && ownsEveryTerritory)
+        {
+            const std::vector<int> expectedStart = ChooseStartTerritories_NoBriefing(m_level, m_spellData);
+            if (!expectedStart.empty() && expectedStart.size() < m_ownedTerritories.size())
+                m_ownedTerritories = expectedStart;
+        }
+
         m_territoryResources = std::move(terrRes);
         // Backfill missing territories to defaults
         for (const auto& tt : m_level.territories)
@@ -9028,7 +9353,7 @@ void StrategicLevelFrame::LoadStrategicState()
 
         // Ensure start territory when loading older saves / empty campaign state.
         if (m_gameModeEnabled && m_ownedTerritories.empty())
-            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level));
+            m_ownedTerritories.push_back(PickStartTerritoryIdForGameMode(m_level, m_spellData));
 
         if (GetMenuBar())
         {
@@ -9124,7 +9449,7 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
 
     // Ensure at least one owned territory (start territory for the new level)
     if (m_ownedTerritories.empty())
-        m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level);
+        m_ownedTerritories = ChooseStartTerritories_NoBriefing(m_level, m_spellData);
     if (m_ownedTerritories.empty() && !m_level.territories.empty())
         m_ownedTerritories.push_back(m_level.territories.front().id);
 
@@ -9133,12 +9458,21 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
         m_playerUnits.push_back(su);
 
     // Ensure unit states cover all roster entries (newly added start units need state)
+    uint32_t maxUnitUid = 0;
+    for (const auto& state : m_unitStates)
+        maxUnitUid = std::max(maxUnitUid, state.uid);
+    m_nextRosterUid = std::max<uint32_t>(1, maxUnitUid + 1);
     while (m_unitStates.size() < m_playerUnits.size())
     {
         UnitInstanceState state;
         state.uid = m_nextRosterUid++;
         m_unitStates.push_back(state);
     }
+
+    uint32_t maxCommanderUid = 0;
+    for (const auto& commander : m_playerCommanders)
+        maxCommanderUid = std::max(maxCommanderUid, commander.uid);
+    m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid + 1);
 
     // Load cumulative research flags for the new level (game mode unit filtering)
     {
@@ -9301,6 +9635,33 @@ static bool LoadSSDAdjacency(const std::filesystem::path& folder, int levelNum, 
             ((uint32_t)bytes[o + 3] << 24);
 
         outAdj[t] = v;
+    }
+    return true;
+}
+
+static bool LoadSSDAdjacencyFromArchive(SpellData* spellData, int levelNum,
+    int territoryMaxId, std::vector<uint32_t>& outAdj)
+{
+    outAdj.assign(std::max(territoryMaxId + 1, 1), 0u);
+    if (!spellData || !spellData->GetCommonFS())
+        return false;
+
+    const std::string ssdName = wxString::Format("LEVEL_%02d.SSD", levelNum).ToStdString();
+    uint8_t* raw = nullptr;
+    int rawSize = 0;
+    if (spellData->GetCommonFS()->GetFile(ssdName.c_str(), &raw, &rawSize) ||
+        !raw || rawSize < 128)
+        return false;
+
+    constexpr int count = 32;
+    for (int t = 1; t <= territoryMaxId && t < count; ++t)
+    {
+        const size_t o = (size_t)t * 4;
+        outAdj[t] =
+            (uint32_t)raw[o + 0] |
+            ((uint32_t)raw[o + 1] << 8) |
+            ((uint32_t)raw[o + 2] << 16) |
+            ((uint32_t)raw[o + 3] << 24);
     }
     return true;
 }
@@ -9640,6 +10001,177 @@ static bool BuildStrategicCompositeFromFolder(const std::filesystem::path& folde
     return outBmp.IsOk();
 }
 
+static bool BuildStrategicScreenBitmap(SpellData* spellData, const char* resourceName, wxBitmap& outBmp)
+{
+    outBmp = wxBitmap();
+    if (!spellData || !spellData->GetCommonFS() || !resourceName || !*resourceName)
+        return false;
+
+    uint8_t* raw = nullptr;
+    int rawSize = 0;
+    if (spellData->GetCommonFS()->GetFile(resourceName, &raw, &rawSize) ||
+        !raw || rawSize < kStrategicScreenW * kStrategicScreenH)
+        return false;
+
+    wxImage img(kStrategicScreenW, kStrategicScreenH, true);
+    img.InitAlpha();
+    for (int y = 0; y < kStrategicScreenH; ++y)
+    {
+        for (int x = 0; x < kStrategicScreenW; ++x)
+        {
+            const uint8_t idx = raw[(size_t)y * kStrategicScreenW + (size_t)x];
+            img.SetRGB(x, y,
+                spellData->strategy_pal[idx][0],
+                spellData->strategy_pal[idx][1],
+                spellData->strategy_pal[idx][2]);
+            img.SetAlpha(x, y, 255);
+        }
+    }
+
+    // VM*_FULL contains the outer 575x480 silhouette.  The original game then
+    // blitted one or more screen-specific raw layers into that silhouette.  In
+    // particular, these are the detailed green grids, pipework and lower
+    // frames visible in the DOS version; treating *_FULL as a complete screen
+    // leaves most of the interface black.
+    auto blitLayer = [&](const char* layerName, int layerW, int layerH,
+        int destX, int destY) -> bool
+        {
+            uint8_t* pixels = nullptr;
+            int pixelCount = 0;
+            if (spellData->GetCommonFS()->GetFile(layerName, &pixels, &pixelCount) ||
+                !pixels || pixelCount < layerW * layerH)
+                return false;
+
+            for (int y = 0; y < layerH; ++y)
+            {
+                const int outY = destY + y;
+                if (outY < 0 || outY >= kStrategicScreenH)
+                    continue;
+                for (int x = 0; x < layerW; ++x)
+                {
+                    const int outX = destX + x;
+                    if (outX < 0 || outX >= kStrategicScreenW)
+                        continue;
+
+                    const uint8_t idx = pixels[(size_t)y * layerW + x];
+                    img.SetRGB(outX, outY,
+                        spellData->strategy_pal[idx][0],
+                        spellData->strategy_pal[idx][1],
+                        spellData->strategy_pal[idx][2]);
+                    img.SetAlpha(outX, outY, 255);
+                }
+            }
+            return true;
+        };
+
+    const std::string screenName(resourceName);
+    if (screenName == "VMM_FULL.LZ")
+    {
+        // Exact matches in the original 640x480 screen: the briefing frame
+        // starts at 6,298 and the bottom action strip at 412,434.
+        blitLayer("VMM_LST2.LZ", 406, 174, 6, 298);
+        blitLayer("VMM_LST1.LZ", 163, 41, 412, 434);
+    }
+    else if (screenName == "VMH_FULL.LZ")
+    {
+        blitLayer("HIERARCH.LZ", 406, 464, 6, 8);
+    }
+    else if (screenName == "VMU_FULL.LZ")
+    {
+        blitLayer("UNITS.LZ", 406, 464, 6, 8);
+        blitLayer("VMU_LST2.LZ", 241, 141, 334, 292);
+    }
+    else if (screenName == "VMB_FULL.LZ")
+    {
+        blitLayer("BUY.LZ", 406, 464, 6, 8);
+        blitLayer("VMB_LST2.LZ", 241, 141, 334, 292);
+        blitLayer("VMB_LST1.LZ", 163, 41, 412, 434);
+    }
+    else if (screenName == "VMR_FULL.LZ")
+    {
+        blitLayer("RSRCH_BG.LZ", 406, 464, 6, 8);
+        blitLayer("VMR_LST1.LZ", 120, 40, 277, 431);
+    }
+    else if (screenName == "VMI_FULL.LZ")
+    {
+        blitLayer("INFO.LZ", 412, 464, 0, 8);
+    }
+    else if (screenName == "VMF_FULL.LZ")
+    {
+        blitLayer("FACTORY.LZ", 569, 464, 3, 8);
+    }
+    else if (screenName == "VMS_FULL.LZ")
+    {
+        blitLayer("STATS.LZ", 569, 464, 3, 8);
+    }
+    else if (screenName == "VMO_FULL.LZ")
+    {
+        blitLayer("OPTIONS.LZ", 569, 464, 3, 8);
+    }
+
+    outBmp = wxBitmap(img);
+    return outBmp.IsOk();
+}
+
+static bool BindStrategicScreenSlice(wxPanel* panel, SpellData* spellData,
+    const char* resourceName, const wxRect& sourceRect)
+{
+    if (!panel || sourceRect.width <= 0 || sourceRect.height <= 0)
+        return false;
+
+    wxBitmap full;
+    if (!BuildStrategicScreenBitmap(spellData, resourceName, full) || !full.IsOk())
+        return false;
+
+    const wxRect bounds(0, 0, full.GetWidth(), full.GetHeight());
+    const wxRect clipped = sourceRect.Intersect(bounds);
+    if (clipped.width <= 0 || clipped.height <= 0)
+        return false;
+
+    const wxBitmap slice(full.ConvertToImage().GetSubImage(clipped));
+    if (!slice.IsOk())
+        return false;
+
+    panel->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    panel->Bind(wxEVT_PAINT,
+        [panel, slice, scaled = wxBitmap(), scaledW = -1, scaledH = -1](wxPaintEvent&) mutable
+        {
+            wxAutoBufferedPaintDC dc(panel);
+            dc.SetBackground(*wxBLACK_BRUSH);
+            dc.Clear();
+
+            const wxSize size = panel->GetClientSize();
+            if (size.x <= 0 || size.y <= 0)
+                return;
+
+            if (!scaled.IsOk() || scaledW != size.x || scaledH != size.y)
+            {
+                scaled = wxBitmap(slice.ConvertToImage().Scale(
+                    size.x, size.y, wxIMAGE_QUALITY_NEAREST));
+                scaledW = size.x;
+                scaledH = size.y;
+            }
+
+            if (scaled.IsOk())
+                dc.DrawBitmap(scaled, 0, 0, false);
+        });
+    return true;
+}
+
+static bool BuildStrategicMapChrome(SpellData* spellData, wxBitmap& outBmp)
+{
+    wxBitmap full;
+    if (!BuildStrategicScreenBitmap(spellData, "VMM_FULL.LZ", full))
+    {
+        outBmp = wxBitmap();
+        return false;
+    }
+
+    outBmp = wxBitmap(full.ConvertToImage().GetSubImage(
+        wxRect(0, 0, kMapChromeW, kMapChromeH)));
+    return outBmp.IsOk();
+}
+
 static bool BuildLegacyLZBackgroundFromDef(const std::filesystem::path& defPath, wxBitmap& outBmp)
 {
     namespace fs = std::filesystem;
@@ -9723,9 +10255,16 @@ void StrategicLevelFrame::TryLoadBackground()
     m_bgScaledW = -1;
     m_bgScaledH = -1;
 
+    m_mapChromeBitmap = wxBitmap();
+    m_mapChromeBitmapScaled = wxBitmap();
+    m_mapChromeScaledW = -1;
+    m_mapChromeScaledH = -1;
+    BuildStrategicMapChrome(m_spellData, m_mapChromeBitmap);
+
     m_hasClk = false;
     m_clkValues.clear();
     m_clkW = m_clkH = 0;
+    m_compositeFolder.clear();
 
     namespace fs = std::filesystem;
 
@@ -9753,6 +10292,22 @@ void StrategicLevelFrame::TryLoadBackground()
         // Search in reasonable places: folder of DEF, and a few parents with common subfolders.
         std::vector<fs::path> dirs;
         std::error_code ec;
+
+        // Prefer the configured game-data roots.  LEVEL_XX.DEF can be opened
+        // from anywhere, while the original LEVEL/HMLA/PAL/CLK files normally
+        // live in DATA\COMMON; do not depend on a project-local temp export.
+        if (m_spellData)
+        {
+            const fs::path dataRoot = m_spellData->data_path;
+            const fs::path cdRoot = m_spellData->cd_data_path;
+            dirs.push_back(dataRoot / "COMMON");
+            dirs.push_back(dataRoot / "common");
+            dirs.push_back(dataRoot);
+            dirs.push_back(cdRoot / "COMMON");
+            dirs.push_back(cdRoot / "common");
+            dirs.push_back(cdRoot);
+        }
+
         fs::path base = defPath.parent_path();
         for (int depth = 0; depth < 8 && !base.empty(); ++depth)
         {
@@ -9822,14 +10377,26 @@ void StrategicLevelFrame::TryLoadBackground()
             // Load SSD adjacency (for game mode visible-neighbors logic)
             int maxId = 0;
             for (const auto& t : m_level.territories) maxId = std::max(maxId, t.id);
+            bool adjacencyLoaded = false;
             if (!m_compositeFolder.empty())
-                LoadSSDAdjacency(std::filesystem::path(m_compositeFolder), levelNum, maxId, m_territoryAdjMask);
-            else
-                m_territoryAdjMask.assign(std::max(maxId + 1, 1), 0u);
+                adjacencyLoaded = LoadSSDAdjacency(std::filesystem::path(m_compositeFolder),
+                    levelNum, maxId, m_territoryAdjMask);
+            if (!adjacencyLoaded)
+                LoadSSDAdjacencyFromArchive(m_spellData, levelNum, maxId, m_territoryAdjMask);
 
             ApplyTerritoryVisibility();
             MarkOverlayDirty();
         }
+    }
+
+    // A failed/partial asset lookup must remain usable: restore the explicit
+    // territory buttons whenever CLK hit-testing is unavailable.  Previously
+    // a successful load followed by a failed reload left this fallback hidden.
+    if (m_territoryButtonsPanel)
+    {
+        m_territoryButtonsPanel->Show(!m_hasClk);
+        if (m_mapPanel)
+            m_mapPanel->Layout();
     }
 
     if (m_mapCanvas)
@@ -9856,7 +10423,7 @@ void StrategicLevelFrame::RebuildTerritoryCentroids()
         const unsigned char* row = &m_clkValues[(size_t)y * (size_t)m_clkW];
         for (int x = 0; x < m_clkW; ++x)
         {
-            const int tid = (int)row[x];
+            const int tid = row[x] >= 129 ? (int)row[x] - 128 : (int)row[x];
             if (tid == 0)
                 continue;
 
@@ -9913,12 +10480,52 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
         if (pw <= 0 || ph <= 0 || bw <= 0 || bh <= 0)
             return;
 
-        // Scale to fit panel while keeping aspect ratio.
-        const double sx = (double)pw / (double)bw;
-        const double sy = (double)ph / (double)bh;
-        const double s = std::min(sx, sy);
-        const int dw = std::max(1, (int)std::lround((double)bw * s));
-        const int dh = std::max(1, (int)std::lround((double)bh * s));
+        double s = 1.0;
+        int dw = 0;
+        int dh = 0;
+        int x = 0;
+        int y = 0;
+
+        if (!resourcesView && m_mapChromeBitmap.IsOk())
+        {
+            // Fit the complete original frame, then place LEVEL_XX exactly in
+            // the same viewport used by the DOS strategic screen.
+            const double chromeScale = std::min(
+                (double)pw / (double)kMapChromeW,
+                (double)ph / (double)kMapChromeH);
+            const int chromeW = std::max(1, (int)std::lround(kMapChromeW * chromeScale));
+            const int chromeH = std::max(1, (int)std::lround(kMapChromeH * chromeScale));
+            const int chromeX = (pw - chromeW) / 2;
+            const int chromeY = (ph - chromeH) / 2;
+
+            if (!m_mapChromeBitmapScaled.IsOk() ||
+                m_mapChromeScaledW != chromeW || m_mapChromeScaledH != chromeH)
+            {
+                wxImage chrome = m_mapChromeBitmap.ConvertToImage();
+                m_mapChromeBitmapScaled = wxBitmap(chrome.Scale(chromeW, chromeH, wxIMAGE_QUALITY_NEAREST));
+                m_mapChromeScaledW = chromeW;
+                m_mapChromeScaledH = chromeH;
+            }
+            dc.DrawBitmap(m_mapChromeBitmapScaled.IsOk() ? m_mapChromeBitmapScaled : m_mapChromeBitmap,
+                chromeX, chromeY, false);
+
+            x = chromeX + (int)std::lround(kMapViewportX * chromeScale);
+            y = chromeY + (int)std::lround(kMapViewportY * chromeScale);
+            dw = std::max(1, (int)std::lround(kMapViewportW * chromeScale));
+            dh = std::max(1, (int)std::lround(kMapViewportH * chromeScale));
+            s = (double)dw / (double)bw;
+        }
+        else
+        {
+            // Auxiliary resources view keeps the old map-only fit.
+            const double sx = (double)pw / (double)bw;
+            const double sy = (double)ph / (double)bh;
+            s = std::min(sx, sy);
+            dw = std::max(1, (int)std::lround((double)bw * s));
+            dh = std::max(1, (int)std::lround((double)bh * s));
+            x = (pw - dw) / 2;
+            y = (ph - dh) / 2;
+        }
 
         // Cache the scaled bitmap so we don't rescale on every paint.
         if (!m_bgBitmapScaled.IsOk() || m_bgScaledW != dw || m_bgScaledH != dh)
@@ -9929,8 +10536,6 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
             m_bgScaledH = dh;
         }
 
-        const int x = (pw - dw) / 2;
-        const int y = (ph - dh) / 2;
         dc.DrawBitmap(m_bgBitmapScaled.IsOk() ? m_bgBitmapScaled : m_bgBitmap, x, y, false);
 
         // Store transform for hit-testing / hover.
@@ -11431,7 +12036,7 @@ void StrategicLevelFrame::ShowBriefing(int territory_id)
     }
 
     // Resolve texts dir
-    std::filesystem::path texts_dir = FindTextsDirForLevel(m_level);
+    std::filesystem::path texts_dir = FindTextsDirForLevel(m_level, m_spellData);
     if (texts_dir.empty())
     {
         return;
@@ -11479,14 +12084,19 @@ std::wstring StrategicLevelFrame::FindBriefingPath(const std::string& mission_to
         briefName += 'A';
     }
     
-    fs::path base = fs::path(m_level.source_path).parent_path();
-    
+    const fs::path textsDir = FindTextsDirForLevel(m_level, m_spellData);
+    if (textsDir.empty())
+        return L"";
+
+    // Original Spellcross briefing files are usually extensionless, but keep
+    // .TXT candidates for custom data packs.
     std::vector<fs::path> searchPaths = {
-        base / "TEXTS" / (briefName + ".TXT"),
-        base / "TEXTS" / (to_upper(briefName) + ".TXT"),
-        base / "TEXTS" / (to_lower(briefName) + ".txt"),
-        base / ".." / "TEXTS" / (briefName + ".TXT"),
-        base / ".." / "DATA" / "TEXTS" / (briefName + ".TXT")
+        textsDir / briefName,
+        textsDir / to_upper(briefName),
+        textsDir / to_lower(briefName),
+        textsDir / (briefName + ".TXT"),
+        textsDir / (to_upper(briefName) + ".TXT"),
+        textsDir / (to_lower(briefName) + ".txt")
     };
     
     for (const auto& p : searchPaths)
@@ -11823,6 +12433,34 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     
     if (defPath.empty())
     {
+        auto levelNumberFromName = [](const std::string& name) -> int
+            {
+                std::smatch match;
+                const std::regex pattern(R"(LEVEL[_-]?(\d{1,2}))",
+                    std::regex_constants::icase);
+                return std::regex_search(name, match, pattern) && match.size() >= 2
+                    ? std::stoi(match[1].str()) : -1;
+            };
+        const int currentNumber = levelNumberFromName(
+            fs::path(m_level.source_path).filename().string());
+        const int requestedNumber = levelNumberFromName(nextDef);
+
+        // LEVEL_10 is the last level of the original campaign.  LevelLoader
+        // derives LEVEL_11 from the numeric filename for compatibility with
+        // custom campaigns, so a missing LEVEL_11 here is a normal ending,
+        // not a broken installation.
+        if (currentNumber == 10 && requestedNumber == 11)
+        {
+            m_pendingMission.valid = false;
+            SaveStrategicState();
+            wxMessageBox(
+                "Congratulations!\n\nYou have completed the Spellcross campaign.",
+                "Campaign Complete",
+                wxOK | wxICON_INFORMATION,
+                this);
+            return;
+        }
+
         wxMessageBox(
             wxString::Format("Next level DEF not found: %s", nextDef.c_str()),
             "Error",
@@ -11856,8 +12494,18 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     newWin->m_playerCommanders = m_playerCommanders;
     newWin->m_gameModeEnabled = m_gameModeEnabled;
     newWin->m_unitStates = m_unitStates;
+    newWin->m_researchActiveId = m_researchActiveId;
+    newWin->m_researchActiveIndex = m_researchActiveIndex;
+    newWin->m_researchAllocPerTurn = m_researchAllocPerTurn;
     newWin->m_researchCompleted = m_researchCompleted;
     newWin->m_researchProgressById = m_researchProgressById;
+
+    // Each strategic DEF defines its own starting territories.  Do not carry
+    // ownership from the old map and do not collapse multiple Start(n)
+    // directives to one territory during a level transition.
+    newWin->m_ownedTerritories = ChooseStartTerritories_NoBriefing(lvl, newWin->m_spellData);
+    if (newWin->m_ownedTerritories.empty() && !lvl.territories.empty())
+        newWin->m_ownedTerritories.push_back(lvl.territories.front().id);
 
     if (newWin->GetMenuBar())
     {
@@ -11871,9 +12519,31 @@ void StrategicLevelFrame::AdvanceToNextLevel()
         newWin->m_playerUnits.push_back(su);
     }
 
+    // Preserve stable identities and allocate fresh IDs above every
+    // transferred record.  Without this, the first unit/commander created in
+    // a new strategic level could reuse UID 1 and corrupt assignments.
+    uint32_t maxUnitUid = 0;
+    for (const auto& state : newWin->m_unitStates)
+        maxUnitUid = std::max(maxUnitUid, state.uid);
+    newWin->m_nextRosterUid = std::max<uint32_t>(1, maxUnitUid + 1);
+    while (newWin->m_unitStates.size() < newWin->m_playerUnits.size())
+    {
+        UnitInstanceState state;
+        state.uid = newWin->m_nextRosterUid++;
+        newWin->m_unitStates.push_back(state);
+    }
+
+    uint32_t maxCommanderUid = 0;
+    for (const auto& commander : newWin->m_playerCommanders)
+        maxCommanderUid = std::max(maxCommanderUid, commander.uid);
+    newWin->m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid + 1);
+
     // Always rebuild background, visibility and UI after transferring state
     newWin->TryLoadBackground();
     newWin->ApplyTerritoryVisibility();
+    newWin->CheckTimeouts();
+    newWin->ProcessLevelEvents();
+    newWin->MarkOverlayDirty();
     newWin->RefreshUI();
 
     // Transfer all-time loss stats (level stats reset for new level)

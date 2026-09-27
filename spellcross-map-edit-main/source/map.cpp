@@ -8690,7 +8690,8 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 		if (!isGameMode())
 		{
 			std::string id_str = string_format("#%d", unit->id);
-			spelldata->font7->Render(buf, buf_end, buf_x_size, hud_left + px_ref + 95 + 137, hud_top + 28, id_str, 252, 254, SpellFont::FontShadow::DIAG, SpellFont::FontAlign::RIGHT);
+			if (spelldata->font7)
+				spelldata->font7->Render(buf, buf_end, buf_x_size, hud_left + px_ref + 95 + 137, hud_top + 28, id_str, 252, 254, SpellFont::FontShadow::DIAG, SpellFont::FontAlign::RIGHT);
 		}
 	}
 
@@ -9624,7 +9625,10 @@ int SpellMap::ViewRange::AddViewUnitTask(MapUnit* unit, ClearMode clear, bool re
 				continue;
 			if (task->unit->coor != unit->coor)
 				continue;
-			// dupla found
+			if (task->clear != clear)
+				continue;
+			// Keep event detection when merging with a pending view-only task.
+			task->detect_events = task->detect_events || rec_events;
 			ctrl_lock.unlock();
 			queue_lock.unlock();
 			return(1);
@@ -9642,8 +9646,8 @@ int SpellMap::ViewRange::AddViewUnitTask(MapUnit* unit, ClearMode clear, bool re
 //  with events new_contact waits to complete operation
 void SpellMap::ViewRange::AddUnitView(MapUnit* unit, ClearMode clear, int* new_contact, vector<SpellMapEventRec*>* events)
 {
-	// insert new task 	
-	AddViewUnitTask(unit, clear, !!events);
+	// Allied visibility must trigger events even when results are collected later.
+	AddViewUnitTask(unit, clear, map->isGameMode() && !unit->is_enemy);
 
 	// wait for results?
 	if (!new_contact && !events)
@@ -9908,6 +9912,11 @@ void SpellMap::ViewRange::Worker()
 		// mark my position as visible
 		units_view[map->ConvXY(ref_pos)] = 2;
 		this_unit_view[map->ConvXY(ref_pos)] = 2;
+		if (!is_fire && detect_events && map->events->CheckEventMap(ref_mxy))
+		{
+			auto list = map->events->GetEvents(ref_mxy, true);
+			events_list.insert(events_list.end(), list.begin(), list.end());
+		}
 
 
 		// proceed recoursively till max visibility
@@ -9987,7 +9996,11 @@ void SpellMap::ViewRange::Worker()
 						if (detect_events)
 						{
 							for (auto& trig_event : u->trig_events)
-								events_list.push_back(trig_event);
+								if (trig_event->isSeeUnit() && !trig_event->is_done && !trig_event->hide)
+								{
+									trig_event->is_done = true;
+									events_list.push_back(trig_event);
+								}
 						}
 
 						// mark unit as seen
@@ -10129,7 +10142,11 @@ void SpellMap::ViewRange::Worker()
 									if (detect_events)
 									{
 										for (auto& trig_event : unit->trig_events)
-											events_list.push_back(trig_event);
+											if (trig_event->isSeeUnit() && !trig_event->is_done && !trig_event->hide)
+											{
+												trig_event->is_done = true;
+												events_list.push_back(trig_event);
+											}
 									}
 									// set unit seen flag
 									if (unit->is_visible < 2)  // právě se stala viditelnou
@@ -10217,7 +10234,11 @@ void SpellMap::ViewRange::Worker()
 									if (detect_events)
 									{
 										for (auto& trig_event : unit->trig_events)
-											events_list.push_back(trig_event);
+											if (trig_event->isSeeUnit() && !trig_event->is_done && !trig_event->hide)
+											{
+												trig_event->is_done = true;
+												events_list.push_back(trig_event);
+											}
 									}
 									// mark unit as seen
 									if (unit->is_visible < 2)  // právě se stala viditelnou
@@ -12630,14 +12651,13 @@ int SpellMap::MissionStartEvent()
 		{
 			// make new unit
 			MapUnit* new_unit = new MapUnit(*unit.unit, true);
-			unit.is_placed = true;
-
 			if (PlaceUnit(new_unit))
 			{
 				// failed
 				delete new_unit;
 				continue;
 			}
+			unit.is_placed = true;
 			if (!is_selected)
 			{
 				// select first unit, because Aliance unints in map can be only placed via events, so no valid initial selection is possible before this point
@@ -13069,6 +13089,10 @@ int SpellMap::Saves::Load(SpellMap::SavedState* save)
 
 	map->LockMap();
 
+	// discard stale runtime queues tied to previous event instances
+	map->unit_view->ClearEvents(true);
+	map->event_list.clear();
+
 	// replace tiles
 	map->tiles = save->tiles;
 
@@ -13109,6 +13133,16 @@ int SpellMap::Saves::Load(SpellMap::SavedState* save)
 
 	// relink event units
 	map->events->RelinkUnits();
+
+	// restore already-triggered but not yet fully processed events
+	for (auto* evt : map->events->GetEvents())
+	{
+		if (!evt) continue;
+		if (!evt->is_done) continue;
+		if (evt->hide) continue;
+		if (!evt->isDone())
+			map->event_list.push_back(evt);
+	}
 
 	// resort units to tiles
 	map->SortUnits();

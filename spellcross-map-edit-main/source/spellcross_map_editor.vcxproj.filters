@@ -474,5 +474,8 @@
       <Filter>Resource Files</Filter>
     </None>
     <None Include=".github\copilot-instructions.md" />
+    <None Include="tests\test_view_events.py" />
+    <None Include="tests\inspect_scsave.py" />
+    <None Include="tests\test_mission_events.py" />
   </ItemGroup>
 </Project>
