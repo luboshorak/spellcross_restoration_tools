@@ -19,6 +19,11 @@ struct LevelTerritory {
     std::string intro_mission;  // "none" nebo "m02_02a"
     std::string mission;        // "m02_01" ...
     std::string music;          // "mus05" / "none"
+    // DefineStrategicPoints(territory, total_capacity, points_per_turn).
+    // Older editor code misread these two values as map coordinates; keep the
+    // legacy fields below for compatibility, but store the real semantics too.
+    int strategic_points_total = 0;
+    int strategic_points_per_turn = 0;
     int strategic_x = 0;
     int strategic_y = 0;
     // Finální území (LASTTERT) - ikona zkøížených meèù
@@ -39,6 +44,9 @@ struct LevelMission {
     std::string name;           // "M02_02A"
     std::string end_ok_mission; // "none" / "M02_02B"
     std::string end_bad_mission;// ...
+    // EndOK(money, experience) from LEVEL_XX.DEF.
+    // These are strategic rewards for a successful mission: one-time money
+    // and John Alexander's strategic experience (not tactical unit XP).
     int end_ok_x = -1;
     int end_ok_y = -1;
     std::string music;          // "mus01" / ""

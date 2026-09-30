@@ -4,11 +4,13 @@
 #include "other.h"
 
 #include <wx/dcbuffer.h>
+#include <wx/dcmemory.h>
 #include <wx/choicdlg.h>
 #include <wx/spinctrl.h>
 #include <wx/dcscreen.h>
 
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <vector>
 #include <unordered_map>
@@ -16,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
@@ -24,6 +27,7 @@
 #include <array>
 #include <sstream>
 #include "LZ_spell.h"
+#include "../strategic_original_renderer.h"
 
 namespace
 {
@@ -36,11 +40,384 @@ namespace
     constexpr int kMapViewportY = 19;
     constexpr int kMapViewportW = 379;
     constexpr int kMapViewportH = 259;
+
+    // Restored strategic-map logical layout (original 640x480 screen coordinates).
+    constexpr int kOriginalListX = 418;
+    constexpr int kOriginalListY = 6;
+    constexpr int kOriginalListW = 136;
+    constexpr int kOriginalListH = 426;
+    constexpr int kOriginalUnitRowsY = 83;
+    constexpr int kOriginalUnitRowH = 14;
+    constexpr int kOriginalVisibleRows = 24;
+    constexpr int kOriginalAttackX = 420;
+    constexpr int kOriginalAttackY = 438;
+    constexpr int kOriginalButtonW = 70;
+    constexpr int kOriginalButtonH = 28;
+
+    // Exact DOS strategic-toolbar geometry.  The buttons have a 31 px pitch;
+    // the active red wedge lives *inside* the toolbar at x=591, not on the
+    // boundary between the main screen and the toolbar.
+    constexpr int kOriginalToolbarX0 = 580;
+    constexpr int kOriginalToolbarX1 = 640;
+    constexpr int kOriginalToolbarY0 = 132;
+    constexpr int kOriginalToolbarPitch = 31;
+    constexpr int kOriginalToolbarCount = 9;
+
+    // Territory id 0 is reserved for global resources settings (meta).
+    // Keep this declaration near the other translation-unit constants because
+    // the Original UI renderer uses it before the Resources-page functions.
+    constexpr int kResourcesMetaTerritoryId = 0;
+
+    struct OriginalHierarchyHitSlot
+    {
+        wxRect rect;
+        std::string id;
+        bool commander = false;
+    };
+
+    static std::vector<OriginalHierarchyHitSlot> OriginalHierarchySlotsForPage(int brigadeIndex)
+    {
+        brigadeIndex = std::clamp(brigadeIndex, 1, 2);
+        constexpr int xUnits = 12;
+        constexpr int xBattCmd = 165;
+        constexpr int xRegCmd = 217;
+        constexpr int xBrig = 261;
+        constexpr int unitW = 146;
+        constexpr int cmdW = 132;
+        constexpr int brigW = 132;
+        constexpr int slotH = 16;
+        constexpr int gapY = 7;
+        constexpr int pairGap = 1;
+        constexpr int regTopY = 25;
+        constexpr int regBlockH = 208;
+        constexpr int regCmdOffY = 76;
+        constexpr int battalionPairGapY = 104;
+        constexpr int brigadeY = 207;
+
+        std::vector<OriginalHierarchyHitSlot> out;
+        out.reserve(4 * 6 + 2 * 2 + 2);
+        const int battalionBase = (brigadeIndex - 1) * 4;
+        auto battalionTopY = [=](int local)
+        {
+            const int regLocal = local / 2;
+            const int inReg = local % 2;
+            return regTopY + regLocal * regBlockH + inReg * battalionPairGapY;
+        };
+        for (int bLocal = 0; bLocal < 4; ++bLocal)
+        {
+            const int b = battalionBase + bLocal + 1;
+            const int y0 = battalionTopY(bLocal);
+            for (int u = 0; u < 4; ++u)
+            {
+                out.push_back({wxRect(xUnits, y0 + u * (slotH + gapY), unitW, slotH),
+                    "battalion_" + std::to_string(b) + "_unit_" + std::to_string(u + 1), false});
+            }
+            const int yc = y0 + 26;
+            out.push_back({wxRect(xBattCmd, yc, cmdW, slotH),
+                "battalion_" + std::to_string(b) + "_commander", true});
+            out.push_back({wxRect(xBattCmd, yc + slotH + pairGap, cmdW, slotH),
+                "battalion_" + std::to_string(b) + "_commander_unit", false});
+        }
+        for (int rLocal = 0; rLocal < 2; ++rLocal)
+        {
+            const int r = (brigadeIndex - 1) * 2 + rLocal + 1;
+            const int y = regTopY + rLocal * regBlockH + regCmdOffY;
+            out.push_back({wxRect(xRegCmd, y, cmdW, slotH),
+                "regiment_" + std::to_string(r) + "_commander", true});
+            out.push_back({wxRect(xRegCmd, y + slotH + pairGap, cmdW, slotH),
+                "regiment_" + std::to_string(r) + "_unit", false});
+        }
+        out.push_back({wxRect(xBrig, brigadeY, brigW, slotH),
+            "brigade_" + std::to_string(brigadeIndex) + "_commander", true});
+        out.push_back({wxRect(xBrig, brigadeY + slotH + pairGap, brigW, slotH),
+            "brigade_" + std::to_string(brigadeIndex) + "_unit", false});
+        return out;
+    }
+
+    static void OriginalSetPixel(wxImage& image, int x, int y, const wxColour& color)
+    {
+        if (!image.IsOk() || x < 0 || y < 0 || x >= image.GetWidth() || y >= image.GetHeight())
+            return;
+        unsigned char* data = image.GetData();
+        if (!data)
+            return;
+        const size_t q = (static_cast<size_t>(y) * image.GetWidth() + x) * 3u;
+        data[q + 0] = color.Red();
+        data[q + 1] = color.Green();
+        data[q + 2] = color.Blue();
+    }
+
+    static void OriginalFillRect(wxImage& image, int x, int y, int w, int h, const wxColour& color)
+    {
+        if (!image.IsOk() || w <= 0 || h <= 0)
+            return;
+        const int x0 = std::max(0, x);
+        const int y0 = std::max(0, y);
+        const int x1 = std::min(image.GetWidth(), x + w);
+        const int y1 = std::min(image.GetHeight(), y + h);
+        unsigned char* data = image.GetData();
+        if (!data)
+            return;
+        for (int yy = y0; yy < y1; ++yy)
+        {
+            for (int xx = x0; xx < x1; ++xx)
+            {
+                const size_t q = (static_cast<size_t>(yy) * image.GetWidth() + xx) * 3u;
+                data[q + 0] = color.Red();
+                data[q + 1] = color.Green();
+                data[q + 2] = color.Blue();
+            }
+        }
+    }
+
+    static void OriginalHLine(wxImage& image, int x0, int x1, int y, const wxColour& color)
+    {
+        if (x1 < x0) std::swap(x0, x1);
+        for (int x = x0; x <= x1; ++x)
+            OriginalSetPixel(image, x, y, color);
+    }
+
+    static void OriginalVLine(wxImage& image, int x, int y0, int y1, const wxColour& color)
+    {
+        if (y1 < y0) std::swap(y0, y1);
+        for (int y = y0; y <= y1; ++y)
+            OriginalSetPixel(image, x, y, color);
+    }
+
+    static int OriginalCenteredTextY(SpellFont* font, int y, int h)
+    {
+        const int fh = font ? std::max(1, font->GetHeight()) : 1;
+        return y + std::max(0, (h - fh) / 2);
+    }
+
+    static void OriginalDrawScrollButton(wxImage& image, int x, int y, bool up, bool enabled = true)
+    {
+        // 22x28 native strategic scrollbar button. Drawn procedurally so the
+        // restored UI does not depend on wx child controls or resource state.
+        const wxColour outer(92, 88, 80);
+        const wxColour inner(enabled ? 45 : 38, enabled ? 45 : 38, enabled ? 42 : 38);
+        const wxColour hi(enabled ? 176 : 92, enabled ? 170 : 92, enabled ? 158 : 88);
+        const wxColour lo(24, 23, 22);
+        const wxColour arrow(enabled ? 188 : 92, enabled ? 184 : 92, enabled ? 174 : 88);
+
+        OriginalFillRect(image, x, y, 22, 28, outer);
+        OriginalFillRect(image, x + 2, y + 2, 18, 24, inner);
+        OriginalHLine(image, x + 2, x + 19, y + 2, hi);
+        OriginalVLine(image, x + 2, y + 2, y + 25, hi);
+        OriginalHLine(image, x + 2, x + 19, y + 25, lo);
+        OriginalVLine(image, x + 19, y + 2, y + 25, lo);
+
+        const int cy = y + 13;
+        for (int r = 0; r < 6; ++r)
+        {
+            const int yy = up ? (cy + 3 - r) : (cy - 3 + r);
+            const int half = r;
+            OriginalHLine(image, x + 10 - half, x + 10 + half, yy, arrow);
+        }
+    }
+
+    static void OriginalDrawScrollTrack(wxImage& image, int x, int y, int h, int position, int maxPosition,
+        int visibleRows, int totalRows)
+    {
+        if (h <= 0)
+            return;
+        const wxColour track(22, 35, 22);
+        const wxColour edge(107, 104, 96);
+        const wxColour thumb(112, 108, 100);
+        const wxColour thumbHi(190, 184, 170);
+        const wxColour thumbLo(42, 40, 37);
+        OriginalFillRect(image, x, y, 22, h, track);
+        OriginalVLine(image, x, y, y + h - 1, edge);
+        OriginalVLine(image, x + 21, y, y + h - 1, edge);
+
+        if (maxPosition <= 0 || totalRows <= 0)
+            return;
+        const int innerY = y + 2;
+        const int innerH = std::max(1, h - 4);
+        const int thumbH = std::max(16, innerH * std::max(1, visibleRows) / std::max(visibleRows, totalRows));
+        const int travel = std::max(0, innerH - thumbH);
+        const int thumbY = innerY + (travel * std::clamp(position, 0, maxPosition)) / maxPosition;
+        OriginalFillRect(image, x + 3, thumbY, 16, thumbH, thumb);
+        OriginalHLine(image, x + 3, x + 18, thumbY, thumbHi);
+        OriginalVLine(image, x + 3, thumbY, thumbY + thumbH - 1, thumbHi);
+        OriginalHLine(image, x + 3, x + 18, thumbY + thumbH - 1, thumbLo);
+        OriginalVLine(image, x + 18, thumbY, thumbY + thumbH - 1, thumbLo);
+    }
+
+    static int OriginalTextWidth(SpellFont* font, const wxString& text)
+    {
+        if (!font || text.empty())
+            return 0;
+        std::string encoded = wstring2stringCP895(text.ToStdWstring());
+        return font->GetTextWidth(encoded);
+    }
+
+    static void OriginalDrawSpellText(wxImage& image, SpellFont* font, const wxString& text,
+        int x, int y, const wxColour& fg, int boxWidth = 0, bool centered = false,
+        SpellFont::FontAlign align = SpellFont::LEFT)
+    {
+        if (!image.IsOk() || !font || text.empty())
+            return;
+
+        int tx = x;
+        if (centered && boxWidth > 0)
+            tx = x + std::max(0, (boxWidth - OriginalTextWidth(font, text)) / 2);
+
+        std::vector<uint8_t> mask(static_cast<size_t>(image.GetWidth()) * image.GetHeight(), 0);
+        font->Render(mask.data(), mask.data() + mask.size(), image.GetWidth(), tx, y,
+            text.ToStdWstring(), 2, 1, SpellFont::RIGHT_DOWN, align);
+
+        unsigned char* rgb = image.GetData();
+        if (!rgb)
+            return;
+        const int fh = std::max(1, font->GetHeight());
+        const int y0 = std::max(0, y - 1);
+        const int y1 = std::min(image.GetHeight(), y + fh + 2);
+        // boxWidth also acts as an explicit clip rectangle. This matters for
+        // long unit names: they must never paint into the original scrollbar.
+        const int x0 = std::max(0, boxWidth > 0 ? x : tx - 2);
+        const int x1 = std::min(image.GetWidth(), boxWidth > 0
+            ? x + boxWidth
+            : tx + std::max(8, OriginalTextWidth(font, text)) + 4);
+        for (int yy = y0; yy < y1; ++yy)
+        {
+            for (int xx = x0; xx < x1; ++xx)
+            {
+                const uint8_t m = mask[static_cast<size_t>(yy) * image.GetWidth() + xx];
+                if (!m)
+                    continue;
+                const size_t q = (static_cast<size_t>(yy) * image.GetWidth() + xx) * 3u;
+                if (m == 1)
+                {
+                    rgb[q + 0] = 0;
+                    rgb[q + 1] = 0;
+                    rgb[q + 2] = 0;
+                }
+                else
+                {
+                    rgb[q + 0] = fg.Red();
+                    rgb[q + 1] = fg.Green();
+                    rgb[q + 2] = fg.Blue();
+                }
+            }
+        }
+    }
+
+    static wxString OriginalCleanBriefing(wxString text)
+    {
+        text.Replace("\r", "");
+        wxArrayString lines = wxSplit(text, '\n', '\0');
+        wxString out;
+        for (const auto& raw : lines)
+        {
+            wxString line = raw;
+            line.Trim(true).Trim(false);
+            if (line.CmpNoCase("Briefing") == 0 ||
+                line.CmpNoCase("Counter-Attack Briefing") == 0 ||
+                line.StartsWith("---"))
+                continue;
+            if (!out.empty() && !line.empty())
+                out += " ";
+            if (!line.empty())
+                out += line;
+        }
+        return out;
+    }
+
+    static std::vector<wxString> OriginalWrapText(SpellFont* font, const wxString& text, int maxWidth, int maxLines)
+    {
+        std::vector<wxString> lines;
+        if (!font || maxWidth <= 0 || maxLines <= 0)
+            return lines;
+
+        std::wistringstream in(text.ToStdWstring());
+        std::wstring word;
+        wxString current;
+        while (in >> word)
+        {
+            const wxString w(word.c_str());
+            const wxString candidate = current.empty() ? w : current + " " + w;
+            if (!current.empty() && OriginalTextWidth(font, candidate) > maxWidth)
+            {
+                lines.push_back(current);
+                current = w;
+                if (static_cast<int>(lines.size()) >= maxLines)
+                    break;
+            }
+            else
+            {
+                current = candidate;
+            }
+        }
+        if (static_cast<int>(lines.size()) < maxLines && !current.empty())
+            lines.push_back(current);
+        return lines;
+    }
+
+    static void OriginalDrawStrategicStatus(wxImage& image, SpellFont* font,
+        int money, int research, int turn)
+    {
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        OriginalDrawSpellText(image, font, L"Peníze", 578, 17, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", money), 578, 31, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Výzkum", 578, 47, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", research), 578, 61, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", turn), 578, 91, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%02d", turn), 579, 452, text, 60, true);
+    }
+
+    static void OriginalDrawActionButton(wxImage& image, SpellFont* font,
+        int x, int y, int w, int h, const wxString& label, bool enabled)
+    {
+        const wxColour bg = enabled ? wxColour(18, 70, 22) : wxColour(22, 46, 22);
+        const wxColour hi(78, 124, 78);
+        const wxColour lo(10, 22, 10);
+        const wxColour fg = enabled ? wxColour(0, 242, 0) : wxColour(90, 112, 90);
+        OriginalFillRect(image, x, y, w, h, bg);
+        OriginalHLine(image, x, x + w - 1, y, hi);
+        OriginalVLine(image, x, y, y + h - 1, hi);
+        OriginalHLine(image, x, x + w - 1, y + h - 1, lo);
+        OriginalVLine(image, x + w - 1, y, y + h - 1, lo);
+        // faint internal grid like the original green buttons
+        const wxColour grid(26, 92, 30);
+        for (int gx = x + 3; gx < x + w - 2; gx += 18)
+            OriginalVLine(image, gx, y + 2, y + h - 3, grid);
+        for (int gy = y + 3; gy < y + h - 2; gy += 18)
+            OriginalHLine(image, x + 2, x + w - 3, gy, grid);
+        if (font)
+            OriginalDrawSpellText(image, font, label, x, y + std::max(0, (h - std::max(1, font->GetHeight())) / 2) - 1, fg, w, true);
+    }
+
+    static wxBitmap OriginalDesaturateBitmap(const wxBitmap& source)
+    {
+        if (!source.IsOk())
+            return wxBitmap();
+        wxImage img = source.ConvertToImage();
+        if (!img.IsOk() || !img.GetData())
+            return source;
+        unsigned char* data = img.GetData();
+        const size_t pixels = static_cast<size_t>(img.GetWidth()) * img.GetHeight();
+        for (size_t i = 0; i < pixels; ++i)
+        {
+            const size_t q = i * 3u;
+            const int gray = (static_cast<int>(data[q + 0]) + data[q + 1] + data[q + 2]) / 3;
+            const unsigned char v = static_cast<unsigned char>(std::clamp(gray + 28, 0, 255));
+            data[q + 0] = v;
+            data[q + 1] = v;
+            data[q + 2] = v;
+        }
+        return wxBitmap(img);
+    }
 }
 
 static bool BuildStrategicScreenBitmap(SpellData* spellData, const char* resourceName, wxBitmap& outBmp);
 static bool BindStrategicScreenSlice(wxPanel* panel, SpellData* spellData,
     const char* resourceName, const wxRect& sourceRect);
+static std::filesystem::path GetStrategicSaveSlotPath(const LevelData& level, int slot);
+static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& outMoney, int& outRank, int& outExp, std::string& outTs);
 
 // Best-effort background decoding.
 // Some LEVEL_XX.LZ files are *compressed* using Spellcross LZW variant.
@@ -1325,9 +1702,16 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
         m_territoryLaunchCount[t.id] = 0;
     }
 
-    // init default resources state (20/20) for all territories
+    // Initialize the finite strategic-point pools from DefineStrategicPoints().
+    // total = total SB capacity, incomePerTurn = SB yielded per strategic turn.
     for (const auto& t : m_level.territories)
-        m_territoryResources[t.id] = TerritoryResourceState{};
+    {
+        TerritoryResourceState st;
+        st.total = std::max(0, t.strategic_points_total);
+        st.remaining = st.total;
+        st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+        m_territoryResources[t.id] = st;
+    }
 
     // Load cumulative research flags from LEVEL_01..current for Game mode unit filtering
     {
@@ -1451,6 +1835,10 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     RefreshUI();
 
+    // The reconstructed 640x480 strategic UI is now the default. The wx-based
+    // implementation remains available from Strategic UI -> Current UI.
+    SetOriginalStrategicUi(true);
+
     // Initialize timeout tracking so countdown markers are visible from turn 1
     CheckTimeouts();
 
@@ -1503,6 +1891,12 @@ void StrategicLevelFrame::StartFreshGameMode(const std::vector<LevelData::Player
 
     // Rebuild background with game mode borders
     TryLoadBackground();
+
+    // Player rank is derived solely from the player-XP column in HODNOSTI.DEF.
+    // At campaign start XP is legitimately zero, but that still means Captain
+    // (rank 2), because the first three player XP thresholds are all zero.
+    LoadRanksTable();
+    RecomputePlayerRank();
 
     // Process immediate level events (AbsTime(-1) = fires right away, e.g. E02_0001 intro text)
     ProcessLevelEvents();
@@ -1560,6 +1954,29 @@ struct UnitStatePersistLoadView
 
 static thread_local const UnitStatePersistSaveView* g_unitStatePersistSave = nullptr;
 static thread_local UnitStatePersistLoadView* g_unitStatePersistLoad = nullptr;
+
+// ------------------------------------------------------------------
+// Mission-flow persistence: time limits, campaign events and counter-attacks.
+// These are strategic state too; resetting them on load changes the campaign.
+// ------------------------------------------------------------------
+struct MissionFlowPersistSaveView
+{
+    const std::unordered_map<int, int>* timeoutTurn = nullptr;
+    const std::set<int>* triggeredEvents = nullptr;
+    const std::unordered_map<int, int>* activatedEvents = nullptr;
+    const std::vector<StrategicLevelFrame::CounterAttackState>* counterAttacks = nullptr;
+};
+
+struct MissionFlowPersistLoadView
+{
+    std::unordered_map<int, int>* timeoutTurn = nullptr;
+    std::set<int>* triggeredEvents = nullptr;
+    std::unordered_map<int, int>* activatedEvents = nullptr;
+    std::vector<StrategicLevelFrame::CounterAttackState>* counterAttacks = nullptr;
+};
+
+static thread_local const MissionFlowPersistSaveView* g_missionFlowPersistSave = nullptr;
+static thread_local MissionFlowPersistLoadView* g_missionFlowPersistLoad = nullptr;
 
 static std::filesystem::path FindPreviousLevelSavePath(const LevelData& currentLevel);
 
@@ -1626,6 +2043,13 @@ void StrategicLevelFrame::BuildMenu()
     game->AppendCheckItem(ID_MENU_GAME_MODE_TOGGLE, L"&Enabled");
     bar->Append(game, "&Game mode");
 
+    // Parallel UI switch: the old implementation remains intact and usable.
+    auto* strategicUi = new wxMenu();
+    strategicUi->AppendRadioItem(ID_MENU_STRATEGIC_UI_CURRENT, L"&Current / wx UI");
+    strategicUi->AppendRadioItem(ID_MENU_STRATEGIC_UI_ORIGINAL, L"&Reconstructed original UI");
+    strategicUi->Check(ID_MENU_STRATEGIC_UI_ORIGINAL, true);
+    bar->Append(strategicUi, "Strategic &UI");
+
     SetMenuBar(bar);
 
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnSaveGame, this, ID_MENU_SAVE_GAME);
@@ -1633,7 +2057,3159 @@ void StrategicLevelFrame::BuildMenu()
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsAudio, this, ID_MENU_OPTIONS_AUDIO);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsScreen, this, ID_MENU_OPTIONS_SCREEN);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnToggleGameMode, this, ID_MENU_GAME_MODE_TOGGLE);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnStrategicUiCurrent, this, ID_MENU_STRATEGIC_UI_CURRENT);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnStrategicUiOriginal, this, ID_MENU_STRATEGIC_UI_ORIGINAL);
 
+}
+
+
+void StrategicLevelFrame::OnStrategicUiCurrent(wxCommandEvent&)
+{
+    SetOriginalStrategicUi(false);
+}
+
+void StrategicLevelFrame::OnStrategicUiOriginal(wxCommandEvent&)
+{
+    SetOriginalStrategicUi(true);
+}
+
+void StrategicLevelFrame::SetOriginalStrategicUi(bool enabled)
+{
+    m_originalStrategicUi = enabled;
+
+    if (auto* bar = GetMenuBar())
+    {
+        bar->Check(ID_MENU_STRATEGIC_UI_CURRENT, !enabled);
+        bar->Check(ID_MENU_STRATEGIC_UI_ORIGINAL, enabled);
+    }
+
+    if (!m_rootPanel)
+        return;
+
+    if (m_originalStrategicPanel)
+        m_originalStrategicPanel->Show(enabled);
+
+    if (enabled)
+    {
+        // No legacy wx controls are layered over the restored framebuffer.
+        if (m_normalLayoutPanel) m_normalLayoutPanel->Hide();
+        if (m_buyMainPanel) m_buyMainPanel->Hide();
+        if (m_unitsMainPanel) m_unitsMainPanel->Hide();
+        m_originalStrategicDirty = true;
+        RefreshOriginalStrategicView();
+    }
+    else
+    {
+        // Return exactly to the old root mode that was active before switching.
+        if (m_normalLayoutPanel) m_normalLayoutPanel->Show(!m_buyModeActive && !m_unitsModeActive);
+        if (m_buyMainPanel) m_buyMainPanel->Show(m_buyModeActive);
+        if (m_unitsMainPanel) m_unitsMainPanel->Show(m_unitsModeActive);
+        if (m_originalStrategicPanel) m_originalStrategicPanel->Hide();
+    }
+
+    m_rootPanel->Layout();
+    Layout();
+}
+
+static int StrategicLevelNumberFromPath(const std::string& sourcePath)
+{
+    const std::string name = std::filesystem::path(sourcePath).filename().string();
+    std::smatch match;
+    std::regex re("LEVEL[_-]?(\\d{1,2})", std::regex_constants::icase);
+    if (std::regex_search(name, match, re) && match.size() >= 2)
+    {
+        try { return std::stoi(match[1].str()); }
+        catch (...) {}
+    }
+    return -1;
+}
+
+void StrategicLevelFrame::RefreshOriginalStrategicView()
+{
+    if (!m_originalStrategicPanel)
+        return;
+    if (!m_originalStrategicDirty && m_originalStrategicBitmap.IsOk())
+        return;
+
+    m_originalStrategicError.clear();
+
+    if (!m_spellData)
+    {
+        m_originalStrategicBitmap = wxBitmap();
+        m_originalStrategicError = "Original UI: SpellData is not available.";
+        m_originalStrategicDirty = false;
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+
+    const int levelNum = StrategicLevelNumberFromPath(m_level.source_path);
+    if (levelNum < 0)
+    {
+        m_originalStrategicBitmap = wxBitmap();
+        m_originalStrategicError = "Original UI: cannot determine LEVEL_XX from: " +
+            wxString::FromUTF8(m_level.source_path.c_str());
+        m_originalStrategicDirty = false;
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+    if (levelNum < 2)
+    {
+        m_originalStrategicBitmap = wxBitmap();
+        m_originalStrategicError = wxString::Format(
+            "Original UI: LEVEL_%02d is the intro/tactical level and has no original strategic map.",
+            levelNum);
+        m_originalStrategicDirty = false;
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+
+    if (m_visibleTerritory.empty())
+        ApplyTerritoryVisibility();
+
+    StrategicOriginalRenderer::MapState state;
+    state.level = levelNum;
+    int maxId = 0;
+    for (const auto& t : m_level.territories)
+        maxId = std::max(maxId, t.id);
+    state.territories.assign(static_cast<std::size_t>(std::max(1, maxId + 1)),
+        StrategicOriginalRenderer::TerritoryVisualState::Hidden);
+
+    for (const auto& t : m_level.territories)
+    {
+        const int tid = t.id;
+        if (tid <= 0 || tid >= static_cast<int>(state.territories.size()))
+            continue;
+
+        const bool owned = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid)
+            != m_ownedTerritories.end();
+        const bool visible = !m_gameModeEnabled ||
+            (tid < static_cast<int>(m_visibleTerritory.size()) && m_visibleTerritory[tid] != 0);
+
+        state.territories[static_cast<std::size_t>(tid)] = owned
+            ? StrategicOriginalRenderer::TerritoryVisualState::Revealed
+            : (visible ? StrategicOriginalRenderer::TerritoryVisualState::EnemyHatched
+                       : StrategicOriginalRenderer::TerritoryVisualState::Hidden);
+    }
+
+    // Asset loader is deliberately redundant. Normally COMMON.FS is opened with
+    // DELZ_ALL and returns decoded LZ resources. In real user builds, however,
+    // strategic DEF files may be opened from an extracted temp tree, COMMON.FS
+    // may come from another installation, or an older cache may be in use.
+    // Try the archive first, then the known decoded/exported folders.
+    std::vector<std::filesystem::path> originalAssetDirs;
+    auto addAssetDir = [&](const std::filesystem::path& d)
+    {
+        if (d.empty()) return;
+        std::error_code ec;
+        if (!std::filesystem::exists(d, ec) || !std::filesystem::is_directory(d, ec))
+            return;
+        for (const auto& e : originalAssetDirs)
+            if (e == d) return;
+        originalAssetDirs.push_back(d);
+    };
+
+    addAssetDir(std::filesystem::path(m_level.source_path).parent_path());
+    addAssetDir(std::filesystem::current_path() / "temp" / "COMMON");
+    addAssetDir(std::filesystem::current_path() / "temp" / "common");
+    addAssetDir(std::filesystem::path(m_spellData->data_path));
+    addAssetDir(std::filesystem::path(m_spellData->data_path) / "COMMON");
+    addAssetDir(std::filesystem::path(m_spellData->data_path) / "common");
+    addAssetDir(std::filesystem::path(m_spellData->cd_data_path));
+    addAssetDir(std::filesystem::path(m_spellData->cd_data_path) / "COMMON");
+    addAssetDir(std::filesystem::path(m_spellData->cd_data_path) / "common");
+
+    auto loader = [this, originalAssetDirs](const std::string& name, std::vector<std::uint8_t>& out) -> bool
+    {
+        out.clear();
+
+        // 1) Preferred source: live COMMON.FS archive.
+        if (m_spellData && m_spellData->GetCommonFS())
+        {
+            std::uint8_t* data = nullptr;
+            int size = 0;
+            if (m_spellData->GetCommonFS()->GetFile(name.c_str(), &data, &size) == 0 && data && size > 0)
+            {
+                out.assign(data, data + size);
+                return true;
+            }
+        }
+
+        // 2) Fallback: decoded/exported files (notably Release/temp/COMMON).
+        for (const auto& dir : originalAssetDirs)
+        {
+            const std::filesystem::path p = dir / std::filesystem::path(name);
+            std::ifstream f(p, std::ios::binary);
+            if (!f)
+                continue;
+            out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+            if (!out.empty())
+                return true;
+        }
+        return false;
+    };
+
+    StrategicOriginalRenderer renderer;
+    StrategicOriginalRenderer::RgbImage rgb;
+    std::string error;
+    bool rendered = false;
+    switch (m_originalStrategicScreen)
+    {
+    case OriginalStrategicScreen::Hierarchy:
+        rendered = renderer.RenderHierarchy(loader, rgb, &error);
+        break;
+    case OriginalStrategicScreen::Units:
+        rendered = renderer.RenderUnits(loader, rgb, &error);
+        break;
+    case OriginalStrategicScreen::Buy:
+    {
+        StrategicOriginalRenderer::BuyState buyState;
+        GetOriginalBuyLimits(buyState.maxPermanentUnits, buyState.maxCommanders);
+        rendered = renderer.RenderBuy(loader, buyState, rgb, &error);
+        break;
+    }
+    case OriginalStrategicScreen::Research:
+        EnsureResearchLoaded();
+        rendered = renderer.RenderResearch(loader, rgb, &error);
+        break;
+    case OriginalStrategicScreen::Info:
+        EnsureResearchLoaded();
+        rendered = renderer.RenderInfo(loader, rgb, &error);
+        break;
+    case OriginalStrategicScreen::Resources:
+        RefreshResourcesPage();
+        rendered = renderer.RenderResources(loader, rgb, &error);
+        break;
+    case OriginalStrategicScreen::Stats:
+        LoadRanksTable();
+        LoadMissionStatsIfPresent();
+        RecomputePlayerRank();
+        rendered = renderer.RenderStats(loader, rgb, &error);
+        break;
+    case OriginalStrategicScreen::Options:
+    {
+        StrategicOriginalRenderer::OptionsState optionsState;
+        SpellMap* spellMap = m_main ? m_main->GetSpellMap() : nullptr;
+        const double gamma = spellMap ? spellMap->GetGamma() : 1.3;
+        optionsState.gammaPercent = std::clamp(
+            static_cast<int>(std::lround((gamma - 0.5) * (100.0 / 1.5))), 0, 100);
+        if (m_spellData && m_spellData->midi)
+            optionsState.musicPercent = std::clamp(
+                static_cast<int>(std::lround(m_spellData->midi->GetVolume() * 100.0)), 0, 100);
+        if (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
+            optionsState.soundPercent = std::clamp(
+                static_cast<int>(std::lround(m_spellData->sounds->channels->GetVolume() * 100.0)), 0, 100);
+        rendered = renderer.RenderOptions(loader, optionsState, rgb, &error);
+        break;
+    }
+    case OriginalStrategicScreen::Map:
+    default:
+        rendered = renderer.RenderStrategicMap(loader, state, rgb, &error);
+        break;
+    }
+    if (!rendered || rgb.rgb.empty())
+    {
+        m_originalStrategicBitmap = wxBitmap();
+        m_originalStrategicError = "Original UI renderer: " + wxString::FromUTF8(error.c_str());
+        m_originalStrategicDirty = false;
+        m_originalStrategicPanel->SetToolTip(m_originalStrategicError);
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+
+    wxImage image(rgb.width, rgb.height, true);
+    if (image.IsOk() && image.GetData())
+        std::memcpy(image.GetData(), rgb.rgb.data(), rgb.rgb.size());
+
+    // --------------------------------------------------------------------
+    // Dynamic original-map layer. Everything below is drawn into the same
+    // logical 640x480 framebuffer; no legacy wx controls overlap this view.
+    // --------------------------------------------------------------------
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Map)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour listBg(24, 61, 26);
+        const wxColour grid(31, 76, 32);
+        const wxColour frame(135, 132, 120);
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        const wxColour dim(126, 132, 118);
+        const wxColour cooldown(132, 72, 72);
+
+        // Central mission-unit panel (original game builds this dynamically).
+        OriginalFillRect(image, kOriginalListX, kOriginalListY,
+            kOriginalListW, kOriginalListH, listBg);
+        OriginalVLine(image, kOriginalListX - 2, kOriginalListY,
+            kOriginalListY + kOriginalListH - 1, frame);
+        OriginalVLine(image, kOriginalListX - 1, kOriginalListY,
+            kOriginalListY + kOriginalListH - 1, wxColour(40, 40, 34));
+        OriginalVLine(image, kOriginalListX + kOriginalListW,
+            kOriginalListY, kOriginalListY + kOriginalListH - 1, frame);
+
+        // Subtle grid under the rows, matching the DOS list surface.
+        for (int x = kOriginalListX + 2; x < kOriginalListX + kOriginalListW; x += 18)
+            OriginalVLine(image, x, 56, 431, grid);
+        for (int y = 56; y < 432; y += 18)
+            OriginalHLine(image, kOriginalListX + 1, kOriginalListX + kOriginalListW - 1, y, grid);
+
+        // Scrollbar and thumb. Mouse wheel drives this in the restored view.
+        OriginalFillRect(image, 556, 6, 18, 426, wxColour(74, 72, 66));
+        OriginalFillRect(image, 558, 23, 14, 391, wxColour(26, 39, 25));
+        OriginalHLine(image, 556, 573, 21, wxColour(182, 178, 166));
+        OriginalHLine(image, 556, 573, 415, wxColour(182, 178, 166));
+        OriginalDrawSpellText(image, font, "^", 557, 7, text, 16, true);
+        OriginalDrawSpellText(image, font, "v", 557, 416, text, 16, true);
+
+        // Ensure one UID per rendered unit instance, shared with the current UI.
+        int totalRows = 0;
+        for (const auto& u : m_playerUnits)
+            totalRows += std::max(0, u.count);
+        if (static_cast<int>(m_rosterRowUids.size()) != totalRows)
+        {
+            m_rosterRowUids.clear();
+            m_rosterRowUids.reserve(static_cast<size_t>(totalRows));
+            for (int i = 0; i < totalRows; ++i)
+                m_rosterRowUids.push_back(m_nextRosterUid++);
+        }
+        const int maxScroll = std::max(0, totalRows - kOriginalVisibleRows);
+        m_originalUnitScroll = std::clamp(m_originalUnitScroll, 0, maxScroll);
+        if (maxScroll > 0)
+        {
+            const int trackY = 25;
+            const int trackH = 387;
+            const int thumbH = std::max(18, trackH * kOriginalVisibleRows / std::max(kOriginalVisibleRows, totalRows));
+            const int thumbY = trackY + (trackH - thumbH) * m_originalUnitScroll / maxScroll;
+            OriginalFillRect(image, 559, thumbY, 12, thumbH, wxColour(116, 114, 104));
+            OriginalHLine(image, 559, 570, thumbY, wxColour(206, 202, 190));
+            OriginalHLine(image, 559, 570, thumbY + thumbH - 1, wxColour(40, 39, 36));
+        }
+
+        OriginalDrawSpellText(image, font, L"Speci\u00E1ln\u00ED", 420, 8, text, 132, true);
+        OriginalDrawSpellText(image, font, L"Vyber v\u0161echny", 423, 27, text);
+        OriginalDrawSpellText(image, font, L"Odzna\u010D v\u0161echny", 423, 42, text);
+        OriginalDrawSpellText(image, font, L"Jednotky", 420, 66, dim, 132, true);
+
+        int flatRow = 0;
+        int drawn = 0;
+        for (size_t pIdx = 0; pIdx < m_playerUnits.size() && drawn < kOriginalVisibleRows; ++pIdx)
+        {
+            const auto& unit = m_playerUnits[pIdx];
+            const bool onCooldown = pIdx < m_unitStates.size() && m_unitStates[pIdx].cooldown_turns > 0;
+            for (int inst = 0; inst < unit.count && drawn < kOriginalVisibleRows; ++inst, ++flatRow)
+            {
+                if (flatRow < m_originalUnitScroll)
+                    continue;
+                const uint32_t uid = flatRow < static_cast<int>(m_rosterRowUids.size())
+                    ? m_rosterRowUids[static_cast<size_t>(flatRow)] : 0;
+                const bool selected = uid && m_selectedUnitsForMission.count(uid) > 0;
+                wxString label = GetUnitDisplayName(unit.unit_id);
+                if (onCooldown && pIdx < m_unitStates.size())
+                    label += wxString::Format("  -%dT", m_unitStates[pIdx].cooldown_turns);
+                OriginalDrawSpellText(image, font, label, 423,
+                    kOriginalUnitRowsY + drawn * kOriginalUnitRowH,
+                    onCooldown ? cooldown : (selected ? green : text), 130);
+                ++drawn;
+            }
+        }
+
+        // If there are no player units, keep the panel self-explanatory.
+        if (totalRows == 0)
+            OriginalDrawSpellText(image, font, L"-- bez jednotek --", 421, 84, dim, 130, true);
+
+        // Bottom action buttons. They intentionally stay inside the restored
+        // framebuffer; the click handler routes them to existing game logic.
+        auto drawActionButton = [&](int x, const wxString& caption, bool enabled)
+        {
+            OriginalFillRect(image, x, kOriginalAttackY, kOriginalButtonW, kOriginalButtonH,
+                enabled ? wxColour(13, 51, 10) : wxColour(22, 34, 20));
+            OriginalHLine(image, x, x + kOriginalButtonW - 1, kOriginalAttackY,
+                enabled ? wxColour(38, 94, 33) : wxColour(57, 61, 54));
+            OriginalVLine(image, x, kOriginalAttackY, kOriginalAttackY + kOriginalButtonH - 1,
+                enabled ? wxColour(38, 94, 33) : wxColour(57, 61, 54));
+            OriginalHLine(image, x, x + kOriginalButtonW - 1,
+                kOriginalAttackY + kOriginalButtonH - 1, wxColour(3, 17, 3));
+            OriginalVLine(image, x + kOriginalButtonW - 1, kOriginalAttackY,
+                kOriginalAttackY + kOriginalButtonH - 1, wxColour(3, 17, 3));
+            OriginalDrawSpellText(image, font, caption, x, kOriginalAttackY + 7,
+                enabled ? text : dim, kOriginalButtonW, true);
+        };
+        const bool canAttack = m_selectedTerritory > 0 && !m_selectedUnitsForMission.empty();
+        drawActionButton(kOriginalAttackX, L"\u00DAtok", canAttack);
+        drawActionButton(496, L"Zru\u0161it", !m_selectedUnitsForMission.empty() || !m_selectedCommandersForMission.empty());
+
+        // Original status panel values.
+        OriginalDrawSpellText(image, font, L"Pen\u00EDze", 578, 17, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_money), 578, 31, text, 61, true);
+        OriginalDrawSpellText(image, font, L"V\u00FDzkum", 578, 47, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_research), 578, 61, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_turn), 578, 91, text, 61, true);
+
+        // End-turn panel.
+        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%02d", m_turn), 579, 452, text, 60, true);
+
+        // Territory briefing text in the original lower frame.
+        const wxString briefing = OriginalCleanBriefing(m_originalBriefingText);
+        if (!briefing.empty())
+        {
+            const auto lines = OriginalWrapText(font, briefing, 356, 8);
+            const int fh = std::max(1, font->GetHeight());
+            const int blockH = static_cast<int>(lines.size()) * fh;
+            int y = 323 + std::max(0, (130 - blockH) / 2);
+            for (const auto& line : lines)
+            {
+                OriginalDrawSpellText(image, font, line, 22, y, text, 374, true);
+                y += fh;
+            }
+        }
+        else
+        {
+            OriginalDrawSpellText(image, font, L"Vyber \u00FAzem\u00ED na map\u011B.", 22, 366, dim, 374, true);
+        }
+    }
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Hierarchy)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour listBg(24, 61, 26);
+        const wxColour grid(31, 76, 32);
+        const wxColour frame(135, 132, 120);
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        const wxColour heading(232, 232, 0);
+        const wxColour dim(126, 132, 118);
+
+        // The hierarchy artwork contains the complete left-hand tree, but the
+        // right roster is populated dynamically by the original game.
+        OriginalFillRect(image, kOriginalListX, kOriginalListY,
+            kOriginalListW, kOriginalListH, listBg);
+        OriginalVLine(image, kOriginalListX - 2, kOriginalListY,
+            kOriginalListY + kOriginalListH - 1, frame);
+        OriginalVLine(image, kOriginalListX - 1, kOriginalListY,
+            kOriginalListY + kOriginalListH - 1, wxColour(40, 40, 34));
+        OriginalVLine(image, kOriginalListX + kOriginalListW,
+            kOriginalListY, kOriginalListY + kOriginalListH - 1, frame);
+        OriginalHLine(image, kOriginalListX - 2, 574, kOriginalListY, frame);
+        OriginalHLine(image, kOriginalListX - 2, 574, kOriginalListY + kOriginalListH - 1, frame);
+        for (int x = kOriginalListX + 2; x < kOriginalListX + kOriginalListW; x += 18)
+            OriginalVLine(image, x, 8, 431, grid);
+        for (int y = 8; y < 432; y += 18)
+            OriginalHLine(image, kOriginalListX + 1, kOriginalListX + kOriginalListW - 1, y, grid);
+
+        // Native list scrollbar. The old branch had only the list contents; the
+        // original game also has dedicated up/down buttons and a narrow track.
+        std::vector<int> hierarchyFlatUnits;
+        for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+            for (int inst = 0; inst < std::max(0, m_playerUnits[pIdx].count); ++inst)
+                hierarchyFlatUnits.push_back(static_cast<int>(pIdx));
+        constexpr int maxUnitRows = 18;
+        const int hierarchyMaxScroll = std::max(0, static_cast<int>(hierarchyFlatUnits.size()) - maxUnitRows);
+        m_originalHierarchyUnitScroll = std::clamp(m_originalHierarchyUnitScroll, 0, hierarchyMaxScroll);
+
+        OriginalDrawScrollButton(image, 553, 6, true, hierarchyMaxScroll > 0);
+        OriginalDrawScrollButton(image, 553, 404, false, hierarchyMaxScroll > 0);
+        OriginalDrawScrollTrack(image, 553, 34, 370, m_originalHierarchyUnitScroll, hierarchyMaxScroll,
+            maxUnitRows, static_cast<int>(hierarchyFlatUnits.size()));
+
+        OriginalDrawSpellText(image, font, L"Jednotky", 420, 12, heading, 132, true);
+        const int unitTextH = std::max(1, font->GetHeight());
+        int unitRows = 0;
+        for (int flat = m_originalHierarchyUnitScroll;
+             flat < static_cast<int>(hierarchyFlatUnits.size()) && unitRows < maxUnitRows; ++flat)
+        {
+            const int pIdx = hierarchyFlatUnits[static_cast<size_t>(flat)];
+            if (pIdx < 0 || pIdx >= static_cast<int>(m_playerUnits.size()))
+                continue;
+            const int rowY = 27 + unitRows * 14;
+            OriginalDrawSpellText(image, font, GetUnitDisplayName(m_playerUnits[static_cast<size_t>(pIdx)].unit_id),
+                424, rowY + std::max(0, (14 - unitTextH) / 2), text, 126);
+            ++unitRows;
+        }
+        if (hierarchyFlatUnits.empty())
+            OriginalDrawSpellText(image, font, L"-- bez jednotek --", 421, 30, dim, 130, true);
+
+        OriginalDrawSpellText(image, font, L"Velitel\u00E9", 420, 292, heading, 132, true);
+        int cy = 309;
+        int cmdRows = 0;
+        for (const auto& commander : m_playerCommanders)
+        {
+            if (cmdRows >= 8)
+                break;
+            const wxString label = GetRankAbbrev(commander.rank) + " " + wxString::FromUTF8(commander.name);
+            OriginalDrawSpellText(image, font, label, 424, cy, text, 126);
+            cy += 14;
+            ++cmdRows;
+        }
+        if (cmdRows == 0)
+            OriginalDrawSpellText(image, font, L"-- bez velitel\u016F --", 421, 310, dim, 130, true);
+
+        // Live hierarchy contents. Coordinates exactly match the openings in
+        // HIERARCH.LZ. Empty normal slots remain empty; commander's assignment
+        // slot keeps the original green question mark until a unit is chosen.
+        const auto hitSlots = OriginalHierarchySlotsForPage(m_originalHierarchyPage);
+        for (const auto& hs : hitSlots)
+        {
+            auto it = m_hierarchySlotIndex.find(hs.id);
+            if (it == m_hierarchySlotIndex.end())
+                continue;
+            const HierarchySlot& slot = m_hierarchySlots[it->second];
+            wxString label;
+            wxColour colour = text;
+            if (hs.commander)
+            {
+                if (slot.commander_uid != 0 || !slot.commander_name.empty())
+                {
+                    label = GetRankAbbrev(slot.rank);
+                    if (!slot.commander_name.empty())
+                        label += " " + wxString::FromUTF8(slot.commander_name);
+                }
+            }
+            else if (slot.unit_uid != 0 && !slot.unit_display.empty())
+            {
+                label = slot.unit_display;
+            }
+            else
+            {
+                const bool assignmentSlot = hs.id.find("_commander_unit") != std::string::npos ||
+                    (hs.id.rfind("regiment_", 0) == 0 && hs.id.size() >= 5 &&
+                        hs.id.compare(hs.id.size() - 5, 5, "_unit") == 0) ||
+                    (hs.id.rfind("brigade_", 0) == 0 && hs.id.size() >= 5 &&
+                        hs.id.compare(hs.id.size() - 5, 5, "_unit") == 0);
+                if (assignmentSlot)
+                {
+                    label = L"?";
+                    colour = green;
+                }
+            }
+
+            if (!label.empty())
+            {
+                const int textY = OriginalCenteredTextY(font, hs.rect.y, hs.rect.height);
+                const bool centerPlaceholder = (label == L"?");
+                // Exact original geometry: permanent-unit rows have a small
+                // status cell at their left edge, while commander/assignment
+                // boxes start text almost immediately after the frame.
+                const int labelPad = (hs.rect.x == 12) ? 16 : 2;
+                OriginalDrawSpellText(image, font, label,
+                    centerPlaceholder ? hs.rect.x : hs.rect.x + labelPad, textY, colour,
+                    std::max(1, centerPlaceholder ? hs.rect.width : hs.rect.width - labelPad - 1),
+                    centerPlaceholder);
+            }
+        }
+
+        // Native lower-right page selector.
+        const wxRect partButton(323, 439, 72, 28);
+        OriginalFillRect(image, partButton.x, partButton.y, partButton.width, partButton.height,
+            wxColour(13, 51, 10));
+        OriginalHLine(image, partButton.x, partButton.GetRight(), partButton.y, wxColour(38, 94, 33));
+        OriginalVLine(image, partButton.x, partButton.y, partButton.GetBottom(), wxColour(38, 94, 33));
+        OriginalHLine(image, partButton.x, partButton.GetRight(), partButton.GetBottom(), wxColour(3, 17, 3));
+        OriginalVLine(image, partButton.GetRight(), partButton.y, partButton.GetBottom(), wxColour(3, 17, 3));
+        OriginalDrawSpellText(image, font,
+            wxString::Format(L"\u010C\u00E1st %d", m_originalHierarchyPage),
+            partButton.x, partButton.y + 7, green, partButton.width, true);
+
+        // Common original status panel values.
+        OriginalDrawSpellText(image, font, L"Pen\u00EDze", 578, 17, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_money), 578, 31, text, 61, true);
+        OriginalDrawSpellText(image, font, L"V\u00FDzkum", 578, 47, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_research), 578, 61, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_turn), 578, 91, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%02d", m_turn), 579, 452, text, 60, true);
+    }
+
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Units)
+    {
+        SpellFont* font = m_spellData->font;
+        // These are sampled directly from the original 640x480 unit-management
+        // screenshot.  The previous pass used the brighter map-screen colours,
+        // which made this page look much newer than the DOS original.
+        const wxColour text(150, 150, 150);
+        const wxColour green(4, 219, 4);
+        const wxColour yellow(231, 227, 5);
+        const wxColour dim(77, 77, 77);
+        const wxColour warn(232, 150, 72);
+        const wxColour listBg(32, 60, 20);
+        const wxColour listGrid(40, 77, 32);
+        const wxColour listFrame(77, 77, 77);
+        const wxColour selectedBand(77, 109, 69);
+        const wxColour buttonBg(13, 51, 10);
+        const wxColour buttonOff(22, 34, 20);
+        const wxColour edgeHi(38, 94, 33);
+        const wxColour edgeLo(3, 17, 3);
+
+        EnsureUnitCostsLoaded();
+        EnsureUpgradeDefsLoaded();
+        EnsureResearchLoaded();
+
+        if (m_unitsSelectedUnit < 0 && !m_playerUnits.empty())
+            m_unitsSelectedUnit = 0;
+        if (m_unitsSelectedUnit >= static_cast<int>(m_playerUnits.size()))
+            m_unitsSelectedUnit = m_playerUnits.empty() ? -1 : static_cast<int>(m_playerUnits.size()) - 1;
+
+        // -----------------------------------------------------------------
+        // LEFT ROSTER
+        // Original geometry is 16 permanent rows at y=8 + N*19.  The left
+        // half is the company/custom name, the right half is its unit type;
+        // it is NOT a textual "OK" status column.
+        // -----------------------------------------------------------------
+        std::vector<int> flatUnits;
+        for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+            for (int inst = 0; inst < std::max(0, m_playerUnits[pIdx].count); ++inst)
+                flatUnits.push_back(static_cast<int>(pIdx));
+
+        // Measured against a native 640x480 DOS screenshot.  UNITS.LZ starts
+        // at (6,8), but the first live row is two pixels lower than the raw
+        // layer origin.  Keeping the data geometry separate from the layer
+        // geometry avoids the systematic up/left drift seen in Stage 4.4.
+        constexpr int rosterY = 10;
+        constexpr int rosterRowH = 19;
+        constexpr int visibleRosterRows = 16;
+        const int maxRosterScroll = std::max(0, static_cast<int>(flatUnits.size()) - visibleRosterRows);
+        m_originalUnitsRosterScroll = std::clamp(m_originalUnitsRosterScroll, 0, maxRosterScroll);
+
+        for (int row = 0; row < visibleRosterRows; ++row)
+        {
+            const int flat = m_originalUnitsRosterScroll + row;
+            if (flat >= static_cast<int>(flatUnits.size()))
+                break;
+            const int pIdx = flatUnits[static_cast<size_t>(flat)];
+            if (pIdx < 0 || pIdx >= static_cast<int>(m_playerUnits.size()))
+                continue;
+
+            const auto& u = m_playerUnits[static_cast<size_t>(pIdx)];
+            wxString typeName = GetUnitDisplayName(u.unit_id);
+            wxString companyName = typeName;
+            if (pIdx < static_cast<int>(m_unitStates.size()) && !m_unitStates[pIdx].custom_name.empty())
+                companyName = wxString::FromUTF8(m_unitStates[pIdx].custom_name);
+
+            const int y = rosterY + row * rosterRowH;
+            // SpellFont's visible glyph body sits a pixel above the nominal
+            // line box; the DOS screen places it one pixel lower.
+            const int ty = OriginalCenteredTextY(font, y, 17) + 1;
+            const bool selected = pIdx == m_unitsSelectedUnit;
+
+            // The original marks the active row by its green frame/status bar,
+            // while the text itself stays the normal grey.
+            if (selected)
+            {
+                // VMU_SLCT.LZ is 146x17: x=16..161 in the native screen.
+                OriginalHLine(image, 16, 161, y, green);
+                OriginalHLine(image, 16, 161, y + 16, green);
+                OriginalVLine(image, 16, y, y + 16, green);
+                OriginalVLine(image, 161, y, y + 16, green);
+            }
+
+            // Small original status bars sit in the top edge of both cells.
+            const int hpBar = std::clamp((std::max(0, std::min(100, u.health)) * 26) / 100, 0, 26);
+            if (hpBar > 0)
+            {
+                // Exact native bar origins sampled from the original screen.
+                OriginalHLine(image, 38, 38 + hpBar, y, green);
+                OriginalHLine(image, 190, 190 + hpBar, y, green);
+            }
+
+            // Native text origins are (31,...) and (183,...).  The previous
+            // 28/180 anchors were the main reason the page looked left-shifted.
+            OriginalDrawSpellText(image, font, companyName, 31, ty, text, 129);
+            OriginalDrawSpellText(image, font, typeName, 183, ty, text, 129);
+
+            if (pIdx < static_cast<int>(m_unitStates.size()) && m_unitStates[pIdx].cooldown_turns > 0)
+                OriginalDrawSpellText(image, font,
+                    wxString::Format(L"%d", m_unitStates[pIdx].cooldown_turns), 152, ty, green, 9, true);
+        }
+        // Rows 17+ in UNITS.LZ are the original helper/temporary-unit area.
+        // Keep them genuinely empty when the remake has no separate helper
+        // collection instead of painting a modern heading over the grid.
+
+        // -----------------------------------------------------------------
+        // MODE PANEL
+        // -----------------------------------------------------------------
+        OriginalDrawSpellText(image, font, L"M\u00F3d", 336, 214, green, 77, true);
+        const struct { UnitsTab tab; const wchar_t* label; int y; } modes[] = {
+            { UNITS_TAB_UPGRADE, L"\u00DApravy", 232 },
+            { UNITS_TAB_RECRUIT, L"N\u00E1bor", 247 },
+            { UNITS_TAB_INFO,    L"Info", 262 }
+        };
+        for (const auto& m : modes)
+        {
+            const bool active = m_unitsCurrentTab == m.tab;
+            OriginalDrawSpellText(image, font, m.label, 338, m.y,
+                active ? yellow : green, 73, true);
+            if (active)
+            {
+                // Green bracket/arrows are part of the selected mode in the
+                // original game and make the yellow text much easier to read.
+                const int cy = m.y + 6;
+                OriginalVLine(image, 337, m.y - 2, m.y + 13, green);
+                OriginalHLine(image, 337, 344, m.y - 2, green);
+                OriginalHLine(image, 337, 344, m.y + 13, green);
+                OriginalHLine(image, 407, 414, m.y - 2, green);
+                OriginalHLine(image, 407, 414, m.y + 13, green);
+                OriginalVLine(image, 414, m.y - 2, m.y + 13, green);
+                OriginalHLine(image, 341, 346, cy, green);
+                OriginalHLine(image, 405, 410, cy, green);
+            }
+        }
+
+        int actionCost = -1;
+        int actionTime = -1;
+        bool actionEnabled = false;
+        bool hasCooldown = false;
+
+        // -----------------------------------------------------------------
+        // UPPER-RIGHT ORIGINAL LIST WINDOW
+        // This always shows researched/suitable unit improvements, grouped as
+        // Motory / Zbraně / Obrana.  Recruitment choices belong in the large
+        // lower info panel; putting them here was the largest visual mismatch
+        // in Stage 4.x.
+        // -----------------------------------------------------------------
+        OriginalFillRect(image, 418, 6, 135, 281, listBg);
+        OriginalVLine(image, 416, 6, 286, listFrame);
+        OriginalVLine(image, 417, 6, 286, wxColour(40, 40, 34));
+        OriginalVLine(image, 553, 6, 286, listFrame);
+        OriginalHLine(image, 416, 574, 6, listFrame);
+        OriginalHLine(image, 416, 574, 286, listFrame);
+        for (int x = 420; x < 553; x += 18)
+            OriginalVLine(image, x, 8, 286, listGrid);
+        for (int y = 8; y < 287; y += 18)
+            OriginalHLine(image, 419, 552, y, listGrid);
+
+        struct UnitOptionRow
+        {
+            wxString label;
+            int upgradeId = -1;
+            int rearmUnitId = -1;
+            bool heading = false;
+        };
+        std::vector<UnitOptionRow> optionRows;
+
+        auto addUpgradeGroup = [&](UpgradeDefRec::Kind kind, const wxString& heading,
+            const std::vector<int>& upgrades)
+        {
+            std::vector<int> ids;
+            for (int id : upgrades)
+            {
+                const auto it = m_upgradeDefs.find(id);
+                if (it != m_upgradeDefs.end() && it->second.kind == kind)
+                    ids.push_back(id);
+            }
+            // Keep the three original group headings visible even when the
+            // player has not researched a member of that group yet.
+            optionRows.push_back({ heading, -1, -1, true });
+            for (int id : ids)
+            {
+                const auto it = m_upgradeDefs.find(id);
+                wxString label = (it != m_upgradeDefs.end() && !it->second.title.empty())
+                    ? it->second.title : wxString();
+                if (label.empty())
+                    for (const auto& r : m_researchDb)
+                        if (r.data == id && !r.title.empty()) { label = r.title; break; }
+                if (label.empty()) label = wxString::Format(L"#%d", id);
+                optionRows.push_back({ label, id, -1, false });
+            }
+        };
+
+        std::vector<int> availableUpgrades;
+        std::vector<int> rearmChoices;
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
+        {
+            const auto& u = m_playerUnits[static_cast<size_t>(m_unitsSelectedUnit)];
+            availableUpgrades = GetAvailableUpgradesForUnit(u.unit_id);
+            rearmChoices = GetAvailableUnitTypesForUpgrade(u.unit_id);
+            addUpgradeGroup(UpgradeDefRec::Engine, L"Motory", availableUpgrades);
+            addUpgradeGroup(UpgradeDefRec::Weapon, L"Zbran\u011B", availableUpgrades);
+            addUpgradeGroup(UpgradeDefRec::Armor, L"Obrana", availableUpgrades);
+            if (m_unitsCurrentTab == UNITS_TAB_UPGRADE && !rearmChoices.empty())
+            {
+                optionRows.push_back({ L"Nov\u00FD typ", -1, -1, true });
+                for (int id : rearmChoices)
+                    optionRows.push_back({ GetUnitDisplayName(id), -1, id, false });
+            }
+        }
+
+        constexpr int optionRowH = 14;
+        constexpr int optionY = 8;
+        constexpr int optionBottom = 258;
+        const int visibleOptionRows = std::max(1, (optionBottom - optionY) / optionRowH);
+        const int maxOptionScroll = std::max(0, static_cast<int>(optionRows.size()) - visibleOptionRows);
+        m_originalUnitsOptionScroll = std::clamp(m_originalUnitsOptionScroll, 0, maxOptionScroll);
+
+        for (int vr = 0; vr < visibleOptionRows; ++vr)
+        {
+            const int idx = m_originalUnitsOptionScroll + vr;
+            if (idx >= static_cast<int>(optionRows.size()))
+                break;
+            const auto& r = optionRows[static_cast<size_t>(idx)];
+            const int y = optionY + vr * optionRowH;
+            if (r.heading)
+            {
+                OriginalDrawSpellText(image, font, r.label, 423, y + 1, text, 129, true);
+                continue;
+            }
+
+            bool installed = false;
+            if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) && r.upgradeId >= 0)
+            {
+                const auto& owned = m_unitStates[m_unitsSelectedUnit].upgrades;
+                installed = std::find(owned.begin(), owned.end(), r.upgradeId) != owned.end();
+            }
+            const bool chosen = (r.upgradeId >= 0 && m_unitsSelectedUpgrade == r.upgradeId &&
+                m_unitsSelectedRearmUnitId <= 0) ||
+                (r.rearmUnitId >= 0 && m_unitsSelectedRearmUnitId == r.rearmUnitId);
+            OriginalDrawSpellText(image, font, r.label, 426, y + 1,
+                chosen ? yellow : (installed ? green : text), 123);
+        }
+
+        OriginalDrawScrollButton(image, 553, 6, true, maxOptionScroll > 0);
+        OriginalDrawScrollButton(image, 553, 259, false, maxOptionScroll > 0);
+        OriginalDrawScrollTrack(image, 553, 34, 225, m_originalUnitsOptionScroll,
+            maxOptionScroll, visibleOptionRows, static_cast<int>(optionRows.size()));
+
+        // -----------------------------------------------------------------
+        // LARGE LOWER INFO/ACTION PANEL
+        // -----------------------------------------------------------------
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
+        {
+            const auto& u = m_playerUnits[static_cast<size_t>(m_unitsSelectedUnit)];
+            hasCooldown = m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) &&
+                m_unitStates[m_unitsSelectedUnit].cooldown_turns > 0;
+
+            wxString unitName = GetUnitDisplayName(u.unit_id);
+            if (m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) &&
+                !m_unitStates[m_unitsSelectedUnit].custom_name.empty())
+                unitName = wxString::FromUTF8(m_unitStates[m_unitsSelectedUnit].custom_name);
+
+            OriginalDrawSpellText(image, font, unitName, 346, 296, text, 217);
+            OriginalDrawSpellText(image, font, wxString(L"Typ: ") + GetUnitDisplayName(u.unit_id), 362, 312, text, 137);
+
+            int maxHp = 100;
+            if (m_spellData && m_spellData->units)
+            {
+                if (auto* rec = m_spellData->units->GetUnit(u.unit_id))
+                    maxHp = std::max(1, rec->cnt);
+            }
+            const int curHp = std::clamp((maxHp * std::max(0, std::min(100, u.health)) + 50) / 100, 0, maxHp);
+            OriginalDrawSpellText(image, font, wxString::Format(L"Stav: %d (%d)", curHp, maxHp), 362, 327, text, 137);
+            const int lvl = m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) ?
+                m_unitStates[m_unitsSelectedUnit].level : 0;
+            const int xp = m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) ?
+                m_unitStates[m_unitsSelectedUnit].experience : 0;
+            OriginalDrawSpellText(image, font, wxString::Format(L"\u00DArove\u0148: %d", lvl), 362, 342, text, 137);
+            OriginalDrawSpellText(image, font, wxString::Format(L"Zku\u0161enost: %d", xp), 362, 357, text, 137);
+
+            // Original unit portrait/icon in the small gridded square.
+            if (m_spellData && m_spellData->units)
+            {
+                auto* rec = m_spellData->units->GetUnit(u.unit_id);
+                if (rec && rec->icon_glyph)
+                {
+                    wxBitmap* iconBmp = rec->icon_glyph->Render(56, 48);
+                    if (iconBmp && iconBmp->IsOk())
+                    {
+                        wxImage src = iconBmp->ConvertToImage();
+                        if (src.IsOk() && src.GetData())
+                        {
+                            unsigned char* dst = image.GetData();
+                            const unsigned char* sd = src.GetData();
+                            const unsigned char* sa = src.HasAlpha() ? src.GetAlpha() : nullptr;
+                            const int sw = src.GetWidth();
+                            const int sh = src.GetHeight();
+                            for (int sy = 0; sy < sh; ++sy)
+                                for (int sx = 0; sx < sw; ++sx)
+                                {
+                                    const size_t sp = static_cast<size_t>(sy) * sw + sx;
+                                    const unsigned char rr = sd[sp * 3u + 0];
+                                    const unsigned char gg = sd[sp * 3u + 1];
+                                    const unsigned char bb = sd[sp * 3u + 2];
+                                    if ((sa && sa[sp] == 0) || (!sa && rr < 12 && gg < 12 && bb < 12))
+                                        continue;
+                                    const int dx = 505 + sx;
+                                    const int dy = 299 + sy;
+                                    if (dx < 0 || dx >= image.GetWidth() || dy < 0 || dy >= image.GetHeight())
+                                        continue;
+                                    const size_t dp = (static_cast<size_t>(dy) * image.GetWidth() + dx) * 3u;
+                                    dst[dp + 0] = rr; dst[dp + 1] = gg; dst[dp + 2] = bb;
+                                }
+                        }
+                    }
+                    delete iconBmp;
+                }
+            }
+
+            if (m_unitsCurrentTab == UNITS_TAB_RECRUIT)
+            {
+                int q = (m_unitsSelectedUpgrade >= 0 && m_unitsSelectedUpgrade < RECRUIT_QUALITY_COUNT)
+                    ? m_unitsSelectedUpgrade : 1;
+                m_unitsSelectedUpgrade = q;
+                const wchar_t* labels[RECRUIT_QUALITY_COUNT] = {
+                    L"N\u00E1bor nov\u00E1\u010Dk\u016F", L"N\u00E1bor veter\u00E1n\u016F", L"N\u00E1bor elity"
+                };
+                for (int i = 0; i < RECRUIT_QUALITY_COUNT; ++i)
+                {
+                    const int y = 373 + i * 15;
+                    if (i == q)
+                        OriginalFillRect(image, 335, y - 2, 234, 15, selectedBand);
+                    OriginalDrawSpellText(image, font, labels[i], 336, y,
+                        i == q ? wxColour(35, 35, 35) : text, 232, true);
+                }
+                actionCost = GetRecruitCost(m_unitsSelectedUnit, q);
+                actionTime = GetRecruitTime(q);
+                actionEnabled = !hasCooldown && u.health < 100 && actionCost > 0 && m_money >= actionCost;
+            }
+            else if (m_unitsCurrentTab == UNITS_TAB_UPGRADE)
+            {
+                const bool hasUpgradeChoice = m_unitsSelectedUpgrade >= 0 && m_unitsSelectedRearmUnitId <= 0;
+                const bool hasRearmChoice = m_unitsSelectedRearmUnitId > 0;
+                if (hasUpgradeChoice)
+                {
+                    const auto it = m_upgradeDefs.find(m_unitsSelectedUpgrade);
+                    wxString label = (it != m_upgradeDefs.end() && !it->second.title.empty())
+                        ? it->second.title : wxString();
+                    if (label.empty())
+                        for (const auto& r : m_researchDb)
+                            if (r.data == m_unitsSelectedUpgrade && !r.title.empty()) { label = r.title; break; }
+                    if (label.empty()) label = wxString::Format(L"Vylep\u0161en\u00ED #%d", m_unitsSelectedUpgrade);
+                    OriginalFillRect(image, 335, 377, 234, 15, selectedBand);
+                    OriginalDrawSpellText(image, font, label, 336, 379, wxColour(35,35,35), 232, true);
+                    actionCost = GetTechUpgradeCost(m_unitsSelectedUpgrade);
+                    actionTime = GetTechUpgradeTime(m_unitsSelectedUpgrade);
+                    actionEnabled = !hasCooldown && m_money >= actionCost;
+                }
+                else if (hasRearmChoice)
+                {
+                    OriginalFillRect(image, 335, 377, 234, 15, selectedBand);
+                    OriginalDrawSpellText(image, font, wxString(L"Nov\u00FD typ: ") + GetUnitDisplayName(m_unitsSelectedRearmUnitId),
+                        336, 379, wxColour(35,35,35), 232, true);
+                    actionCost = GetUpgradeCost(u.unit_id, m_unitsSelectedRearmUnitId);
+                    actionTime = GetUpgradeTime(m_unitsSelectedRearmUnitId);
+                    actionEnabled = !hasCooldown && actionCost >= 0 && m_money >= actionCost;
+                }
+                else
+                {
+                    OriginalDrawSpellText(image, font, L"Vyber vylep\u0161en\u00ED nebo nov\u00FD typ", 336, 379, dim, 232, true);
+                }
+            }
+            else
+            {
+                // Info mode is deliberately quiet here; the upper list and the
+                // core stats above remain visible exactly like the original.
+                actionEnabled = false;
+            }
+
+            if (hasCooldown)
+                OriginalDrawSpellText(image, font,
+                    wxString::Format(L"Nedostupn\u00E1: %d kol", m_unitStates[m_unitsSelectedUnit].cooldown_turns),
+                    336, 416, warn, 232, true);
+        }
+        else
+        {
+            OriginalDrawSpellText(image, font, L"Vyber jednotku.", 336, 334, dim, 232, true);
+        }
+
+        auto drawUnitButton = [&](int x, int y, int w, int h, const wxString& caption, bool enabled)
+        {
+            OriginalFillRect(image, x, y, w, h, enabled ? buttonBg : buttonOff);
+            OriginalHLine(image, x, x + w - 1, y, enabled ? edgeHi : wxColour(57,61,54));
+            OriginalVLine(image, x, y, y + h - 1, enabled ? edgeHi : wxColour(57,61,54));
+            OriginalHLine(image, x, x + w - 1, y + h - 1, edgeLo);
+            OriginalVLine(image, x + w - 1, y, y + h - 1, edgeLo);
+            OriginalDrawSpellText(image, font, caption, x, OriginalCenteredTextY(font, y, h),
+                enabled ? green : dim, w, true);
+        };
+
+        const bool canDisband = m_unitsSelectedUnit >= 0 && !hasCooldown;
+        // Measured from the original 640x480 screenshot: the buttons are small
+        // plates INSIDE VMU_LST1, not 39-pixel-tall modern controls.
+        // Native lower controls.  The plate geometry is intentionally not
+        // centered using generic wx-like metrics: the DOS font sits high in
+        // these buttons.
+        drawUnitButton(342, 444, 73, 28, L"", canDisband);
+        OriginalDrawSpellText(image, font, L"Propustit", 351, 447,
+            canDisband ? green : dim, 63, false);
+        drawUnitButton(505, 444, 60, 28, L"", actionEnabled);
+        OriginalDrawSpellText(image, font, L"OK", 505, 448,
+            actionEnabled ? green : dim, 60, true);
+        OriginalDrawSpellText(image, font, L"\u010Cas:", 423, 438, text, 38);
+        const wxString actionTimeText = actionTime >= 0 ? wxString::Format(L"%d", actionTime) : wxString(L"-");
+        OriginalDrawSpellText(image, font, actionTimeText, 469, 438, text, 25);
+        OriginalDrawSpellText(image, font, L"Cena:", 423, 454, text, 38);
+        const wxString actionCostText = actionCost >= 0 ? wxString::Format(L"%d", actionCost) : wxString(L"-");
+        OriginalDrawSpellText(image, font, actionCostText, 469, 454, text, 25);
+
+        // Common status area.  The turn appears here AND on the end-turn plate,
+        // matching the original game.
+        OriginalDrawSpellText(image, font, L"Pen\u00EDze", 578, 17, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_money), 578, 31, text, 61, true);
+        OriginalDrawSpellText(image, font, L"V\u00FDzkum", 578, 47, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_research), 578, 61, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_turn), 578, 91, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%02d", m_turn), 579, 452, text, 60, true);
+    }
+
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Buy)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour text(150, 150, 150);
+        const wxColour green(4, 219, 4);
+        const wxColour yellow(231, 227, 5);
+        const wxColour selected(232, 48, 40);
+        const wxColour dim(77, 77, 77);
+        const wxColour listBg(32, 60, 20);
+        const wxColour listGrid(40, 77, 32);
+        const wxColour listFrame(77, 77, 77);
+        const wxColour buttonBg(13, 51, 10);
+        const wxColour buttonOff(22, 34, 20);
+        const wxColour edgeHi(38, 94, 33);
+        const wxColour edgeLo(3, 17, 3);
+
+        EnsureUnitCostsLoaded();
+
+        int maxUnits = 32;
+        int maxCommanders = 14;
+        GetOriginalBuyLimits(maxUnits, maxCommanders);
+
+        // -------------------------------------------------------------
+        // LEFT: permanent units. The native BUY screen has two columns of
+        // 16 slots, all visible at once, with a 19-pixel row pitch.
+        // -------------------------------------------------------------
+        std::vector<int> flatBuyUnits;
+        for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+            for (int inst = 0; inst < std::max(0, m_playerUnits[pIdx].count); ++inst)
+                flatBuyUnits.push_back(static_cast<int>(pIdx));
+
+        constexpr int buyRosterY = 10;
+        constexpr int buyRosterRowH = 19;
+        for (int slot = 0; slot < static_cast<int>(flatBuyUnits.size()) && slot < 32; ++slot)
+        {
+            const int pIdx = flatBuyUnits[static_cast<size_t>(slot)];
+            if (pIdx < 0 || pIdx >= static_cast<int>(m_playerUnits.size()))
+                continue;
+            const auto& u = m_playerUnits[static_cast<size_t>(pIdx)];
+            const int col = slot / 16;
+            const int row = slot % 16;
+            const int x = 31 + col * 152;
+            const int y = buyRosterY + row * buyRosterRowH;
+            const int ty = OriginalCenteredTextY(font, y, 17) + 1;
+            OriginalDrawSpellText(image, font, GetUnitDisplayName(u.unit_id), x, ty, text, 129);
+
+            const int hpBar = std::clamp((std::max(0, std::min(100, u.health)) * 26) / 100, 0, 26);
+            if (hpBar > 0)
+                OriginalHLine(image, 38 + col * 152, 38 + col * 152 + hpBar, y, green);
+
+            if (pIdx < static_cast<int>(m_unitStates.size()) && m_unitStates[pIdx].cooldown_turns > 0)
+                OriginalDrawSpellText(image, font,
+                    wxString::Format(L"%d", m_unitStates[pIdx].cooldown_turns),
+                    152 + col * 152, ty, green, 9, true);
+        }
+
+        // -------------------------------------------------------------
+        // LEFT BOTTOM: owned commanders, seven slots per column.
+        // -------------------------------------------------------------
+        auto originalRankAbbrev = [](int rank) -> wxString
+        {
+            static const wchar_t* names[] = {
+                L"por.", L"npor.", L"kpt.", L"mjr.", L"pplk.",
+                L"plk.", L"genmjr.", L"genpor.", L"armgen."
+            };
+            if (rank < 0 || rank >= static_cast<int>(sizeof(names) / sizeof(names[0])))
+                return wxString::Format(L"R%d", rank);
+            return wxString(names[rank]);
+        };
+
+        for (int slot = 0; slot < static_cast<int>(m_playerCommanders.size()) && slot < 14; ++slot)
+        {
+            const auto& commander = m_playerCommanders[static_cast<size_t>(slot)];
+            const int col = slot / 7;
+            const int row = slot % 7;
+            const int y = 331 + row * 19;
+            const int ty = OriginalCenteredTextY(font, y, 16) + 1;
+            const wxString label = originalRankAbbrev(commander.rank) + L" " + wxString::FromUTF8(commander.name);
+            OriginalDrawSpellText(image, font, label, 31 + col * 153, ty, text, 122);
+        }
+
+        // -------------------------------------------------------------
+        // UPPER RIGHT: original categorized purchase list.
+        // -------------------------------------------------------------
+        OriginalFillRect(image, 418, 6, 135, 281, listBg);
+        OriginalVLine(image, 416, 6, 286, listFrame);
+        OriginalVLine(image, 417, 6, 286, wxColour(40, 40, 34));
+        OriginalVLine(image, 553, 6, 286, listFrame);
+        OriginalHLine(image, 416, 574, 6, listFrame);
+        OriginalHLine(image, 416, 574, 286, listFrame);
+        for (int x = 420; x < 553; x += 18)
+            OriginalVLine(image, x, 8, 286, listGrid);
+        for (int y = 8; y < 287; y += 18)
+            OriginalHLine(image, 419, 552, y, listGrid);
+
+        const auto buyRows = BuildOriginalBuyRows();
+        bool selectedUnitPresent = false;
+        bool selectedCommanderPresent = false;
+        for (const auto& row : buyRows)
+        {
+            if (row.kind == OriginalBuyRowKind::Unit && row.id == m_originalBuySelectedUnitId)
+                selectedUnitPresent = true;
+            if (row.kind == OriginalBuyRowKind::Commander && row.id == m_originalBuySelectedCommander)
+                selectedCommanderPresent = true;
+        }
+        if (!selectedUnitPresent)
+            m_originalBuySelectedUnitId = -1;
+        if (!selectedCommanderPresent)
+            m_originalBuySelectedCommander = -1;
+
+        constexpr int buyListY = 10;
+        constexpr int buyListRowH = 14;
+        constexpr int buyVisibleRows = 20;
+        const int buyMaxScroll = std::max(0, static_cast<int>(buyRows.size()) - buyVisibleRows);
+        m_originalBuyListScroll = std::clamp(m_originalBuyListScroll, 0, buyMaxScroll);
+
+        for (int visible = 0; visible < buyVisibleRows; ++visible)
+        {
+            const int idx = m_originalBuyListScroll + visible;
+            if (idx >= static_cast<int>(buyRows.size()))
+                break;
+            const auto& row = buyRows[static_cast<size_t>(idx)];
+            if (row.kind == OriginalBuyRowKind::Spacer)
+                continue;
+            const int y = buyListY + visible * buyListRowH;
+            if (row.kind == OriginalBuyRowKind::Heading)
+            {
+                OriginalDrawSpellText(image, font, row.label, 420, y, yellow, 132, true);
+                continue;
+            }
+            const bool isSelected =
+                (row.kind == OriginalBuyRowKind::Unit && row.id == m_originalBuySelectedUnitId) ||
+                (row.kind == OriginalBuyRowKind::Commander && row.id == m_originalBuySelectedCommander);
+            OriginalDrawSpellText(image, font, row.label, 424, y,
+                isSelected ? selected : (row.enabled ? text : dim), 126);
+        }
+
+        OriginalDrawScrollButton(image, 553, 6, true, buyMaxScroll > 0);
+        OriginalDrawScrollButton(image, 553, 259, false, buyMaxScroll > 0);
+        OriginalDrawScrollTrack(image, 553, 34, 225, m_originalBuyListScroll,
+            buyMaxScroll, buyVisibleRows, static_cast<int>(buyRows.size()));
+
+        // -------------------------------------------------------------
+        // LOWER RIGHT: selected unit/commander information and purchase.
+        // -------------------------------------------------------------
+        int actionCost = -1;
+        int actionTime = -1;
+        bool actionEnabled = false;
+
+        if (m_originalBuySelectedUnitId >= 0 && m_spellData && m_spellData->units)
+        {
+            const int tid = m_originalBuySelectedUnitId;
+            if (auto* rec = m_spellData->units->GetUnit(tid))
+            {
+                OriginalDrawSpellText(image, font, GetUnitDisplayName(tid), 346, 296, text, 217);
+                OriginalDrawSpellText(image, font, L"\u00DAtok:", 369, 312, text, 126);
+                OriginalDrawSpellText(image, font, wxString::Format(L"Lehk\u00E9: %d", rec->attack_light), 385, 327, text, 112);
+                OriginalDrawSpellText(image, font, wxString::Format(L"T\u011B\u017Ek\u00E9: %d", rec->attack_armored), 385, 342, text, 112);
+                OriginalDrawSpellText(image, font, wxString::Format(L"Vzdu\u0161n\u00E9: %d", rec->attack_air), 385, 357, text, 112);
+                OriginalDrawSpellText(image, font, wxString::Format(L"Objekty: %d", rec->attack_objects), 385, 372, text, 112);
+                OriginalDrawSpellText(image, font, wxString::Format(L"Obrana: %d", rec->defence), 369, 387, text, 128);
+                OriginalDrawSpellText(image, font, wxString::Format(L"Dost\u0159el: %d", rec->fire_range), 369, 402, text, 128);
+                OriginalDrawSpellText(image, font, wxString::Format(L"Dohled: %d", rec->sdir), 369, 417, text, 128);
+
+                if (rec->icon_glyph)
+                {
+                    wxBitmap* iconBmp = rec->icon_glyph->Render(56, 48);
+                    if (iconBmp && iconBmp->IsOk())
+                    {
+                        wxImage src = iconBmp->ConvertToImage();
+                        if (src.IsOk() && src.GetData())
+                        {
+                            unsigned char* dst = image.GetData();
+                            const unsigned char* sd = src.GetData();
+                            const unsigned char* sa = src.HasAlpha() ? src.GetAlpha() : nullptr;
+                            const int sw = src.GetWidth();
+                            const int sh = src.GetHeight();
+                            for (int sy = 0; sy < sh; ++sy)
+                                for (int sx = 0; sx < sw; ++sx)
+                                {
+                                    const size_t sp = static_cast<size_t>(sy) * sw + sx;
+                                    const unsigned char rr = sd[sp * 3u + 0];
+                                    const unsigned char gg = sd[sp * 3u + 1];
+                                    const unsigned char bb = sd[sp * 3u + 2];
+                                    if ((sa && sa[sp] == 0) || (!sa && rr < 12 && gg < 12 && bb < 12))
+                                        continue;
+                                    const int dx = 505 + sx;
+                                    const int dy = 299 + sy;
+                                    if (dx < 0 || dx >= image.GetWidth() || dy < 0 || dy >= image.GetHeight())
+                                        continue;
+                                    const size_t dp = (static_cast<size_t>(dy) * image.GetWidth() + dx) * 3u;
+                                    dst[dp + 0] = rr; dst[dp + 1] = gg; dst[dp + 2] = bb;
+                                }
+                        }
+                    }
+                    delete iconBmp;
+                }
+            }
+
+            actionCost = GetUnitBuyCost(tid);
+            actionTime = 2;
+            int ownedUnits = 0;
+            for (const auto& u : m_playerUnits)
+                ownedUnits += std::max(0, u.count);
+            actionEnabled = actionCost > 0 && m_money >= actionCost && ownedUnits < maxUnits;
+        }
+        else if (m_originalBuySelectedCommander >= 0 &&
+                 m_originalBuySelectedCommander < static_cast<int>(m_availableCommanders.size()))
+        {
+            const auto& commander = m_availableCommanders[static_cast<size_t>(m_originalBuySelectedCommander)];
+            const wxString label = originalRankAbbrev(commander.rank) + L" " + wxString::FromUTF8(commander.name);
+            OriginalDrawSpellText(image, font, label, 346, 296, text, 217);
+            OriginalDrawSpellText(image, font, L"Velitel Aliance", 369, 322, text, 128);
+            actionCost = 0;
+            actionTime = 1;
+            actionEnabled = static_cast<int>(m_playerCommanders.size()) < maxCommanders;
+        }
+
+        auto drawBuyButton = [&](bool enabled)
+        {
+            constexpr int x = 496, y = 442, w = 69, h = 26;
+            OriginalFillRect(image, x, y, w, h, enabled ? buttonBg : buttonOff);
+            OriginalHLine(image, x, x + w - 1, y, enabled ? edgeHi : wxColour(57,61,54));
+            OriginalVLine(image, x, y, y + h - 1, enabled ? edgeHi : wxColour(57,61,54));
+            OriginalHLine(image, x, x + w - 1, y + h - 1, edgeLo);
+            OriginalVLine(image, x + w - 1, y, y + h - 1, edgeLo);
+            OriginalDrawSpellText(image, font, L"Koupit", x, 448,
+                enabled ? green : dim, w, true);
+        };
+        drawBuyButton(actionEnabled);
+
+        OriginalDrawSpellText(image, font, L"\u010Cas:", 423, 438, text, 38);
+        OriginalDrawSpellText(image, font,
+            actionTime >= 0 ? wxString::Format(L"%d", actionTime) : wxString(L"-"),
+            469, 438, text, 25);
+        OriginalDrawSpellText(image, font, L"Cena:", 423, 454, text, 38);
+        OriginalDrawSpellText(image, font,
+            actionCost >= 0 ? wxString::Format(L"%d", actionCost) : wxString(L"-"),
+            469, 454, text, 25);
+
+        // Common right-hand status and end-turn plate.
+        OriginalDrawSpellText(image, font, L"Pen\u00EDze", 578, 17, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_money), 578, 31, text, 61, true);
+        OriginalDrawSpellText(image, font, L"V\u00FDzkum", 578, 47, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_research), 578, 61, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", m_turn), 578, 91, text, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%02d", m_turn), 579, 452, text, 60, true);
+    }
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Research)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        const wxColour yellow(232, 232, 0);
+        const wxColour red(242, 48, 40);
+        const wxColour dim(126, 132, 118);
+        const wxColour done(76, 132, 76);
+        const wxColour progress(232, 74, 67);
+        EnsureResearchLoaded();
+
+        // The DOS VMR_FULL resource is only the metallic silhouette. The tall
+        // research browser on the right is a live CRT panel drawn/populated by
+        // the game. Stage 6 left that area black, which is why the restored
+        // research screen looked visibly broken. Recreate the native green
+        // grid/list frame before painting the dynamic rows.
+        const wxColour listBg(32, 74, 28);
+        const wxColour grid(42, 90, 38);
+        const wxColour frame(135, 132, 120);
+        constexpr int researchListX = 418;
+        constexpr int researchListY = 6;
+        constexpr int researchListW = 136;
+        constexpr int researchListH = 460;
+        OriginalFillRect(image, researchListX, researchListY, researchListW, researchListH, listBg);
+        OriginalVLine(image, researchListX - 2, researchListY, researchListY + researchListH - 1, frame);
+        OriginalVLine(image, researchListX - 1, researchListY, researchListY + researchListH - 1, wxColour(40, 40, 34));
+        OriginalVLine(image, researchListX + researchListW, researchListY, researchListY + researchListH - 1, frame);
+        OriginalHLine(image, researchListX - 2, 574, researchListY, frame);
+        OriginalHLine(image, researchListX - 2, 574, researchListY + researchListH - 1, frame);
+        for (int x = researchListX + 2; x < researchListX + researchListW; x += 18)
+            OriginalVLine(image, x, researchListY + 1, researchListY + researchListH - 2, grid);
+        for (int y = 8; y < researchListY + researchListH - 1; y += 18)
+            OriginalHLine(image, researchListX + 1, researchListX + researchListW - 1, y, grid);
+
+        auto groupLabel = [](const wxString& g) -> wxString {
+            if (g == "Global") return L"Globální";
+            if (g == "Technologies") return L"Technologie";
+            if (g == "Upgrades") return L"Vylepšení";
+            if (g == "Races") return L"Rasy a jednotky";
+            return g;
+        };
+        struct RRow { bool heading=false; int index=-1; wxString label; };
+        std::vector<RRow> rows;
+        wxString lastGroup;
+        for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+        {
+            const ResearchItem& it = m_researchDb[static_cast<size_t>(i)];
+            if (!IsResearchAvailable(it)) continue;
+            if (it.group != lastGroup)
+            {
+                lastGroup = it.group;
+                if (!lastGroup.empty()) rows.push_back({true, -1, groupLabel(lastGroup)});
+            }
+            rows.push_back({false, i, it.title});
+        }
+
+        constexpr int listX = 421, listY = 12, rowH = 14, visibleRows = 31;
+        const int maxScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
+        int selectedRow = -1;
+        for (int ri = 0; ri < static_cast<int>(rows.size()); ++ri)
+        {
+            if (!rows[static_cast<size_t>(ri)].heading && rows[static_cast<size_t>(ri)].index == m_researchBrowseIndex)
+            {
+                selectedRow = ri;
+                break;
+            }
+        }
+        m_originalResearchListScroll = std::clamp(m_originalResearchListScroll, 0, maxScroll);
+        if (selectedRow >= 0)
+        {
+            if (selectedRow < m_originalResearchListScroll)
+                m_originalResearchListScroll = selectedRow;
+            else if (selectedRow >= m_originalResearchListScroll + visibleRows)
+                m_originalResearchListScroll = selectedRow - visibleRows + 1;
+            m_originalResearchListScroll = std::clamp(m_originalResearchListScroll, 0, maxScroll);
+        }
+        for (int vr = 0; vr < visibleRows; ++vr)
+        {
+            const int ri = m_originalResearchListScroll + vr;
+            if (ri >= static_cast<int>(rows.size())) break;
+            const RRow& row = rows[static_cast<size_t>(ri)];
+            const int y = listY + vr * rowH;
+            if (row.heading)
+                OriginalDrawSpellText(image, font, row.label, listX, y, yellow, 130, true);
+            else
+            {
+                const bool selected = row.index == m_researchBrowseIndex;
+                const ResearchItem& rowItem = m_researchDb[static_cast<size_t>(row.index)];
+                const bool paused = (rowItem.id >= 0 &&
+                    m_researchProgressById.count(rowItem.id) > 0 &&
+                    m_researchProgressById.at(rowItem.id) > 0 &&
+                    row.index != m_researchActiveIndex);
+                // Original DOS UI marks a stopped project with a green bulb.
+                // We draw the small luminous marker separately so the item text
+                // keeps the original white/red selection colour.
+                if (paused)
+                {
+                    OriginalFillRect(image, listX + 1, y + 5, 4, 4, green);
+                    OriginalFillRect(image, listX + 2, y + 4, 2, 6, green);
+                }
+                OriginalDrawSpellText(image, font, row.label, listX + 7, y, selected ? red : text, 122);
+            }
+        }
+
+        if (m_researchActiveIndex >= 0 && m_researchActiveIndex < static_cast<int>(m_researchDb.size()))
+        {
+            const ResearchItem& active = m_researchDb[static_cast<size_t>(m_researchActiveIndex)];
+            OriginalDrawSpellText(image, font, active.title, 31, 8, text, 228, true);
+            const int cost = std::max(1, active.cost);
+            const int prog = m_researchProgressById.count(active.id) ? m_researchProgressById.at(active.id) : 0;
+            const int fill = std::clamp((prog * 266) / cost, 0, 266);
+            if (fill > 0) OriginalFillRect(image, 18, 42, fill, 13, progress);
+            // Keep the active project visible even while paused.  The current wx UI
+            // uses the same active target/progress state; pausing only stops spending
+            // research points and must not make the project disappear.
+            const wxString txt = active.brief.empty() ? active.info : active.brief;
+            const auto lines = OriginalWrapText(font, txt, 356, 9);
+            int y = 73;
+            for (const auto& line : lines) { OriginalDrawSpellText(image, font, line, 20, y, green, 365, true); y += 14; }
+        }
+
+        if (m_researchBrowseIndex >= 0 && m_researchBrowseIndex < static_cast<int>(m_researchDb.size()))
+        {
+            const ResearchItem& browse = m_researchDb[static_cast<size_t>(m_researchBrowseIndex)];
+            OriginalDrawSpellText(image, font, browse.title, 31, 236, text, 228, true);
+            const wxString txt = browse.info.empty() ? browse.brief : browse.info;
+            const auto lines = OriginalWrapText(font, txt, 356, 9);
+            int y = 286;
+            for (const auto& line : lines) { OriginalDrawSpellText(image, font, line, 20, y, green, 365, true); y += 14; }
+        }
+
+        // In the DOS screen the middle button is a STOP control for the currently
+        // running project; choosing/starting a project is confirmed with OK below.
+        const bool researchRunning = (m_researchAllocPerTurn > 0 &&
+            m_researchActiveIndex >= 0 && m_researchActiveIndex < static_cast<int>(m_researchDb.size()));
+        bool canConfirm = false;
+        if (!researchRunning && m_researchBrowseIndex >= 0 &&
+            m_researchBrowseIndex < static_cast<int>(m_researchDb.size()))
+        {
+            const ResearchItem& cand = m_researchDb[static_cast<size_t>(m_researchBrowseIndex)];
+            canConfirm = IsResearchAvailable(cand);
+        }
+        // COMMON.FS tooltip geometry: STOP 305,227,69x28; OK 305,438,69x28.
+        OriginalDrawActionButton(image, font, 305, 227, 69, 28, L"STOP", researchRunning);
+        OriginalDrawActionButton(image, font, 305, 438, 69, 28, L"OK", canConfirm);
+
+        OriginalDrawScrollButton(image, 553, 6, true, maxScroll > 0);
+        OriginalDrawScrollButton(image, 553, 426, false, maxScroll > 0);
+        OriginalDrawScrollTrack(image, 553, 34, 392, m_originalResearchListScroll, maxScroll,
+            visibleRows, static_cast<int>(rows.size()));
+        OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
+    }
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Info)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        const wxColour yellow(232, 232, 0);
+        const wxColour red(242, 48, 40);
+        const wxColour dim(92, 100, 88);
+        EnsureResearchLoaded();
+
+        auto groupLabel = [](const wxString& g) -> wxString {
+            if (g == "Global") return L"Globální";
+            if (g == "Technologies") return L"Technologie";
+            if (g == "Upgrades") return L"Vylepšení";
+            if (g == "Races") return L"Rasy a jednotky";
+            return g;
+        };
+        struct IRow { bool heading=false; int index=-1; wxString label; };
+        std::vector<IRow> rows;
+        wxString lastGroup;
+        for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+        {
+            const ResearchItem& it = m_researchDb[static_cast<size_t>(i)];
+            if (!IsInfoItemVisible(it)) continue;
+            if (it.group != lastGroup)
+            {
+                lastGroup = it.group;
+                if (!lastGroup.empty()) rows.push_back({true, -1, groupLabel(lastGroup)});
+            }
+            rows.push_back({false, i, it.title});
+        }
+        if (m_infoBrowseIndex < 0)
+            for (const auto& row : rows) if (!row.heading) { m_infoBrowseIndex = row.index; break; }
+
+        constexpr int listY = 12, rowH = 14, visibleRows = 31;
+        const int maxListScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
+        m_originalInfoListScroll = std::clamp(m_originalInfoListScroll, 0, maxListScroll);
+        for (int vr = 0; vr < visibleRows; ++vr)
+        {
+            const int ri = m_originalInfoListScroll + vr;
+            if (ri >= static_cast<int>(rows.size())) break;
+            const auto& row = rows[static_cast<size_t>(ri)];
+            const int y = listY + vr * rowH;
+            if (row.heading)
+                OriginalDrawSpellText(image, font, row.label, 421, y, yellow, 132, true);
+            else
+                OriginalDrawSpellText(image, font, row.label, 424, y,
+                    row.index == m_infoBrowseIndex ? red : text, 128);
+        }
+
+        wxString body;
+        if (m_infoBrowseIndex >= 0 && m_infoBrowseIndex < static_cast<int>(m_researchDb.size()))
+        {
+            const ResearchItem& cur = m_researchDb[static_cast<size_t>(m_infoBrowseIndex)];
+            body = cur.info.empty() ? cur.brief : cur.info;
+        }
+        auto allLines = OriginalWrapText(font, body, 374, 200);
+        constexpr int visibleTextLines = 29;
+        const int maxTextScroll = std::max(0, static_cast<int>(allLines.size()) - visibleTextLines);
+        m_originalInfoTextScroll = std::clamp(m_originalInfoTextScroll, 0, maxTextScroll);
+        int y = 17;
+        for (int i = 0; i < visibleTextLines; ++i)
+        {
+            const int li = m_originalInfoTextScroll + i;
+            if (li >= static_cast<int>(allLines.size())) break;
+            OriginalDrawSpellText(image, font, allLines[static_cast<size_t>(li)], 20, y, green, 378);
+            y += 14;
+        }
+        OriginalDrawSpellText(image, font, L"Dolů", 196, 444,
+            m_originalInfoTextScroll < maxTextScroll ? green : dim, 72, true);
+        OriginalDrawSpellText(image, font, L"Nahoru", 286, 444,
+            m_originalInfoTextScroll > 0 ? green : dim, 78, true);
+        OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
+    }
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Resources)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        const wxColour dark(8, 35, 9);
+        const wxColour border(0, 215, 0);
+
+        // Keep the restored screen and the working wx page on exactly the same
+        // strategic-point state.  This also migrates old Stage-6 saves on sight.
+        for (const auto& t : m_level.territories)
+        {
+            auto it = m_territoryResources.find(t.id);
+            if (it == m_territoryResources.end())
+            {
+                TerritoryResourceState st;
+                st.total = std::max(0, t.strategic_points_total);
+                st.remaining = st.total;
+                st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+                m_territoryResources[t.id] = st;
+            }
+            else
+            {
+                if (it->second.incomePerTurn <= 0 && t.strategic_points_per_turn > 0)
+                    it->second.incomePerTurn = t.strategic_points_per_turn;
+                if (it->second.total <= 0 && t.strategic_points_total > 0)
+                {
+                    it->second.total = t.strategic_points_total;
+                    it->second.remaining = it->second.total;
+                }
+                it->second.remaining = std::clamp(it->second.remaining, 0, std::max(0, it->second.total));
+            }
+        }
+        SetGlobalResearchAllocation(m_territoryResources[kResourcesMetaTerritoryId].researchCarry);
+
+        // FACTORY.LZ is composed at (3,8).  Its native strategic monitor starts
+        // at screen (96,18), exactly 379x259: the same dimensions as LEVEL_XX.CLK.
+        constexpr int mapX = 96, mapY = 18, mapW = 379, mapH = 259;
+        if (m_hasClk && m_clkW == mapW && m_clkH == mapH &&
+            m_clkValues.size() == static_cast<size_t>(mapW * mapH))
+        {
+            unsigned char* dst = image.GetData();
+            wxImage sourceMap;
+            if (m_bgBitmap.IsOk())
+            {
+                sourceMap = m_bgBitmap.ConvertToImage();
+                if (sourceMap.IsOk() && (sourceMap.GetWidth() != mapW || sourceMap.GetHeight() != mapH))
+                    sourceMap = sourceMap.Scale(mapW, mapH, wxIMAGE_QUALITY_NEAREST);
+            }
+            const unsigned char* srcMap = sourceMap.IsOk() ? sourceMap.GetData() : nullptr;
+            auto isOwned = [this](int tid) {
+                return std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end();
+            };
+
+            for (int py = 0; py < mapH; ++py)
+            {
+                for (int px = 0; px < mapW; ++px)
+                {
+                    const uint8_t raw = m_clkValues[static_cast<size_t>(py) * mapW + px];
+                    if (!raw) continue;
+                    const bool edge = raw >= 129;
+                    const int tid = edge ? static_cast<int>(raw) - 128 : static_cast<int>(raw);
+                    if (tid <= 0 || !isOwned(tid)) continue;
+
+                    const auto rs = m_territoryResources.find(tid);
+                    const bool depleted = rs != m_territoryResources.end() && rs->second.remaining <= 0;
+                    const bool selected = tid == m_selectedTerritory;
+                    unsigned char rr = selected ? 35 : (depleted ? 70 : 5);
+                    unsigned char gg = selected ? 245 : (depleted ? 86 : 180);
+                    unsigned char bb = selected ? 20 : (depleted ? 70 : 7);
+                    if (!edge && srcMap)
+                    {
+                        const size_t sp = (static_cast<size_t>(py) * mapW + px) * 3u;
+                        const int lum = (static_cast<int>(srcMap[sp+0]) + srcMap[sp+1] + srcMap[sp+2]) / 3;
+                        if (!depleted)
+                            gg = static_cast<unsigned char>(std::clamp(95 + lum, 105, selected ? 255 : 235));
+                    }
+                    if (edge) { rr = 1; gg = 22; bb = 1; }
+                    const int dx = mapX + px, dy = mapY + py;
+                    if (dx < 0 || dy < 0 || dx >= image.GetWidth() || dy >= image.GetHeight()) continue;
+                    const size_t dp = (static_cast<size_t>(dy) * image.GetWidth() + dx) * 3u;
+                    dst[dp+0] = rr; dst[dp+1] = gg; dst[dp+2] = bb;
+                }
+            }
+
+            // Original labels mean "SB per turn (turns remaining)".
+            for (int tid : m_ownedTerritories)
+            {
+                const auto c = m_territoryCentroids.find(tid);
+                const auto rs = m_territoryResources.find(tid);
+                if (tid <= 0 || c == m_territoryCentroids.end() || rs == m_territoryResources.end()) continue;
+                const TerritoryResourceState& st = rs->second;
+                if (st.incomePerTurn <= 0 || st.remaining <= 0) continue;
+                const int rounds = (st.remaining + st.incomePerTurn - 1) / st.incomePerTurn;
+                const wxString label = wxString::Format(L"%d (%d)", st.incomePerTurn, rounds);
+                const int tw = OriginalTextWidth(font, label) + 8;
+                const int bx = mapX + c->second.x - tw / 2;
+                const int by = mapY + c->second.y - 8;
+                OriginalFillRect(image, bx, by, tw, 17, dark);
+                OriginalHLine(image, bx, bx + tw - 1, by, border);
+                OriginalHLine(image, bx, bx + tw - 1, by + 16, border);
+                OriginalVLine(image, bx, by, by + 16, border);
+                OriginalVLine(image, bx + tw - 1, by, by + 16, border);
+                OriginalDrawSpellText(image, font, label, bx + 4, by + 3, text, tw - 8, true);
+            }
+        }
+
+        // The fourteen top cells show each owned territory's current SB yield;
+        // the centre box is the sum available for this strategic turn.
+        int slot = 0;
+        for (int tid : m_ownedTerritories)
+        {
+            const auto it = m_territoryResources.find(tid);
+            if (it == m_territoryResources.end() || slot >= 14) continue;
+            const int yield = std::min(std::max(0, it->second.incomePerTurn), std::max(0, it->second.remaining));
+            if (yield <= 0) continue;
+            OriginalDrawSpellText(image, font, wxString::Format(L"%d", yield),
+                83 + slot * 24, 302, text, 23, true);
+            ++slot;
+        }
+        const int totalIncome = GetCurrentStrategicPointIncome();
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", totalIncome), 278, 342, green, 55, true);
+
+        const int maxResearch = totalIncome / 3;
+        const int R = std::clamp(m_resourcesGlobalResearch, 0, maxResearch);
+        const int M = std::max(0, totalIncome - 3 * R);
+        OriginalDrawSpellText(image, font, L"Výzkum", 166, 397, green, 65, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", R), 166, 421, green, 65, true);
+        OriginalDrawSpellText(image, font, L"Peníze", 348, 397, green, 65, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", M), 348, 421, green, 65, true);
+
+        // FACTORY.LZ already contains the native arrow chrome.  Only fill the
+        // 60px centre allocation bar; Stage 6 painted a 92x23 rectangle over
+        // the arrows, which made the restored control look broken.
+        constexpr int meterX = 256, meterY = 419, meterW = 60, meterH = 14;
+        OriginalFillRect(image, meterX, meterY, meterW, meterH, wxColour(9, 65, 8));
+        if (maxResearch > 0 && R > 0)
+        {
+            const int fill = std::clamp((R * meterW) / maxResearch, 1, meterW);
+            OriginalFillRect(image, meterX, meterY, fill, meterH, wxColour(0, 200, 0));
+        }
+        OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
+    }
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Stats)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour text(218, 222, 211);
+        const wxColour green(0, 242, 0);
+        const wxColour dim(150, 150, 145);
+        auto value = [&](int v, int x, int y, int w) {
+            OriginalDrawSpellText(image, font, wxString::Format(L"%d", v), x, y, text, w, true);
+        };
+        OriginalDrawSpellText(image, font, L"Statistika celé hry", 145, 39, text, 325, true);
+        OriginalDrawSpellText(image, font, L"Aliance - ztráty", 217, 62, text, 133, true);
+        OriginalDrawSpellText(image, font, L"Other Side - ztráty", 351, 62, text, 138, true);
+        const std::array<wxString,4> labels = {L"Lehké j.", L"Těžké j.", L"Vzdušné j.", L"Velitelé"};
+        const std::array<int,4> ay = {m_lossStats.alliance_all.light, m_lossStats.alliance_all.heavy, m_lossStats.alliance_all.air, m_lossStats.alliance_all.commanders};
+        const std::array<int,4> ey = {m_lossStats.enemy_all.light, m_lossStats.enemy_all.heavy, m_lossStats.enemy_all.air, m_lossStats.enemy_all.commanders};
+        for (int r = 0; r < 4; ++r)
+        {
+            const int y = 85 + r * 25;
+            OriginalDrawSpellText(image, font, labels[static_cast<size_t>(r)], 138, y, text, 80);
+            value(ay[static_cast<size_t>(r)], 217, y, 133);
+            value(ey[static_cast<size_t>(r)], 351, y, 138);
+        }
+        OriginalDrawSpellText(image, font, L"Statistika aktuálního levelu", 145, 190, text, 325, true);
+        OriginalDrawSpellText(image, font, L"Aliance - ztráty", 217, 213, text, 133, true);
+        OriginalDrawSpellText(image, font, L"Other Side - ztráty", 351, 213, text, 138, true);
+        const std::array<int,4> al = {m_lossStats.alliance_level.light, m_lossStats.alliance_level.heavy, m_lossStats.alliance_level.air, m_lossStats.alliance_level.commanders};
+        const std::array<int,4> el = {m_lossStats.enemy_level.light, m_lossStats.enemy_level.heavy, m_lossStats.enemy_level.air, m_lossStats.enemy_level.commanders};
+        for (int r = 0; r < 4; ++r)
+        {
+            const int y = 235 + r * 25;
+            OriginalDrawSpellText(image, font, labels[static_cast<size_t>(r)], 138, y, text, 80);
+            value(al[static_cast<size_t>(r)], 217, y, 133);
+            value(el[static_cast<size_t>(r)], 351, y, 138);
+        }
+        auto rankCz = [](int rank) -> wxString {
+            switch (rank) {
+            case 0: return L"Poručík"; case 1: return L"Nadporučík"; case 2: return L"Kapitán";
+            case 3: return L"Major"; case 4: return L"Podplukovník"; case 5: return L"Plukovník";
+            case 6: return L"Generálmajor"; case 7: return L"Generálporučík"; case 8: return L"Armádní Generál";
+            default: return wxString::Format(L"Hodnost %d", rank);
+            }
+        };
+        int maxUnits = 0, maxCommanders = 0;
+        if (const CommanderRankRec* rr = FindRankRec(m_player.rank))
+        {
+            // HODNOSTI.DEF contains values above the engine's 32-unit roster
+            // ceiling for the two highest ranks; the original UI caps at 32.
+            maxUnits = std::clamp(rr->max_units, 0, 32);
+            maxCommanders = std::clamp(rr->max_commanders, 0, 14);
+        }
+        const int nextExp = FindNextRankExp(m_player.rank);
+        OriginalDrawSpellText(image, font, wxString(L"Hráč - ") + wxString::FromUTF8(m_player.name), 142, 361, text, 250);
+        OriginalDrawSpellText(image, font, L"Hodnost:", 157, 382, green, 77);
+        OriginalDrawSpellText(image, font, rankCz(m_player.rank), 220, 382, dim, 175);
+        OriginalDrawSpellText(image, font, L"Zkušenost:", 157, 400, green, 87);
+        OriginalDrawSpellText(image, font,
+            nextExp > m_player.experience ? wxString::Format(L"%d (%d)", m_player.experience, nextExp) : wxString::Format(L"%d (-)", m_player.experience),
+            226, 400, dim, 170);
+        OriginalDrawSpellText(image, font, L"Max. počet stálých jednotek:", 157, 418, green, 205);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", maxUnits), 354, 418, dim, 35);
+        OriginalDrawSpellText(image, font, L"Max. počet velitelů:", 157, 436, green, 170);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", maxCommanders), 326, 436, dim, 35);
+        OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
+    }
+
+    if (image.IsOk() && m_spellData->font &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Options)
+    {
+        SpellFont* font = m_spellData->font;
+        const wxColour green(0, 242, 0);
+        const wxColour dim(90, 112, 90);
+        const wxColour selected(255, 224, 24);
+
+        // OPTIONS.LZ contains the exact nine slot wells but leaves their
+        // labels/buttons dynamic. Keep the native 31px row pitch.
+        for (int i = 0; i < 9; ++i)
+        {
+            const int slot = i + 1;
+            const int y = 22 + i * 31;
+            const auto path = GetStrategicSaveSlotPath(m_level, slot);
+            std::error_code ec;
+            const bool exists = std::filesystem::exists(path, ec);
+            OriginalDrawActionButton(image, font, 20, y, 75, 27, L"Load", exists);
+            OriginalDrawActionButton(image, font, 490, y, 75, 27, L"Save", true);
+
+            wxString slotText = L"-= EMPTY =-";
+            if (exists)
+            {
+                int money = 0, rank = 0, xp = 0;
+                std::string ts;
+                if (PeekStrategicSaveSummary(path, money, rank, xp, ts))
+                {
+                    // ISO local timestamp -> compact DOS-style slot caption.
+                    // Example: 2026-09-29T21:48:10 -> 29092026 21:48
+                    if (ts.size() >= 16 && ts[4] == '-' && ts[7] == '-')
+                    {
+                        slotText = wxString::FromUTF8(
+                            (ts.substr(8,2) + ts.substr(5,2) + ts.substr(0,4) +
+                             " " + ts.substr(11,5)).c_str());
+                    }
+                    else if (!ts.empty())
+                        slotText = wxString::FromUTF8(ts);
+                    else
+                        slotText = wxString::Format(L"SLOT %02d", slot);
+                }
+            }
+            OriginalDrawSpellText(image, font, slotText, 115, y + 6,
+                exists ? green : dim, 355, true);
+        }
+
+        OriginalDrawSpellText(image, font, L"Gamma Correction", 28, 337, green, 178, true);
+        OriginalDrawSpellText(image, font, L"Music Volume", 28, 384, green, 178, true);
+        OriginalDrawSpellText(image, font, L"Sound Volume", 28, 429, green, 178, true);
+
+        // OPTIONS.LZ carries the metal plates but not their live +/- glyphs.
+        // Draw them at native pixels so they stay inside the recessed buttons.
+        const wxColour controlGlyph(174, 178, 168);
+        for (int cy : { 361, 408, 455 })
+        {
+            OriginalHLine(image, 32, 40, cy, controlGlyph);
+            OriginalHLine(image, 189, 197, cy, controlGlyph);
+            OriginalVLine(image, 193, cy - 4, cy + 4, controlGlyph);
+        }
+
+        OriginalDrawSpellText(image, font, L"War map resolution", 234, 345, green, 166, true);
+        const std::array<wxString,3> resolutions = { L"640x480", L"800x600", L"1024x768" };
+        for (int i = 0; i < 3; ++i)
+            OriginalDrawSpellText(image, font, resolutions[static_cast<size_t>(i)],
+                250, 363 + i * 15,
+                i == m_originalBattleResolution ? selected : green, 134, true);
+
+        // Native selection brackets visible in the reference OPTIONS screen.
+        const int resolutionY = 366 + std::clamp(m_originalBattleResolution, 0, 2) * 15;
+        OriginalVLine(image, 269, 355, resolutionY, green);
+        OriginalVLine(image, 359, 355, resolutionY, green);
+        OriginalHLine(image, 269, 282, resolutionY, green);
+        OriginalHLine(image, 346, 359, resolutionY, green);
+        OriginalSetPixel(image, 281, resolutionY - 1, green);
+        OriginalSetPixel(image, 281, resolutionY + 1, green);
+        OriginalSetPixel(image, 347, resolutionY - 1, green);
+        OriginalSetPixel(image, 347, resolutionY + 1, green);
+
+        OriginalDrawSpellText(image, font, L"Quick Help", 434, 345, green, 74, true);
+        OriginalDrawSpellText(image, font, L"On", 434, 367, m_originalQuickHelp ? selected : green, 74, true);
+        OriginalDrawSpellText(image, font, L"Off", 434, 383, !m_originalQuickHelp ? selected : green, 74, true);
+        const int helpY = m_originalQuickHelp ? 370 : 386;
+        OriginalVLine(image, 434, 356, helpY, green);
+        OriginalVLine(image, 507, 356, helpY, green);
+        OriginalHLine(image, 434, 455, helpY, green);
+        OriginalHLine(image, 486, 507, helpY, green);
+        OriginalSetPixel(image, 454, helpY - 1, green);
+        OriginalSetPixel(image, 454, helpY + 1, green);
+        OriginalSetPixel(image, 487, helpY - 1, green);
+        OriginalSetPixel(image, 487, helpY + 1, green);
+
+        OriginalDrawSpellText(image, font, L"Exit", 327, 447, green, 113, true);
+
+        OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
+    }
+
+    m_originalStrategicBitmap = image.IsOk() ? wxBitmap(image) : wxBitmap();
+    if (!m_originalStrategicBitmap.IsOk())
+        m_originalStrategicError = "Original UI: wxImage/wxBitmap creation failed after successful render.";
+    else
+        m_originalStrategicError.clear();
+
+    // Dynamic map markers (timeouts, final territory, counter-attacks). Reuse the
+    // already-tested game-state marker logic, but place it in original 640x480
+    // map coordinates. CLK centroids are native 379x259 map coordinates.
+    if (m_originalStrategicBitmap.IsOk() && m_gameModeEnabled &&
+        m_originalStrategicScreen == OriginalStrategicScreen::Map)
+    {
+        wxMemoryDC markerDc(m_originalStrategicBitmap);
+        for (const auto& t : m_level.territories)
+        {
+            if (t.id <= 0 || t.id >= static_cast<int>(m_visibleTerritory.size()) ||
+                m_visibleTerritory[t.id] == 0)
+                continue;
+
+            auto it = m_territoryCentroids.find(t.id);
+            if (it == m_territoryCentroids.end())
+                continue;
+
+            DrawTerritoryMarker(markerDc, t.id,
+                StrategicOriginalRenderer::kMapX + it->second.x,
+                StrategicOriginalRenderer::kMapY + it->second.y, 1.0);
+        }
+        markerDc.SelectObject(wxNullBitmap);
+    }
+
+    // Overlay the original strategic navigation glyphs. These are real VM_*.ICO
+    // resources; desaturation compensates for the editor's legacy strategy-pal
+    // loader and matches the grey DOS toolbar more closely.
+    if (m_originalStrategicBitmap.IsOk())
+    {
+        wxMemoryDC dc(m_originalStrategicBitmap);
+        const std::array<wxString, 9> icons = {
+            "strategic_map", "hierarchy", "units", "buy_sell", "research",
+            "info", "resources", "statistics", "options"
+        };
+        for (size_t i = 0; i < icons.size(); ++i)
+        {
+            wxBitmap icon = OriginalDesaturateBitmap(LoadMenuIcon(m_spellData, icons[i]));
+            if (!icon.IsOk())
+                continue;
+            const int slotX = 588;
+            const int slotY = kOriginalToolbarY0 + static_cast<int>(i) * kOriginalToolbarPitch;
+            const int x = slotX + (42 - icon.GetWidth()) / 2;
+            const int y = slotY + (25 - icon.GetHeight()) / 2;
+            dc.DrawBitmap(icon, x, y, true);
+        }
+
+        // Exact active-screen wedge measured from the native 640x480 DOS
+        // screenshots: x=591..596 and y=132 + slot*31 .. +5.  The old
+        // x=581 marker visibly leaked ten pixels into the screen content.
+        const int activeSlot = static_cast<int>(m_originalStrategicScreen);
+        if (activeSlot >= 0 && activeSlot < 9)
+        {
+            const int y = kOriginalToolbarY0 + activeSlot * kOriginalToolbarPitch;
+            wxPoint tri[3] = { wxPoint(591, y), wxPoint(597, y), wxPoint(591, y + 6) };
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.SetBrush(wxBrush(wxColour(245, 24, 16)));
+            dc.DrawPolygon(3, tri);
+        }
+        dc.SelectObject(wxNullBitmap);
+    }
+
+    m_originalStrategicDirty = false;
+    m_originalStrategicPanel->SetToolTip(m_originalStrategicError);
+    m_originalStrategicPanel->Refresh();
+}
+
+void StrategicLevelFrame::OnOriginalStrategicPaint(wxPaintEvent&)
+{
+    if (!m_originalStrategicPanel)
+        return;
+
+    if (m_originalStrategicDirty || !m_originalStrategicBitmap.IsOk())
+        RefreshOriginalStrategicView();
+
+    wxAutoBufferedPaintDC dc(m_originalStrategicPanel);
+    dc.SetBackground(*wxBLACK_BRUSH);
+    dc.Clear();
+    m_originalStrategicDrawRect = wxRect();
+
+    if (!m_originalStrategicBitmap.IsOk())
+    {
+        dc.SetTextForeground(*wxLIGHT_GREY);
+        dc.DrawText("Original strategic renderer could not build this screen.", 12, 12);
+        if (!m_originalStrategicError.empty())
+        {
+            dc.SetTextForeground(wxColour(255, 180, 90));
+            dc.DrawText(m_originalStrategicError, 12, 34);
+        }
+        dc.SetTextForeground(wxColour(150, 150, 150));
+        dc.DrawText("The Current UI remains available from Strategic UI -> Current UI.", 12, 58);
+        return;
+    }
+
+    const wxSize client = m_originalStrategicPanel->GetClientSize();
+    if (client.x <= 0 || client.y <= 0)
+        return;
+
+    // Prefer exact integer scaling (e.g. 1280x960 == 2x) so the DOS pixels
+    // remain crisp. Fractional scaling is used only when the window is smaller.
+    double scale = std::min(
+        static_cast<double>(client.x) / StrategicOriginalRenderer::kScreenW,
+        static_cast<double>(client.y) / StrategicOriginalRenderer::kScreenH);
+    if (scale >= 1.0)
+        scale = std::max(1.0, std::floor(scale));
+
+    const int drawW = std::max(1, static_cast<int>(std::lround(StrategicOriginalRenderer::kScreenW * scale)));
+    const int drawH = std::max(1, static_cast<int>(std::lround(StrategicOriginalRenderer::kScreenH * scale)));
+    const int drawX = (client.x - drawW) / 2;
+    const int drawY = (client.y - drawH) / 2;
+    m_originalStrategicDrawRect = wxRect(drawX, drawY, drawW, drawH);
+
+    wxBitmap drawBmp = m_originalStrategicBitmap;
+    if (drawW != StrategicOriginalRenderer::kScreenW || drawH != StrategicOriginalRenderer::kScreenH)
+        drawBmp = wxBitmap(m_originalStrategicBitmap.ConvertToImage().Scale(drawW, drawH, wxIMAGE_QUALITY_NEAREST));
+
+    if (drawBmp.IsOk())
+        dc.DrawBitmap(drawBmp, drawX, drawY, false);
+}
+
+void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
+{
+    if (!m_originalStrategicPanel || m_originalStrategicDrawRect.width <= 0 ||
+        m_originalStrategicDrawRect.height <= 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    const wxPoint p = ev.GetPosition();
+    if (!m_originalStrategicDrawRect.Contains(p))
+        return;
+
+    const int lx = static_cast<int>(
+        (static_cast<long long>(p.x - m_originalStrategicDrawRect.x) * StrategicOriginalRenderer::kScreenW) /
+        m_originalStrategicDrawRect.width);
+    const int ly = static_cast<int>(
+        (static_cast<long long>(p.y - m_originalStrategicDrawRect.y) * StrategicOriginalRenderer::kScreenH) /
+        m_originalStrategicDrawRect.height);
+
+    auto refreshRestored = [this]()
+    {
+        m_originalStrategicDirty = true;
+        if (m_originalStrategicPanel)
+            m_originalStrategicPanel->Refresh();
+    };
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Hierarchy)
+    {
+        // Lower-right turn panel remains live on every restored strategic page.
+        if (lx >= 578 && ly >= 420)
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_ENDTURN);
+            OnEndTurn(dummy);
+            refreshRestored();
+            return;
+        }
+
+        // Restored toolbar: map, hierarchy and unit management stay in the new
+        // renderer. Pages not yet restored still fall back to current UI.
+        if (lx >= kOriginalToolbarX0 && lx < kOriginalToolbarX1 &&
+            ly >= kOriginalToolbarY0 && ly < kOriginalToolbarY0 + kOriginalToolbarCount * kOriginalToolbarPitch)
+        {
+            const int slot = (ly - kOriginalToolbarY0) / kOriginalToolbarPitch;
+            if (slot >= 0 && slot < 9)
+            {
+                wxCommandEvent dummy(wxEVT_BUTTON, wxID_ANY);
+                switch (slot)
+                {
+                case 0:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Map;
+                    refreshRestored();
+                    return;
+                case 1:
+                    return;
+                case 2:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Units;
+                    if (m_unitsSelectedUnit < 0 && !m_playerUnits.empty())
+                        m_unitsSelectedUnit = 0;
+                    if (m_unitsCurrentTab == UNITS_TAB_RECRUIT &&
+                        (m_unitsSelectedUpgrade < 0 || m_unitsSelectedUpgrade >= RECRUIT_QUALITY_COUNT))
+                        m_unitsSelectedUpgrade = 1;
+                    refreshRestored();
+                    return;
+                case 3:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Buy;
+                    refreshRestored();
+                    return;
+                case 4:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Research;
+                    EnsureResearchLoaded();
+                    refreshRestored();
+                    return;
+                case 5:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Info;
+                    EnsureResearchLoaded();
+                    refreshRestored();
+                    return;
+                case 6:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Resources;
+                    refreshRestored();
+                    return;
+                case 7:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Stats;
+                    refreshRestored();
+                    return;
+                case 8:
+                    m_originalStrategicScreen = OriginalStrategicScreen::Options;
+                    refreshRestored();
+                    return;
+                default:
+                    break;
+                }
+            }
+        }
+
+        // Native hierarchy roster scrollbar. It scrolls the permanent-unit
+        // pool while commanders remain in their dedicated lower section.
+        if (lx >= 553 && lx < 575 && ((ly >= 6 && ly < 34) || (ly >= 404 && ly < 432)))
+        {
+            int totalUnitRows = 0;
+            for (const auto& u : m_playerUnits)
+                totalUnitRows += std::max(0, u.count);
+            const int maxScroll = std::max(0, totalUnitRows - 18);
+            if (maxScroll > 0)
+            {
+                const int delta = (ly < 34) ? -1 : 1;
+                m_originalHierarchyUnitScroll = std::clamp(
+                    m_originalHierarchyUnitScroll + delta, 0, maxScroll);
+                refreshRestored();
+            }
+            return;
+        }
+
+        // Original "Část" switch at the bottom of the hierarchy tree.
+        if (wxRect(323, 439, 72, 28).Contains(lx, ly))
+        {
+            m_originalHierarchyPage = (m_originalHierarchyPage == 1) ? 2 : 1;
+            refreshRestored();
+            return;
+        }
+
+        // Directly use the existing hierarchy model and chooser dialogs. This
+        // keeps both Current and Original views editing exactly the same data.
+        for (const auto& hs : OriginalHierarchySlotsForPage(m_originalHierarchyPage))
+        {
+            if (!hs.rect.Contains(lx, ly))
+                continue;
+            if (hs.commander)
+                ChooseCommanderForHierarchySlot(hs.id);
+            else
+                ChooseUnitForHierarchySlot(hs.id);
+            refreshRestored();
+            return;
+        }
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Units)
+    {
+        // End turn stays live on every restored strategic page.
+        if (lx >= 578 && ly >= 420)
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_ENDTURN);
+            OnEndTurn(dummy);
+            refreshRestored();
+            return;
+        }
+
+        // Common original toolbar. Map/Hierarchy/Units remain inside the restored
+        // renderer; later pages still use the current implementation until restored.
+        if (lx >= kOriginalToolbarX0 && lx < kOriginalToolbarX1 &&
+            ly >= kOriginalToolbarY0 && ly < kOriginalToolbarY0 + kOriginalToolbarCount * kOriginalToolbarPitch)
+        {
+            const int slot = (ly - kOriginalToolbarY0) / kOriginalToolbarPitch;
+            wxCommandEvent dummy(wxEVT_BUTTON, wxID_ANY);
+            switch (slot)
+            {
+            case 0:
+                m_originalStrategicScreen = OriginalStrategicScreen::Map;
+                refreshRestored();
+                return;
+            case 1:
+                m_originalStrategicScreen = OriginalStrategicScreen::Hierarchy;
+                refreshRestored();
+                return;
+            case 2:
+                return;
+            case 3:
+                m_originalStrategicScreen = OriginalStrategicScreen::Buy;
+                refreshRestored();
+                return;
+            case 4:
+                m_originalStrategicScreen = OriginalStrategicScreen::Research;
+                EnsureResearchLoaded();
+                refreshRestored();
+                return;
+            case 5:
+                m_originalStrategicScreen = OriginalStrategicScreen::Info;
+                EnsureResearchLoaded();
+                refreshRestored();
+                return;
+            case 6:
+                m_originalStrategicScreen = OriginalStrategicScreen::Resources;
+                refreshRestored();
+                return;
+            case 7:
+                m_originalStrategicScreen = OriginalStrategicScreen::Stats;
+                refreshRestored();
+                return;
+            case 8:
+                m_originalStrategicScreen = OriginalStrategicScreen::Options;
+                refreshRestored();
+                return;
+            default:
+                break;
+            }
+        }
+
+        // Expanded permanent-unit roster (16 original 19px rows).
+        if (lx >= 8 && lx <= 313 && ly >= 10 && ly < 10 + 16 * 19)
+        {
+            std::vector<int> flatUnits;
+            for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+                for (int inst = 0; inst < std::max(0, m_playerUnits[pIdx].count); ++inst)
+                    flatUnits.push_back(static_cast<int>(pIdx));
+            const int row = (ly - 10) / 19;
+            const int flat = m_originalUnitsRosterScroll + row;
+            if (flat >= 0 && flat < static_cast<int>(flatUnits.size()))
+            {
+                m_unitsSelectedUnit = flatUnits[static_cast<size_t>(flat)];
+                if (m_unitsCurrentTab == UNITS_TAB_RECRUIT &&
+                    (m_unitsSelectedUpgrade < 0 || m_unitsSelectedUpgrade >= RECRUIT_QUALITY_COUNT))
+                    m_unitsSelectedUpgrade = 1;
+                m_unitsSelectedRearmUnitId = -1;
+                m_originalUnitsOptionScroll = 0;
+                refreshRestored();
+            }
+            return;
+        }
+
+        // Original mode selector.
+        if (lx >= 333 && lx <= 413 && ly >= 228 && ly < 277)
+        {
+            if (ly < 245)
+            {
+                m_unitsCurrentTab = UNITS_TAB_UPGRADE;
+                m_unitsSelectedUpgrade = -1;
+                m_unitsSelectedRearmUnitId = -1;
+                m_originalUnitsOptionScroll = 0;
+            }
+            else if (ly < 260)
+            {
+                m_unitsCurrentTab = UNITS_TAB_RECRUIT;
+                m_unitsSelectedUpgrade = 1; // original's useful middle default: veterans
+                m_unitsSelectedRearmUnitId = -1;
+                m_originalUnitsOptionScroll = 0;
+            }
+            else
+            {
+                m_unitsCurrentTab = UNITS_TAB_INFO;
+                m_unitsSelectedUpgrade = -1;
+                m_unitsSelectedRearmUnitId = -1;
+                m_originalUnitsOptionScroll = 0;
+            }
+            refreshRestored();
+            return;
+        }
+
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
+        {
+            const auto& unit = m_playerUnits[static_cast<size_t>(m_unitsSelectedUnit)];
+
+            // Recruitment choices live in the lower info panel in the original.
+            if (m_unitsCurrentTab == UNITS_TAB_RECRUIT && lx >= 335 && lx <= 569 && ly >= 371 && ly < 416)
+            {
+                const int q = std::clamp((ly - 371) / 15, 0, RECRUIT_QUALITY_COUNT - 1);
+                m_unitsSelectedUpgrade = q;
+                m_unitsSelectedRearmUnitId = -1;
+                refreshRestored();
+                return;
+            }
+
+            // In Upgrade mode the upper-right grouped list is interactive.
+            if (m_unitsCurrentTab == UNITS_TAB_UPGRADE && lx >= 418 && lx < 553 && ly >= 8 && ly < 258)
+            {
+                EnsureUpgradeDefsLoaded();
+                EnsureResearchLoaded();
+                const auto upgrades = GetAvailableUpgradesForUnit(unit.unit_id);
+                const auto rearm = GetAvailableUnitTypesForUpgrade(unit.unit_id);
+                std::vector<std::pair<int,int>> targets; // upgradeId, rearmUnitId; {-1,-1}=heading
+                auto appendKind = [&](UpgradeDefRec::Kind kind)
+                {
+                    targets.push_back({-1,-1});
+                    for (int id : upgrades)
+                    {
+                        const auto it = m_upgradeDefs.find(id);
+                        if (it != m_upgradeDefs.end() && it->second.kind == kind)
+                            targets.push_back({id,-1});
+                    }
+                };
+                appendKind(UpgradeDefRec::Engine);
+                appendKind(UpgradeDefRec::Weapon);
+                appendKind(UpgradeDefRec::Armor);
+                if (!rearm.empty())
+                {
+                    targets.push_back({-1,-1});
+                    for (int id : rearm) targets.push_back({-1,id});
+                }
+                const int visible = std::max(1, (258 - 8) / 14);
+                const int maxScroll = std::max(0, static_cast<int>(targets.size()) - visible);
+                m_originalUnitsOptionScroll = std::clamp(m_originalUnitsOptionScroll, 0, maxScroll);
+                const int idx = m_originalUnitsOptionScroll + (ly - 8) / 14;
+                if (idx >= 0 && idx < static_cast<int>(targets.size()))
+                {
+                    const auto t = targets[static_cast<size_t>(idx)];
+                    if (t.first >= 0)
+                    {
+                        m_unitsSelectedUpgrade = t.first;
+                        m_unitsSelectedRearmUnitId = -1;
+                        refreshRestored();
+                    }
+                    else if (t.second >= 0)
+                    {
+                        m_unitsSelectedRearmUnitId = t.second;
+                        m_unitsSelectedUpgrade = -1;
+                        refreshRestored();
+                    }
+                }
+                return;
+            }
+        }
+
+        // Release unit.
+        if (wxRect(342, 444, 73, 28).Contains(lx, ly))
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_UNITS_ACTION);
+            OnUnitsDisband(dummy);
+            refreshRestored();
+            return;
+        }
+
+        // Confirm recruit / upgrade. Info mode is informational and keeps the page open.
+        if (wxRect(505, 444, 60, 28).Contains(lx, ly))
+        {
+            if (m_unitsCurrentTab != UNITS_TAB_INFO)
+            {
+                wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_UNITS_ACTION);
+                OnUnitsAction(dummy);
+            }
+            refreshRestored();
+            return;
+        }
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Buy)
+    {
+        // End turn remains active on the restored purchase page.
+        if (lx >= 578 && ly >= 420)
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_ENDTURN);
+            OnEndTurn(dummy);
+            refreshRestored();
+            return;
+        }
+
+        // Common strategic toolbar. The first four pages now stay entirely in
+        // the restored framebuffer; the remaining pages still use current UI.
+        if (lx >= kOriginalToolbarX0 && lx < kOriginalToolbarX1 &&
+            ly >= kOriginalToolbarY0 && ly < kOriginalToolbarY0 + kOriginalToolbarCount * kOriginalToolbarPitch)
+        {
+            const int slot = (ly - kOriginalToolbarY0) / kOriginalToolbarPitch;
+            wxCommandEvent dummy(wxEVT_BUTTON, wxID_ANY);
+            switch (slot)
+            {
+            case 0:
+                m_originalStrategicScreen = OriginalStrategicScreen::Map;
+                refreshRestored();
+                return;
+            case 1:
+                m_originalStrategicScreen = OriginalStrategicScreen::Hierarchy;
+                refreshRestored();
+                return;
+            case 2:
+                m_originalStrategicScreen = OriginalStrategicScreen::Units;
+                if (m_unitsSelectedUnit < 0 && !m_playerUnits.empty())
+                    m_unitsSelectedUnit = 0;
+                refreshRestored();
+                return;
+            case 3:
+                return;
+            case 4:
+                m_originalStrategicScreen = OriginalStrategicScreen::Research;
+                EnsureResearchLoaded();
+                refreshRestored();
+                return;
+            case 5:
+                m_originalStrategicScreen = OriginalStrategicScreen::Info;
+                EnsureResearchLoaded();
+                refreshRestored();
+                return;
+            case 6:
+                m_originalStrategicScreen = OriginalStrategicScreen::Resources;
+                refreshRestored();
+                return;
+            case 7:
+                m_originalStrategicScreen = OriginalStrategicScreen::Stats;
+                refreshRestored();
+                return;
+            case 8:
+                m_originalStrategicScreen = OriginalStrategicScreen::Options;
+                refreshRestored();
+                return;
+            default:
+                break;
+            }
+        }
+
+        const auto buyRows = BuildOriginalBuyRows();
+        constexpr int buyListY = 10;
+        constexpr int buyListRowH = 14;
+        constexpr int buyVisibleRows = 20;
+        const int buyMaxScroll = std::max(0, static_cast<int>(buyRows.size()) - buyVisibleRows);
+        m_originalBuyListScroll = std::clamp(m_originalBuyListScroll, 0, buyMaxScroll);
+
+        // Native upper-right list scrollbar buttons.
+        if (lx >= 553 && lx < 575 &&
+            ((ly >= 6 && ly < 34) || (ly >= 259 && ly < 287)))
+        {
+            if (buyMaxScroll > 0)
+            {
+                const int delta = (ly < 34) ? -1 : 1;
+                m_originalBuyListScroll = std::clamp(
+                    m_originalBuyListScroll + delta, 0, buyMaxScroll);
+                refreshRestored();
+            }
+            return;
+        }
+
+        // Select an available unit/commander. Headings and blank separators are
+        // deliberately inert just like the DOS list.
+        if (lx >= 418 && lx < 553 && ly >= buyListY && ly < 286)
+        {
+            const int visible = (ly - buyListY) / buyListRowH;
+            const int idx = m_originalBuyListScroll + visible;
+            if (visible >= 0 && visible < buyVisibleRows &&
+                idx >= 0 && idx < static_cast<int>(buyRows.size()))
+            {
+                const auto& row = buyRows[static_cast<size_t>(idx)];
+                if (row.kind == OriginalBuyRowKind::Unit)
+                {
+                    m_originalBuySelectedUnitId = row.id;
+                    m_originalBuySelectedCommander = -1;
+                    refreshRestored();
+                }
+                else if (row.kind == OriginalBuyRowKind::Commander)
+                {
+                    m_originalBuySelectedCommander = row.id;
+                    m_originalBuySelectedUnitId = -1;
+                    refreshRestored();
+                }
+            }
+            return;
+        }
+
+        // Native Koupit button.
+        if (wxRect(496, 442, 69, 26).Contains(lx, ly))
+        {
+            EnsureUnitCostsLoaded();
+            int maxUnits = 32;
+            int maxCommanders = 14;
+            GetOriginalBuyLimits(maxUnits, maxCommanders);
+
+            if (m_originalBuySelectedUnitId >= 0)
+            {
+                int ownedUnits = 0;
+                for (const auto& u : m_playerUnits)
+                    ownedUnits += std::max(0, u.count);
+                const int cost = GetUnitBuyCost(m_originalBuySelectedUnitId);
+                if (ownedUnits >= maxUnits || cost <= 0 || m_money < cost)
+                    return;
+
+                // Keep the per-roster state vector aligned even when the player
+                // reaches this page before ever opening Unit Management.
+                while (m_unitStates.size() < m_playerUnits.size())
+                {
+                    UnitInstanceState existingState;
+                    existingState.uid = m_nextRosterUid++;
+                    m_unitStates.push_back(existingState);
+                }
+
+                LevelData::PlayerUnitAdd add;
+                add.unit_id = m_originalBuySelectedUnitId;
+                add.count = 1;
+                add.health = 100;
+                add.extra = "-";
+                m_playerUnits.push_back(add);
+
+                // The original manual and BUY screen both use a two-turn delay
+                // for newly purchased permanent units.
+                UnitInstanceState state;
+                state.uid = m_nextRosterUid++;
+                state.cooldown_turns = 2;
+                m_unitStates.push_back(state);
+                if (!m_rosterRowUids.empty())
+                    m_rosterRowUids.push_back(state.uid);
+
+                m_money -= cost;
+            }
+            else if (m_originalBuySelectedCommander >= 0 &&
+                     m_originalBuySelectedCommander < static_cast<int>(m_availableCommanders.size()))
+            {
+                if (static_cast<int>(m_playerCommanders.size()) >= maxCommanders)
+                    return;
+                CommanderRec commander = m_availableCommanders[static_cast<size_t>(m_originalBuySelectedCommander)];
+                if (commander.uid == 0)
+                    commander.uid = m_nextCommanderUid++;
+                m_playerCommanders.push_back(std::move(commander));
+                m_availableCommanders.erase(
+                    m_availableCommanders.begin() + m_originalBuySelectedCommander);
+                m_originalBuySelectedCommander = -1;
+            }
+            else
+            {
+                return;
+            }
+
+            SaveStrategicState();
+            RefreshUI();
+            refreshRestored();
+            return;
+        }
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Research ||
+        m_originalStrategicScreen == OriginalStrategicScreen::Info ||
+        m_originalStrategicScreen == OriginalStrategicScreen::Resources ||
+        m_originalStrategicScreen == OriginalStrategicScreen::Stats ||
+        m_originalStrategicScreen == OriginalStrategicScreen::Options)
+    {
+        // End-turn plate is shared by every strategic page.
+        if (lx >= 578 && ly >= 420)
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_ENDTURN);
+            OnEndTurn(dummy);
+            refreshRestored();
+            return;
+        }
+
+        // Shared nine-button original toolbar. All nine strategic pages now
+        // remain inside the restored 640x480 renderer.
+        if (lx >= kOriginalToolbarX0 && lx < kOriginalToolbarX1 &&
+            ly >= kOriginalToolbarY0 && ly < kOriginalToolbarY0 + kOriginalToolbarCount * kOriginalToolbarPitch)
+        {
+            const int slot = (ly - kOriginalToolbarY0) / kOriginalToolbarPitch;
+            wxCommandEvent dummy(wxEVT_BUTTON, wxID_ANY);
+            switch (slot)
+            {
+            case 0: m_originalStrategicScreen = OriginalStrategicScreen::Map; break;
+            case 1: m_originalStrategicScreen = OriginalStrategicScreen::Hierarchy; break;
+            case 2:
+                m_originalStrategicScreen = OriginalStrategicScreen::Units;
+                if (m_unitsSelectedUnit < 0 && !m_playerUnits.empty()) m_unitsSelectedUnit = 0;
+                break;
+            case 3: m_originalStrategicScreen = OriginalStrategicScreen::Buy; break;
+            case 4: m_originalStrategicScreen = OriginalStrategicScreen::Research; EnsureResearchLoaded(); break;
+            case 5: m_originalStrategicScreen = OriginalStrategicScreen::Info; EnsureResearchLoaded(); break;
+            case 6: m_originalStrategicScreen = OriginalStrategicScreen::Resources; break;
+            case 7: m_originalStrategicScreen = OriginalStrategicScreen::Stats; break;
+            case 8: m_originalStrategicScreen = OriginalStrategicScreen::Options; break;
+            default: return;
+            }
+            refreshRestored();
+            return;
+        }
+
+        if (m_originalStrategicScreen == OriginalStrategicScreen::Research)
+        {
+            EnsureResearchLoaded();
+            struct Row { bool heading=false; int index=-1; };
+            std::vector<Row> rows;
+            wxString lastGroup;
+            for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+            {
+                const auto& it = m_researchDb[static_cast<size_t>(i)];
+                if (!IsResearchAvailable(it)) continue;
+                if (it.group != lastGroup)
+                {
+                    lastGroup = it.group;
+                    if (!lastGroup.empty()) rows.push_back({true, -1});
+                }
+                rows.push_back({false, i});
+            }
+            constexpr int rowY = 12, rowH = 14, visibleRows = 32;
+            if (lx >= 418 && lx < 553 && ly >= rowY && ly < rowY + visibleRows * rowH)
+            {
+                const int ri = m_originalResearchListScroll + (ly - rowY) / rowH;
+                if (ri >= 0 && ri < static_cast<int>(rows.size()) && !rows[static_cast<size_t>(ri)].heading)
+                {
+                    // Reuse the exact state transition used by the working wx UI.
+                    SelectResearchIndex(rows[static_cast<size_t>(ri)].index);
+                    refreshRestored();
+                }
+                return;
+            }
+            // Native upper-right list scrollbar buttons.
+            const int maxScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
+            if (lx >= 553 && lx < 575 && ((ly >= 6 && ly < 34) || (ly >= 426 && ly < 454)))
+            {
+                if (maxScroll > 0)
+                {
+                    const int delta = (ly < 34) ? -1 : 1;
+                    m_originalResearchListScroll = std::clamp(m_originalResearchListScroll + delta, 0, maxScroll);
+                    refreshRestored();
+                }
+                return;
+            }
+            if (wxRect(305, 227, 69, 28).Contains(lx, ly))
+            {
+                // Native STOP pauses the active project; OK below starts/resumes
+                // the currently browsed project through the shared backend.
+                if (m_researchAllocPerTurn > 0)
+                {
+                    m_researchAllocPerTurn = 0;
+                    RefreshResearchUI();
+                    SaveStrategicState();
+                }
+                refreshRestored();
+                return;
+            }
+            if (wxRect(305, 438, 69, 28).Contains(lx, ly))
+            {
+                // The original explicitly requires stopping the current project
+                // before another item can be started. While research is running
+                // the OK button is disabled/inert (as in the reference screen).
+                if (m_researchAllocPerTurn <= 0 && StartResearchIndex(m_researchBrowseIndex))
+                {
+                    RefreshResearchUI();
+                    SaveStrategicState();
+                }
+                refreshRestored();
+                return;
+            }
+            return;
+        }
+
+        if (m_originalStrategicScreen == OriginalStrategicScreen::Info)
+        {
+            EnsureResearchLoaded();
+            struct Row { bool heading=false; int index=-1; };
+            std::vector<Row> rows;
+            wxString lastGroup;
+            for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+            {
+                const auto& it = m_researchDb[static_cast<size_t>(i)];
+                if (!IsInfoItemVisible(it)) continue;
+                if (it.group != lastGroup)
+                {
+                    lastGroup = it.group;
+                    if (!lastGroup.empty()) rows.push_back({true, -1});
+                }
+                rows.push_back({false, i});
+            }
+            constexpr int rowY = 12, rowH = 14, visibleRows = 31;
+            if (lx >= 418 && lx < 553 && ly >= rowY && ly < rowY + visibleRows * rowH)
+            {
+                const int ri = m_originalInfoListScroll + (ly - rowY) / rowH;
+                if (ri >= 0 && ri < static_cast<int>(rows.size()) && !rows[static_cast<size_t>(ri)].heading)
+                {
+                    SelectInfoIndex(rows[static_cast<size_t>(ri)].index);
+                    m_originalInfoTextScroll = 0;
+                    refreshRestored();
+                }
+                return;
+            }
+            if (wxRect(190, 438, 82, 34).Contains(lx, ly))
+            {
+                m_originalInfoTextScroll += 3;
+                refreshRestored();
+                return;
+            }
+            if (wxRect(280, 438, 88, 34).Contains(lx, ly))
+            {
+                m_originalInfoTextScroll = std::max(0, m_originalInfoTextScroll - 3);
+                refreshRestored();
+                return;
+            }
+            return;
+        }
+
+        if (m_originalStrategicScreen == OriginalStrategicScreen::Resources)
+        {
+            // Native FACTORY.LZ controls.  The arrows occupy their original
+            // screen-space rectangles; they modify the desired research output
+            // by one point (i.e. three strategic points) and persist immediately.
+            if (wxRect(222, 419, 34, 28).Contains(lx, ly))
+            {
+                SetGlobalResearchAllocation(m_resourcesGlobalResearch - 1);
+                SaveStrategicState();
+                RefreshResourcesPage();
+                refreshRestored();
+                return;
+            }
+            if (wxRect(316, 419, 34, 28).Contains(lx, ly))
+            {
+                SetGlobalResearchAllocation(m_resourcesGlobalResearch + 1);
+                SaveStrategicState();
+                RefreshResourcesPage();
+                refreshRestored();
+                return;
+            }
+
+            // Direct clicks on the centre bar are supported as a convenience,
+            // but never steal clicks from the native arrows.
+            constexpr int meterX = 256, meterW = 60;
+            if (wxRect(meterX, 419, meterW, 28).Contains(lx, ly))
+            {
+                const int maxResearch = GetCurrentStrategicPointIncome() / 3;
+                const int rel = std::clamp(lx - meterX, 0, meterW - 1);
+                const int value = maxResearch > 0
+                    ? std::clamp((rel * maxResearch + (meterW - 1) / 2) / (meterW - 1), 0, maxResearch)
+                    : 0;
+                SetGlobalResearchAllocation(value);
+                SaveStrategicState();
+                RefreshResourcesPage();
+                refreshRestored();
+                return;
+            }
+
+            constexpr int mapX = 96, mapY = 18, mapW = 379, mapH = 259;
+            if (lx >= mapX && lx < mapX + mapW && ly >= mapY && ly < mapY + mapH &&
+                m_hasClk && m_clkW == mapW && m_clkH == mapH &&
+                m_clkValues.size() == static_cast<size_t>(mapW * mapH))
+            {
+                const int mx = lx - mapX, my = ly - mapY;
+                const uint8_t raw = m_clkValues[static_cast<size_t>(my) * mapW + mx];
+                const int tid = raw >= 129 ? static_cast<int>(raw) - 128 : static_cast<int>(raw);
+                if (tid > 0 && std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end())
+                {
+                    m_selectedTerritory = tid;
+                    RefreshResourcesPage();
+                    refreshRestored();
+                }
+            }
+            return;
+        }
+
+        if (m_originalStrategicScreen == OriginalStrategicScreen::Options)
+        {
+            // Nine native save rows (STROPT.QH: load 20,22,75,280;
+            // save 490,22,75,280). Gaps between the 27px buttons remain inert.
+            for (int i = 0; i < 9; ++i)
+            {
+                const int y = 22 + i * 31;
+                if (ly < y || ly >= y + 27)
+                    continue;
+                const int slot = i + 1;
+                if (lx >= 20 && lx < 95)
+                {
+                    LoadStrategicGameFromSlot(slot, false);
+                    refreshRestored();
+                    return;
+                }
+                if (lx >= 490 && lx < 565)
+                {
+                    SaveStrategicGameToSlot(slot, false);
+                    refreshRestored();
+                    return;
+                }
+            }
+
+            auto sliderPercentFromX = [](int x)
+            {
+                return std::clamp(((x - 47) * 100 + 65) / 130, 0, 100);
+            };
+            auto sliderHit = [&](int y0, int current, const std::function<void(int)>& apply) -> bool
+            {
+                if (ly < y0 || ly >= y0 + 41 || lx < 28 || lx >= 206)
+                    return false;
+                int value = current;
+                if (lx < 47) value = std::max(0, current - 5);
+                else if (lx >= 187) value = std::min(100, current + 5);
+                else value = sliderPercentFromX(lx);
+                apply(value);
+                refreshRestored();
+                return true;
+            };
+
+            SpellMap* spellMap = m_main ? m_main->GetSpellMap() : nullptr;
+            const int gammaPct = std::clamp(static_cast<int>(std::lround(
+                ((spellMap ? spellMap->GetGamma() : 1.3) - 0.5) * (100.0 / 1.5))), 0, 100);
+            if (sliderHit(333, gammaPct, [&](int p) {
+                if (spellMap) spellMap->SetGamma(0.5 + p * 0.015);
+            })) return;
+
+            const int musicPct = (m_spellData && m_spellData->midi)
+                ? std::clamp(static_cast<int>(std::lround(m_spellData->midi->GetVolume() * 100.0)), 0, 100) : 0;
+            if (sliderHit(380, musicPct, [&](int p) {
+                if (m_spellData && m_spellData->midi) m_spellData->midi->SetVolume(p / 100.0);
+            })) return;
+
+            const int soundPct = (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
+                ? std::clamp(static_cast<int>(std::lround(m_spellData->sounds->channels->GetVolume() * 100.0)), 0, 100) : 0;
+            if (sliderHit(425, soundPct, [&](int p) {
+                if (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
+                    m_spellData->sounds->channels->SetVolume(p / 100.0);
+            })) return;
+
+            if (wxRect(234, 339, 166, 76).Contains(lx, ly))
+            {
+                if (ly >= 358 && ly < 375) m_originalBattleResolution = 0;
+                else if (ly >= 375 && ly < 390) m_originalBattleResolution = 1;
+                else if (ly >= 390) m_originalBattleResolution = 2;
+                refreshRestored();
+                return;
+            }
+
+            if (wxRect(434, 336, 74, 77).Contains(lx, ly))
+            {
+                if (ly >= 360 && ly < 382) m_originalQuickHelp = true;
+                else if (ly >= 382) m_originalQuickHelp = false;
+                refreshRestored();
+                return;
+            }
+
+            if (wxRect(327, 435, 113, 41).Contains(lx, ly))
+            {
+                SaveStrategicState();
+                Close(true);
+                return;
+            }
+            return;
+        }
+
+        // Statistics is informational; toolbar and end-turn are its only controls.
+        return;
+    }
+
+    // Mission-unit controls in the original centre list.
+    if (lx >= 420 && lx <= 553 && ly >= 23 && ly < 39)
+    {
+        m_selectedUnitsForMission.clear();
+        for (uint32_t uid : m_rosterRowUids)
+            if (uid != 0 && !IsRosterUidOnCooldown(uid))
+                m_selectedUnitsForMission.insert(uid);
+        RefreshUI();
+        refreshRestored();
+        return;
+    }
+    if (lx >= 420 && lx <= 553 && ly >= 39 && ly < 56)
+    {
+        m_selectedUnitsForMission.clear();
+        m_selectedCommandersForMission.clear();
+        RefreshUI();
+        refreshRestored();
+        return;
+    }
+
+    // Click a visible unit row to toggle it for the next attack.
+    if (lx >= 420 && lx <= 553 && ly >= kOriginalUnitRowsY &&
+        ly < kOriginalUnitRowsY + kOriginalVisibleRows * kOriginalUnitRowH)
+    {
+        const int visibleRow = (ly - kOriginalUnitRowsY) / kOriginalUnitRowH;
+        const int flatRow = m_originalUnitScroll + visibleRow;
+        if (flatRow >= 0 && flatRow < static_cast<int>(m_rosterRowUids.size()))
+        {
+            const uint32_t uid = m_rosterRowUids[static_cast<size_t>(flatRow)];
+            if (uid && !IsRosterUidOnCooldown(uid))
+            {
+                if (m_selectedUnitsForMission.count(uid))
+                    m_selectedUnitsForMission.erase(uid);
+                else
+                    m_selectedUnitsForMission.insert(uid);
+                RefreshUI();
+                refreshRestored();
+            }
+        }
+        return;
+    }
+
+    // Attack / cancel.
+    if (ly >= kOriginalAttackY && ly < kOriginalAttackY + kOriginalButtonH)
+    {
+        if (lx >= kOriginalAttackX && lx < kOriginalAttackX + kOriginalButtonW)
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_LAUNCH);
+            OnLaunch(dummy);
+            return;
+        }
+        if (lx >= 496 && lx < 496 + kOriginalButtonW)
+        {
+            m_selectedUnitsForMission.clear();
+            m_selectedCommandersForMission.clear();
+            RefreshUI();
+            refreshRestored();
+            return;
+        }
+    }
+
+    // End turn panel in the lower-right corner.
+    if (lx >= 578 && ly >= 420)
+    {
+        wxCommandEvent dummy(wxEVT_BUTTON, ID_BTN_ENDTURN);
+        OnEndTurn(dummy);
+        refreshRestored();
+        return;
+    }
+
+    // Right-hand original toolbar. Map, hierarchy and unit management are now
+    // restored; later pages deliberately fall back to the current UI.
+    if (lx >= kOriginalToolbarX0 && lx < kOriginalToolbarX1 &&
+            ly >= kOriginalToolbarY0 && ly < kOriginalToolbarY0 + kOriginalToolbarCount * kOriginalToolbarPitch)
+    {
+        const int slot = (ly - kOriginalToolbarY0) / kOriginalToolbarPitch;
+        if (slot >= 0 && slot < 9)
+        {
+            wxCommandEvent dummy(wxEVT_BUTTON, wxID_ANY);
+            switch (slot)
+            {
+            case 0: // strategic map - already here
+                return;
+            case 1:
+                m_originalStrategicScreen = OriginalStrategicScreen::Hierarchy;
+                refreshRestored();
+                return;
+            case 2:
+                m_originalStrategicScreen = OriginalStrategicScreen::Units;
+                if (m_unitsSelectedUnit < 0 && !m_playerUnits.empty())
+                    m_unitsSelectedUnit = 0;
+                if (m_unitsCurrentTab == UNITS_TAB_RECRUIT &&
+                    (m_unitsSelectedUpgrade < 0 || m_unitsSelectedUpgrade >= RECRUIT_QUALITY_COUNT))
+                    m_unitsSelectedUpgrade = 1;
+                refreshRestored();
+                return;
+            case 3:
+                m_originalStrategicScreen = OriginalStrategicScreen::Buy;
+                refreshRestored();
+                return;
+            case 4:
+                m_originalStrategicScreen = OriginalStrategicScreen::Research;
+                EnsureResearchLoaded();
+                refreshRestored();
+                return;
+            case 5:
+                m_originalStrategicScreen = OriginalStrategicScreen::Info;
+                EnsureResearchLoaded();
+                refreshRestored();
+                return;
+            case 6:
+                m_originalStrategicScreen = OriginalStrategicScreen::Resources;
+                refreshRestored();
+                return;
+            case 7:
+                m_originalStrategicScreen = OriginalStrategicScreen::Stats;
+                refreshRestored();
+                return;
+            case 8:
+                m_originalStrategicScreen = OriginalStrategicScreen::Options;
+                refreshRestored();
+                return;
+            default:
+                break;
+            }
+        }
+    }
+
+    // Map territory hit-test via the original LEVEL_XX.CLK mask.
+    if (!m_hasClk || m_clkValues.empty())
+        return;
+
+    const int mx = lx - StrategicOriginalRenderer::kMapX;
+    const int my = ly - StrategicOriginalRenderer::kMapY;
+    if (mx < 0 || my < 0 || mx >= StrategicOriginalRenderer::kMapW || my >= StrategicOriginalRenderer::kMapH)
+        return;
+    if (m_clkW != StrategicOriginalRenderer::kMapW || m_clkH != StrategicOriginalRenderer::kMapH ||
+        static_cast<std::size_t>(m_clkW) * m_clkH != m_clkValues.size())
+        return;
+
+    const std::uint8_t raw = m_clkValues[static_cast<std::size_t>(my) * m_clkW + mx];
+    if (!raw)
+        return;
+    const int decoded = raw >= 129 ? static_cast<int>(raw) - 128 : static_cast<int>(raw);
+
+    int chosen = decoded;
+    bool direct = false;
+    for (const auto& t : m_level.territories)
+        if (t.id == chosen) { direct = true; break; }
+    if (!direct)
+    {
+        const std::size_t idx = decoded > 0 ? static_cast<std::size_t>(decoded - 1) : m_level.territories.size();
+        if (idx >= m_level.territories.size())
+            return;
+        chosen = m_level.territories[idx].id;
+    }
+
+    if (m_gameModeEnabled &&
+        (chosen <= 0 || chosen >= static_cast<int>(m_visibleTerritory.size()) || !m_visibleTerritory[chosen]))
+        return;
+
+    SelectTerritoryById(chosen);
+    refreshRestored();
+}
+
+void StrategicLevelFrame::OnOriginalStrategicRightDown(wxMouseEvent& ev)
+{
+    // The original Resources screen uses RMB on the allocation arrows for
+    // 10x stepping.  Keep RMB otherwise untouched so existing context/info
+    // behaviour elsewhere in the editor is not swallowed by the restored UI.
+    if (m_originalStrategicScreen != OriginalStrategicScreen::Resources ||
+        !m_originalStrategicPanel || m_originalStrategicDrawRect.width <= 0 ||
+        m_originalStrategicDrawRect.height <= 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    const wxPoint p = ev.GetPosition();
+    if (!m_originalStrategicDrawRect.Contains(p))
+    {
+        ev.Skip();
+        return;
+    }
+
+    const int lx = static_cast<int>(
+        (static_cast<long long>(p.x - m_originalStrategicDrawRect.x) * StrategicOriginalRenderer::kScreenW) /
+        m_originalStrategicDrawRect.width);
+    const int ly = static_cast<int>(
+        (static_cast<long long>(p.y - m_originalStrategicDrawRect.y) * StrategicOriginalRenderer::kScreenH) /
+        m_originalStrategicDrawRect.height);
+
+    int delta = 0;
+    if (wxRect(222, 419, 34, 28).Contains(lx, ly)) delta = -10;
+    if (wxRect(316, 419, 34, 28).Contains(lx, ly)) delta = +10;
+    if (delta == 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    SetGlobalResearchAllocation(m_resourcesGlobalResearch + delta);
+    SaveStrategicState();
+    RefreshResourcesPage();
+    m_originalStrategicDirty = true;
+    m_originalStrategicPanel->Refresh();
+}
+
+void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
+{
+    if (!m_originalStrategicPanel || m_originalStrategicDrawRect.width <= 0 ||
+        m_originalStrategicDrawRect.height <= 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    const wxPoint p = ev.GetPosition();
+    if (!m_originalStrategicDrawRect.Contains(p))
+    {
+        ev.Skip();
+        return;
+    }
+
+    const int lx = static_cast<int>(
+        (static_cast<long long>(p.x - m_originalStrategicDrawRect.x) * StrategicOriginalRenderer::kScreenW) /
+        m_originalStrategicDrawRect.width);
+    const int ly = static_cast<int>(
+        (static_cast<long long>(p.y - m_originalStrategicDrawRect.y) * StrategicOriginalRenderer::kScreenH) /
+        m_originalStrategicDrawRect.height);
+    const int rotation = ev.GetWheelRotation();
+    const int delta = ev.GetWheelDelta() ? ev.GetWheelDelta() : 120;
+    int steps = rotation / delta;
+    if (steps == 0)
+        steps = rotation > 0 ? 1 : -1;
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Hierarchy)
+    {
+        if (lx < 418 || lx >= 575 || ly < 6 || ly >= 426)
+        {
+            ev.Skip();
+            return;
+        }
+        int totalRows = 0;
+        for (const auto& u : m_playerUnits)
+            totalRows += std::max(0, u.count);
+        const int maxScroll = std::max(0, totalRows - 18);
+        if (maxScroll <= 0)
+            return;
+        m_originalHierarchyUnitScroll = std::clamp(
+            m_originalHierarchyUnitScroll - steps * 3, 0, maxScroll);
+        m_originalStrategicDirty = true;
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Units)
+    {
+        // Upper-right upgrade/re-arm list has its own original scrollbar.
+        if (lx >= 418 && lx < 575 && ly >= 6 && ly < 287 &&
+            m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
+        {
+            EnsureUpgradeDefsLoaded();
+            EnsureResearchLoaded();
+            const auto& u = m_playerUnits[static_cast<size_t>(m_unitsSelectedUnit)];
+            const auto upgrades = GetAvailableUpgradesForUnit(u.unit_id);
+            int rows = 3; // Motory, Zbrane, Obrana headings
+            for (int id : upgrades)
+            {
+                const auto it = m_upgradeDefs.find(id);
+                if (it != m_upgradeDefs.end() && it->second.kind != UpgradeDefRec::Unknown)
+                    ++rows;
+            }
+            if (m_unitsCurrentTab == UNITS_TAB_UPGRADE)
+            {
+                const auto rearm = GetAvailableUnitTypesForUpgrade(u.unit_id);
+                if (!rearm.empty()) rows += 1 + static_cast<int>(rearm.size());
+            }
+            const int visible = std::max(1, (258 - 8) / 14);
+            const int maxScroll = std::max(0, rows - visible);
+            if (maxScroll > 0)
+            {
+                m_originalUnitsOptionScroll = std::clamp(m_originalUnitsOptionScroll - steps * 3, 0, maxScroll);
+                m_originalStrategicDirty = true;
+                m_originalStrategicPanel->Refresh();
+            }
+            return;
+        }
+
+        if (lx < 6 || lx > 320 || ly < 8 || ly >= 312)
+        {
+            ev.Skip();
+            return;
+        }
+        int totalRows = 0;
+        for (const auto& u : m_playerUnits)
+            totalRows += std::max(0, u.count);
+        const int maxScroll = std::max(0, totalRows - 16);
+        if (maxScroll <= 0)
+            return;
+        m_originalUnitsRosterScroll = std::clamp(m_originalUnitsRosterScroll - steps * 3, 0, maxScroll);
+        m_originalStrategicDirty = true;
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Buy)
+    {
+        if (lx < 418 || lx >= 575 || ly < 6 || ly >= 287)
+        {
+            ev.Skip();
+            return;
+        }
+        const auto rows = BuildOriginalBuyRows();
+        constexpr int visibleRows = 20;
+        const int maxScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
+        if (maxScroll <= 0)
+            return;
+        m_originalBuyListScroll = std::clamp(
+            m_originalBuyListScroll - steps * 3, 0, maxScroll);
+        m_originalStrategicDirty = true;
+        m_originalStrategicPanel->Refresh();
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Research)
+    {
+        if (lx < 418 || lx >= 575 || ly < 6 || ly >= 426)
+        {
+            ev.Skip();
+            return;
+        }
+        EnsureResearchLoaded();
+        int rows = 0;
+        wxString lastGroup;
+        for (const auto& it : m_researchDb)
+        {
+            if (!IsResearchAvailable(it)) continue;
+            if (it.group != lastGroup) { lastGroup = it.group; if (!lastGroup.empty()) ++rows; }
+            ++rows;
+        }
+        const int maxScroll = std::max(0, rows - 32);
+        if (maxScroll > 0)
+        {
+            m_originalResearchListScroll = std::clamp(m_originalResearchListScroll - steps * 3, 0, maxScroll);
+            m_originalStrategicDirty = true;
+            m_originalStrategicPanel->Refresh();
+            return;
+        }
+        ev.Skip();
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Info)
+    {
+        EnsureResearchLoaded();
+        if (lx >= 418 && lx < 575 && ly >= 6 && ly < 446)
+        {
+            int rows = 0;
+            wxString lastGroup;
+            for (const auto& it : m_researchDb)
+            {
+                if (!IsInfoItemVisible(it)) continue;
+                if (it.group != lastGroup) { lastGroup = it.group; if (!lastGroup.empty()) ++rows; }
+                ++rows;
+            }
+            const int maxScroll = std::max(0, rows - 31);
+            if (maxScroll > 0)
+            {
+                m_originalInfoListScroll = std::clamp(m_originalInfoListScroll - steps * 3, 0, maxScroll);
+                m_originalStrategicDirty = true;
+                m_originalStrategicPanel->Refresh();
+            }
+            return;
+        }
+        if (lx >= 6 && lx < 412 && ly >= 8 && ly < 438 && m_spellData && m_spellData->font)
+        {
+            wxString body;
+            if (m_infoBrowseIndex >= 0 && m_infoBrowseIndex < static_cast<int>(m_researchDb.size()))
+            {
+                const auto& cur = m_researchDb[static_cast<size_t>(m_infoBrowseIndex)];
+                body = cur.info.empty() ? cur.brief : cur.info;
+            }
+            const auto lines = OriginalWrapText(m_spellData->font, body, 374, 200);
+            const int maxScroll = std::max(0, static_cast<int>(lines.size()) - 29);
+            if (maxScroll > 0)
+            {
+                m_originalInfoTextScroll = std::clamp(m_originalInfoTextScroll - steps * 3, 0, maxScroll);
+                m_originalStrategicDirty = true;
+                m_originalStrategicPanel->Refresh();
+            }
+            return;
+        }
+        ev.Skip();
+        return;
+    }
+
+    if (m_originalStrategicScreen == OriginalStrategicScreen::Resources ||
+        m_originalStrategicScreen == OriginalStrategicScreen::Stats ||
+        m_originalStrategicScreen == OriginalStrategicScreen::Options)
+    {
+        ev.Skip();
+        return;
+    }
+
+    if (m_originalStrategicScreen != OriginalStrategicScreen::Map ||
+        lx < 416 || lx > 574 || ly < 55 || ly > 432)
+    {
+        ev.Skip();
+        return;
+    }
+
+    const int totalRows = static_cast<int>(m_rosterRowUids.size());
+    const int maxScroll = std::max(0, totalRows - kOriginalVisibleRows);
+    if (maxScroll <= 0)
+        return;
+
+    m_originalUnitScroll = std::clamp(m_originalUnitScroll - steps * 3, 0, maxScroll);
+    m_originalStrategicDirty = true;
+    m_originalStrategicPanel->Refresh();
 }
 
 static std::string LevelKeyFromSourcePath(const std::string& src)
@@ -1700,6 +5276,193 @@ static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& out
     return true;
 }
 
+void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
+{
+    slot = std::clamp(slot, 1, 10);
+    const auto path = GetStrategicSaveSlotPath(m_level, slot);
+
+    ResearchPersistSaveView rsv;
+    rsv.activeId = m_researchActiveId;
+    rsv.activeIndex = m_researchActiveIndex;
+    rsv.allocPerTurn = m_researchAllocPerTurn;
+    rsv.progressById = &m_researchProgressById;
+    rsv.completed = &m_researchCompleted;
+    const ResearchPersistSaveView* prevR = g_researchPersistSave;
+    g_researchPersistSave = &rsv;
+
+    UnitStatePersistSaveView usv;
+    usv.states = &m_unitStates;
+    const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
+    g_unitStatePersistSave = &usv;
+
+    MissionFlowPersistSaveView mfsv;
+    mfsv.timeoutTurn = &m_territoryTimeoutTurn;
+    mfsv.triggeredEvents = &m_triggeredLevelEvents;
+    mfsv.activatedEvents = &m_activatedEvents;
+    mfsv.counterAttacks = &m_counterAttacks;
+    const MissionFlowPersistSaveView* prevMF = g_missionFlowPersistSave;
+    g_missionFlowPersistSave = &mfsv;
+
+    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
+        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        /*timestamp*/NowIsoLocal());
+
+    g_missionFlowPersistSave = prevMF;
+    g_unitStatePersistSave = prevU;
+    g_researchPersistSave = prevR;
+
+    m_originalStrategicDirty = true;
+    if (notify)
+        wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
+}
+
+void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
+{
+    slot = std::clamp(slot, 1, 10);
+    const auto path = GetStrategicSaveSlotPath(m_level, slot);
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+    {
+        if (notify)
+            wxMessageBox("This slot is empty.", "Load game", wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    std::string loaded_level_def;
+    std::string ts;
+
+    std::vector<UnitInstanceState> loadedUnitStates;
+    UnitStatePersistLoadView ulv;
+    ulv.states = &loadedUnitStates;
+    UnitStatePersistLoadView* prevUL = g_unitStatePersistLoad;
+    g_unitStatePersistLoad = &ulv;
+
+    MissionFlowPersistLoadView mflv;
+    mflv.timeoutTurn = &m_territoryTimeoutTurn;
+    mflv.triggeredEvents = &m_triggeredLevelEvents;
+    mflv.activatedEvents = &m_activatedEvents;
+    mflv.counterAttacks = &m_counterAttacks;
+    MissionFlowPersistLoadView* prevMFL = g_missionFlowPersistLoad;
+    g_missionFlowPersistLoad = &mflv;
+
+    if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
+        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
+        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
+        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        &loaded_level_def, &ts))
+    {
+        g_missionFlowPersistLoad = prevMFL;
+        g_unitStatePersistLoad = prevUL;
+        if (notify)
+            wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
+        return;
+    }
+    g_missionFlowPersistLoad = prevMFL;
+    g_unitStatePersistLoad = prevUL;
+    m_unitStates = std::move(loadedUnitStates);
+
+    if (GetMenuBar())
+    {
+        auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
+        if (item) item->Check(m_gameModeEnabled);
+    }
+
+    if (!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
+    {
+        if (!m_main)
+        {
+            if (notify)
+            {
+                wxString msg;
+                msg << L"This save belongs to a different level/DEF:\n\n";
+                msg << wxString::FromUTF8(loaded_level_def) << L"\n\n";
+                msg << L"Current level is:\n\n";
+                msg << wxString::FromUTF8(m_level.source_path) << L"\n";
+                wxMessageBox(msg, L"Load game", wxOK | wxICON_WARNING, this);
+            }
+            return;
+        }
+
+        LevelData lvl;
+        std::string err;
+        LevelLoader loader;
+        if (!loader.LoadLevelDef(loaded_level_def, lvl, &err))
+        {
+            if (notify)
+                wxMessageBox(L"Failed to load the level DEF from this save:\n" + wxString::FromUTF8(err),
+                    L"Load game", wxOK | wxICON_ERROR, this);
+            return;
+        }
+
+        int turn = 1, money = 0, research = 0, selTerr = -1;
+        PlayerProgress pl;
+        std::unordered_map<int, std::string> terrMission;
+        std::unordered_map<int, int> terrLaunch;
+        std::vector<LevelData::PlayerUnitAdd> units;
+        std::string def2, ts2;
+        std::vector<CommanderRec> playerCmds2;
+        std::vector<CommanderRec> availCmds2;
+        int windowStart2 = 1;
+        int genCount2 = 0;
+        bool gm2 = false;
+        std::vector<int> owned2;
+        std::unordered_map<int, TerritoryResourceState> terrRes;
+
+        std::vector<UnitInstanceState> loadedUnitStates2;
+        UnitStatePersistLoadView ulv2;
+        ulv2.states = &loadedUnitStates2;
+        UnitStatePersistLoadView* prevUL2 = g_unitStatePersistLoad;
+        g_unitStatePersistLoad = &ulv2;
+
+        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch,
+            units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2))
+        {
+            g_unitStatePersistLoad = prevUL2;
+            if (notify)
+                wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        g_unitStatePersistLoad = prevUL2;
+
+        auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
+        win->m_turn = turn;
+        win->m_money = money;
+        win->m_research = research;
+        win->m_selectedTerritory = selTerr;
+        win->m_player = pl;
+        win->m_territoryCurrentMission = std::move(terrMission);
+        win->m_territoryLaunchCount = std::move(terrLaunch);
+        win->m_playerUnits = std::move(units);
+        win->m_unitStates = std::move(loadedUnitStates2);
+        win->m_playerCommanders = std::move(playerCmds2);
+        win->m_availableCommanders = std::move(availCmds2);
+        win->m_cmdGenWindowStartTurn = windowStart2;
+        win->m_cmdGenCountInWindow = genCount2;
+        win->m_gameModeEnabled = gm2;
+        win->m_ownedTerritories = std::move(owned2);
+        win->TryLoadBackground();
+        win->RefreshUI();
+        win->SetOriginalStrategicUi(true);
+        if (win->m_selectedTerritory >= 0)
+            win->SelectTerritoryById(win->m_selectedTerritory);
+        win->Show();
+        win->Raise();
+        Close(true);
+        return;
+    }
+
+    TryLoadBackground();
+    CheckTimeouts();
+    if (m_selectedTerritory >= 0)
+        SelectTerritoryById(m_selectedTerritory);
+    RefreshUI();
+    m_originalStrategicDirty = true;
+    if (notify)
+        wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
+}
+
 void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
 {
     wxArrayString choices;
@@ -1751,12 +5514,21 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
     const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
     g_unitStatePersistSave = &usv;
 
+    MissionFlowPersistSaveView mfsv;
+    mfsv.timeoutTurn = &m_territoryTimeoutTurn;
+    mfsv.triggeredEvents = &m_triggeredLevelEvents;
+    mfsv.activatedEvents = &m_activatedEvents;
+    mfsv.counterAttacks = &m_counterAttacks;
+    const MissionFlowPersistSaveView* prevMF = g_missionFlowPersistSave;
+    g_missionFlowPersistSave = &mfsv;
+
     SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         /*timestamp*/NowIsoLocal());
 
+    g_missionFlowPersistSave = prevMF;
     g_unitStatePersistSave = prevU;
     g_researchPersistSave = prevR;
 
@@ -1817,16 +5589,26 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
     UnitStatePersistLoadView* prevUL = g_unitStatePersistLoad;
     g_unitStatePersistLoad = &ulv;
 
+    MissionFlowPersistLoadView mflv;
+    mflv.timeoutTurn = &m_territoryTimeoutTurn;
+    mflv.triggeredEvents = &m_triggeredLevelEvents;
+    mflv.activatedEvents = &m_activatedEvents;
+    mflv.counterAttacks = &m_counterAttacks;
+    MissionFlowPersistLoadView* prevMFL = g_missionFlowPersistLoad;
+    g_missionFlowPersistLoad = &mflv;
+
     if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         &loaded_level_def, &ts))
     {
+        g_missionFlowPersistLoad = prevMFL;
         g_unitStatePersistLoad = prevUL;
         wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
         return;
     }
+    g_missionFlowPersistLoad = prevMFL;
     g_unitStatePersistLoad = prevUL;
     m_unitStates = std::move(loadedUnitStates);
 
@@ -2185,6 +5967,175 @@ int StrategicLevelFrame::GetUnitBuyCost(int unit_id) const
     return it->second;
 }
 
+void StrategicLevelFrame::GetOriginalBuyLimits(int& maxUnits, int& maxCommanders)
+{
+    LoadRanksTable();
+
+    // Rank is derived from the two authoritative progress counters.  Older
+    // autosaves (and saves made by the pre-restoration wx buy page) can carry
+    // a stale rank field, which made the restored BUY page believe that every
+    // free slot was locked even though the campaign had already progressed.
+    RecomputePlayerRank();
+
+    maxUnits = 32;
+    maxCommanders = 14;
+    if (const CommanderRankRec* rank = FindRankRec(m_player.rank))
+    {
+        maxUnits = std::clamp(rank->max_units, 0, 32);
+        maxCommanders = std::clamp(rank->max_commanders, 0, 14);
+    }
+
+    // Compatibility for saves produced before the Original UI enforced the
+    // rank limits: never render already-owned permanent units/commanders as
+    // being outside the available roster.  Advance only to the smallest
+    // original rank capacity that can contain the existing roster; this does
+    // not grant a free extra slot when the roster is exactly at its valid cap.
+    int ownedUnits = 0;
+    for (const auto& u : m_playerUnits)
+        ownedUnits += std::max(0, u.count);
+    if (ownedUnits > maxUnits)
+    {
+        int compatible = 32;
+        for (const auto& r : m_ranks)
+        {
+            const int cap = std::clamp(r.max_units, 0, 32);
+            if (cap >= ownedUnits)
+                compatible = std::min(compatible, cap);
+        }
+        maxUnits = std::max(maxUnits, compatible);
+    }
+
+    const int ownedCommanders = static_cast<int>(m_playerCommanders.size());
+    if (ownedCommanders > maxCommanders)
+    {
+        int compatible = 14;
+        for (const auto& r : m_ranks)
+        {
+            const int cap = std::clamp(r.max_commanders, 0, 14);
+            if (cap >= ownedCommanders)
+                compatible = std::min(compatible, cap);
+        }
+        maxCommanders = std::max(maxCommanders, compatible);
+    }
+}
+
+std::vector<StrategicLevelFrame::OriginalBuyRow> StrategicLevelFrame::BuildOriginalBuyRows()
+{
+    EnsureResearchLoaded();
+    EnsureUnitCostsLoaded();
+
+    int maxUnits = 32;
+    int maxCommanders = 14;
+    GetOriginalBuyLimits(maxUnits, maxCommanders);
+
+    int ownedUnits = 0;
+    for (const auto& u : m_playerUnits)
+        ownedUnits += std::max(0, u.count);
+    const bool unitSlotAvailable = ownedUnits < maxUnits;
+    const bool commanderSlotAvailable = static_cast<int>(m_playerCommanders.size()) < maxCommanders;
+
+    struct Group
+    {
+        const wchar_t* title;
+        std::vector<OriginalBuyRow> rows;
+    };
+    std::array<Group, 7> groups = {{
+        { L"P\u011Bchota", {} },
+        { L"Tanky", {} },
+        { L"D\u011Blost\u0159electvo", {} },
+        { L"Transport\u00E9ry", {} },
+        { L"Radary", {} },
+        { L"Protivzdu\u0161n\u00E1", {} },
+        { L"Ostatn\u00ED", {} }
+    }};
+
+    if (m_spellData && m_spellData->units)
+    {
+        for (const auto* unit : m_spellData->units->GetUnits())
+        {
+            if (!unit)
+                continue;
+            const int tid = unit->type_id;
+            const int cost = GetUnitBuyCost(tid);
+            if (cost <= 0)
+                continue;
+
+            // The original buy list only exposes technology which has become
+            // available on this strategic level.
+            if (m_gameModeEnabled && !IsCampaignUnitUnlocked(tid))
+                continue;
+
+            std::string category;
+            if (auto it = m_unitCategories.find(tid); it != m_unitCategories.end())
+                category = it->second;
+
+            int group = -1;
+            if (tid == 30 || tid == 31)
+                group = 4; // the two Universal/Radar variants are a native group
+            else if (category == "Infantry")
+                group = 0;
+            else if (category == "Tanks")
+                group = 1;
+            else if (category == "Artillery")
+                group = 2;
+            else if (category == "Transporters")
+                group = 3;
+            else if (category == "AA units" || category == "Aerial guns")
+                group = 5;
+            else if (category == "Other")
+                group = 6;
+            else
+                continue; // Other Side and scenario-only units are not purchasable here.
+
+            OriginalBuyRow row;
+            row.kind = OriginalBuyRowKind::Unit;
+            row.label = GetUnitDisplayName(tid);
+            row.id = tid;
+            row.enabled = unitSlotAvailable && m_money >= cost;
+            groups[static_cast<size_t>(group)].rows.push_back(std::move(row));
+        }
+    }
+
+    std::vector<OriginalBuyRow> result;
+    for (const auto& group : groups)
+    {
+        if (group.rows.empty())
+            continue;
+        result.push_back({ OriginalBuyRowKind::Heading, wxString(group.title), -1, true });
+        result.insert(result.end(), group.rows.begin(), group.rows.end());
+        result.push_back({ OriginalBuyRowKind::Spacer, wxString(), -1, false });
+    }
+
+    if (!m_availableCommanders.empty())
+    {
+        result.push_back({ OriginalBuyRowKind::Heading, L"Velitel\u00E9", -1, true });
+        auto rankAbbrev = [](int rank) -> wxString
+        {
+            static const wchar_t* names[] = {
+                L"por.", L"npor.", L"kpt.", L"mjr.", L"pplk.",
+                L"plk.", L"genmjr.", L"genpor.", L"armgen."
+            };
+            if (rank < 0 || rank >= static_cast<int>(sizeof(names) / sizeof(names[0])))
+                return wxString::Format(L"R%d", rank);
+            return wxString(names[rank]);
+        };
+        for (int i = 0; i < static_cast<int>(m_availableCommanders.size()); ++i)
+        {
+            const auto& commander = m_availableCommanders[static_cast<size_t>(i)];
+            OriginalBuyRow row;
+            row.kind = OriginalBuyRowKind::Commander;
+            row.label = rankAbbrev(commander.rank) + L" " + wxString::FromUTF8(commander.name);
+            row.id = i;
+            row.enabled = commanderSlotAvailable;
+            result.push_back(std::move(row));
+        }
+    }
+
+    while (!result.empty() && result.back().kind == OriginalBuyRowKind::Spacer)
+        result.pop_back();
+    return result;
+}
+
 bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
 {
     if (m_upgradeDefsLoaded)
@@ -2287,12 +6238,22 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
         static const std::regex rxPrice(R"(UpgradePrice\s*\(\s*(\d+)\s*\))");
         static const std::regex rxTime(R"(UpgradeTime\s*\(\s*(\d+)\s*\))");
         static const std::regex rxTypes(R"(SuitableTypes\s*\(\s*([^)]+)\s*\))");
+        static const std::regex rxFlags(R"(Flags\s*\(\s*(\w+)\s*\))");
 
         if (std::regex_search(line, m, rxPrice))
             cur.price = std::stoi(m[1].str());
 
         if (std::regex_search(line, m, rxTime))
             cur.time = std::stoi(m[1].str());
+
+        if (std::regex_search(line, m, rxFlags))
+        {
+            const std::string kind = m[1].str();
+            if (kind == "Engine") cur.kind = UpgradeDefRec::Engine;
+            else if (kind == "Weapon") cur.kind = UpgradeDefRec::Weapon;
+            else if (kind == "Armor") cur.kind = UpgradeDefRec::Armor;
+            else cur.kind = UpgradeDefRec::Unknown;
+        }
 
         if (std::regex_search(line, m, rxTypes))
         {
@@ -2315,6 +6276,28 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
         }
     }
 
+    // Original upgrade display names are line-indexed by upgrade id.  Prefer
+    // the Czech table because the restored UI uses the original CP895 font.
+    for (const char* titleFile : { "UPGRADES.CZ", "UPGRADES.ENG" })
+    {
+        const fs::path tp = defPath.parent_path() / titleFile;
+        std::ifstream tf(tp, std::ios::binary);
+        if (!tf)
+            continue;
+        std::string line;
+        int idx = 0;
+        while (std::getline(tf, line))
+        {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            while (!line.empty() && static_cast<unsigned char>(line.back()) < 0x20) line.pop_back();
+            auto it = m_upgradeDefs.find(idx);
+            if (it != m_upgradeDefs.end() && !line.empty())
+                it->second.title = wxString(char2wstringCP895(line.c_str()));
+            ++idx;
+        }
+        break;
+    }
+
     m_upgradeDefsLoaded = true;
     return !m_upgradeDefs.empty();
 }
@@ -2322,7 +6305,8 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
 
 void StrategicLevelFrame::BuildUI()
 {
-    auto* root = new wxPanel(this);
+    m_rootPanel = new wxPanel(this);
+    auto* root = m_rootPanel;
     m_palette.text = wxColour(0x82, 0xA7, 0x82);
     m_palette.heading = wxColour(0xFF, 0xF6, 0x04);
     m_palette.background = wxColour(0x11, 0x30, 0x09);
@@ -2871,6 +6855,22 @@ void StrategicLevelFrame::BuildUI()
     BuildUnitsPage();
     rootSizer->Add(m_unitsMainPanel, 1, wxEXPAND);
 
+    // Alternate original/restored UI branch: one self-contained paint surface,
+    // completely outside the old strategic page hierarchy.
+    m_originalStrategicPanel = new wxPanel(root);
+    m_originalStrategicPanel->SetBackgroundColour(*wxBLACK);
+    m_originalStrategicPanel->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_originalStrategicPanel->Bind(wxEVT_PAINT, &StrategicLevelFrame::OnOriginalStrategicPaint, this);
+    m_originalStrategicPanel->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnOriginalStrategicLeftDown, this);
+    m_originalStrategicPanel->Bind(wxEVT_RIGHT_DOWN, &StrategicLevelFrame::OnOriginalStrategicRightDown, this);
+    m_originalStrategicPanel->Bind(wxEVT_MOUSEWHEEL, &StrategicLevelFrame::OnOriginalStrategicMouseWheel, this);
+    m_originalStrategicPanel->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev) {
+        ev.Skip();
+        if (m_originalStrategicPanel) m_originalStrategicPanel->Refresh();
+    });
+    m_originalStrategicPanel->Show(false);
+    rootSizer->Add(m_originalStrategicPanel, 1, wxEXPAND);
+
     root->SetSizer(rootSizer);
     //použije rekurzivně transparentní pozadí na všechny elementy wx - opatrně!
     //MakeChildrenTransparentRecursive(root);
@@ -3277,6 +7277,7 @@ void StrategicLevelFrame::RefreshBuyRosters()
 
 void StrategicLevelFrame::RefreshBuyShopList()
 {
+    EnsureResearchLoaded();
     EnsureUnitCostsLoaded();
     if (!m_buyShopList) return;
 
@@ -3311,10 +7312,8 @@ void StrategicLevelFrame::RefreshBuyShopList()
                 if (cost <= 0) continue;
 
                 // Game mode filter
-                if (m_gameModeEnabled && !m_levelResearchFlags.empty()) {
-                    if (m_levelResearchFlags.count(unit->type_id) == 0)
-                        continue;
-                }
+                if (m_gameModeEnabled && !IsCampaignUnitUnlocked(unit->type_id))
+                    continue;
 
                 std::string cat = "Other";
                 auto it = m_unitCategories.find(unit->type_id);
@@ -4217,19 +8216,25 @@ void StrategicLevelFrame::RefreshUnitsShopList()
                 {
                     int upgId = itemUpgrades[i];
                     wxString upgName = wxString::Format("Upgrade #%d", upgId);
-                    for (const auto& r : m_researchDb) {
-                        if (r.id == upgId) { upgName = r.title; break; }
-                    }
+                    const auto defIt = m_upgradeDefs.find(upgId);
+                    if (defIt != m_upgradeDefs.end() && !defIt->second.title.empty())
+                        upgName = defIt->second.title;
+                    else
+                        for (const auto& r : m_researchDb)
+                            if (r.data == upgId) { upgName = r.title; break; }
                     long idx = m_unitsShopList->InsertItem((long)i, upgName);
                     m_unitsShopList->SetItemData(idx, (long)upgId);
                 }
 
                 // If a tech upgrade is selected, reflect it in the header.
-                if (m_unitsSelectedUpgrade > 0 && m_unitsUpgradeValue)
+                if (m_unitsSelectedUpgrade >= 0 && m_unitsUpgradeValue)
                 {
-                    for (const auto& r : m_researchDb) {
-                        if (r.id == m_unitsSelectedUpgrade) { m_unitsUpgradeValue->SetLabel(r.title); break; }
-                    }
+                    const auto defIt = m_upgradeDefs.find(m_unitsSelectedUpgrade);
+                    if (defIt != m_upgradeDefs.end() && !defIt->second.title.empty())
+                        m_unitsUpgradeValue->SetLabel(defIt->second.title);
+                    else
+                        for (const auto& r : m_researchDb)
+                            if (r.data == m_unitsSelectedUpgrade) { m_unitsUpgradeValue->SetLabel(r.title); break; }
                 }
             }
         }
@@ -4343,7 +8348,10 @@ void StrategicLevelFrame::RefreshUnitsInfo(int unitIndex)
         if (m_unitsUpgradeValue)
         {
             wxString upgLabel = "--default--";
-            if (m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0 && m_unitsSelectedUpgrade > 0)
+            const bool restoredUnits = m_originalStrategicUi &&
+                m_originalStrategicScreen == OriginalStrategicScreen::Units;
+            if (m_unitsSelectedUpgrade > 0 &&
+                ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
             {
                 for (const auto& r : m_researchDb) {
                     if (r.id == m_unitsSelectedUpgrade) { upgLabel = r.title; break; }
@@ -4466,7 +8474,10 @@ void StrategicLevelFrame::RefreshUnitsActionButton()
             int time = 0;
 
             // Tech upgrade takes precedence if user selected one.
-            if (m_unitsSelectedUpgrade > 0 && m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0)
+            const bool restoredUnits = m_originalStrategicUi &&
+                m_originalStrategicScreen == OriginalStrategicScreen::Units;
+            if (m_unitsSelectedUpgrade > 0 &&
+                ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
             {
                 int upgId = m_unitsSelectedUpgrade;
                 // Tech upgrades use price/time from UPGRADES.DEF
@@ -4593,7 +8604,10 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
         // 2) Re-arm to another unit type from the drop-down
 
         // Option 1: tech upgrade selected
-        if (m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0 && m_unitsSelectedUpgrade > 0)
+        const bool restoredUnits = m_originalStrategicUi &&
+            m_originalStrategicScreen == OriginalStrategicScreen::Units;
+        if (m_unitsSelectedUpgrade > 0 &&
+            ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
         {
             const int upgId = m_unitsSelectedUpgrade;
 
@@ -4882,22 +8896,26 @@ std::vector<int> StrategicLevelFrame::GetAvailableUpgradesForUnit(int unitId) co
 {
     std::vector<int> result;
 
-    // Find upgrades from research database that apply to this unit
+    // RESEARCH.DEF UpgradeItem::Data() points at the real UPGRADES.DEF id.
+    // Earlier restored builds accidentally used the research-item id itself,
+    // which also made the original grouped upgrade list impossible to match.
     for (const auto& r : m_researchDb)
     {
-        if (r.flags.Contains("UpgradeItem"))
-        {
-            // In editor/debug mode (game mode disabled): show ALL upgrade items
-            // In game mode: only show completed research
-            if (!m_gameModeEnabled || m_researchCompleted.count(r.id))
-            {
-                // Check if this upgrade applies to the unit type
-                // For now, include all UpgradeItem research
-                result.push_back(r.id);
-            }
-        }
+        if (!r.flags.Contains("UpgradeItem"))
+            continue;
+        if (m_gameModeEnabled && !m_researchCompleted.count(r.id))
+            continue;
+
+        const int upgradeId = (r.data >= 0) ? r.data : r.id;
+        const auto def = m_upgradeDefs.find(upgradeId);
+        if (def != m_upgradeDefs.end() && !def->second.suitableTypes.empty() &&
+            !def->second.suitableTypes.count(unitId))
+            continue;
+        if (std::find(result.begin(), result.end(), upgradeId) == result.end())
+            result.push_back(upgradeId);
     }
 
+    std::sort(result.begin(), result.end());
     return result;
 }
 
@@ -4925,11 +8943,8 @@ std::vector<int> StrategicLevelFrame::GetAvailableUnitTypesForUpgrade(int unitId
             continue;
 
         // In Game mode: also check if unit is unlocked via research flags
-        if (m_gameModeEnabled && !m_levelResearchFlags.empty())
-        {
-            if (m_levelResearchFlags.count(i) == 0)
-                continue;
-        }
+        if (m_gameModeEnabled && !IsCampaignUnitUnlocked(i))
+            continue;
 
         result.push_back(i);
     }
@@ -5616,6 +9631,88 @@ std::string StrategicLevelFrame::GetCommanderSlotForUnitSlot(const std::string& 
     }
 
     return std::string();
+}
+
+void StrategicLevelFrame::ChooseCommanderForHierarchySlot(const std::string& commanderSlotId)
+{
+    auto it = m_hierarchySlotIndex.find(commanderSlotId);
+    if (it == m_hierarchySlotIndex.end())
+        return;
+
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    if (slot.type != "commander")
+        return;
+
+    int requiredRank = 0;
+    if (commanderSlotId.rfind("regiment_", 0) == 0)
+        requiredRank = 3;
+    else if (commanderSlotId.rfind("brigade_", 0) == 0)
+        requiredRank = 6;
+
+    wxArrayString choices;
+    choices.Add("<none>");
+    std::vector<const CommanderRec*> commanders;
+    commanders.reserve(m_playerCommanders.size());
+    for (const auto& c : m_playerCommanders)
+    {
+        if (c.rank < requiredRank)
+            continue;
+        commanders.push_back(&c);
+        choices.Add(wxString::Format("%s %s  [#%u]",
+            GetRankAbbrev(c.rank), wxString::FromUTF8(c.name), (unsigned)c.uid));
+    }
+
+    int selection = 0;
+    if (slot.commander_uid != 0)
+    {
+        for (size_t i = 0; i < commanders.size(); ++i)
+        {
+            if (commanders[i]->uid == slot.commander_uid)
+            {
+                selection = static_cast<int>(i) + 1;
+                break;
+            }
+        }
+    }
+
+    wxSingleChoiceDialog dlg(this,
+        "Choose a commander for this formation:",
+        "Assign Commander", choices);
+    dlg.SetSelection(selection);
+    if (dlg.ShowModal() != wxID_OK)
+        return;
+
+    const int picked = dlg.GetSelection();
+    if (picked <= 0)
+    {
+        ClearHierarchySlot(commanderSlotId);
+        return;
+    }
+    const size_t index = static_cast<size_t>(picked - 1);
+    if (index >= commanders.size() || !commanders[index])
+        return;
+
+    const CommanderRec& commander = *commanders[index];
+
+    // A commander can only occupy one hierarchy slot. Move them from the old
+    // slot instead of duplicating the same instance.
+    for (auto& other : m_hierarchySlots)
+    {
+        if (other.id == commanderSlotId || other.type != "commander")
+            continue;
+        if (other.commander_uid == commander.uid && commander.uid != 0)
+        {
+            ClearHierarchySlot(other.id);
+            break;
+        }
+    }
+
+    slot.rank = commander.rank;
+    slot.commander_uid = commander.uid;
+    slot.commander_name = commander.name;
+    slot.assigned_unit_uid = 0;
+    slot.assigned_unit_display.clear();
+    UpdateCommanderHierarchyLabel(commanderSlotId);
 }
 
 void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlotId)
@@ -6490,19 +10587,48 @@ void StrategicLevelFrame::RefreshUI()
 
             if (m_researchMode)
                 RefreshResearchUI();
+
+            m_originalStrategicDirty = true;
+            if (m_originalStrategicUi && m_originalStrategicPanel)
+                m_originalStrategicPanel->Refresh();
         }
 
 
 
 
-// Territory id 0 is reserved for global resources settings (meta).
-static const int kResourcesMetaTerritoryId = 0;
-
-static int ClampGlobalResearch(int r) { return std::clamp(r, 0, 5); }
-
 // ============================================================
 // Resources page + mechanics
 // ============================================================
+
+int StrategicLevelFrame::GetCurrentStrategicPointIncome() const
+{
+    int totalIncome = 0;
+    for (int tid : m_ownedTerritories)
+    {
+        if (tid <= 0) continue;
+        auto it = m_territoryResources.find(tid);
+        if (it == m_territoryResources.end()) continue;
+        const TerritoryResourceState& st = it->second;
+        totalIncome += std::min(std::max(0, st.incomePerTurn), std::max(0, st.remaining));
+    }
+    return totalIncome;
+}
+
+void StrategicLevelFrame::SetGlobalResearchAllocation(int value)
+{
+    const int maxResearch = GetCurrentStrategicPointIncome() / 3;
+    m_resourcesGlobalResearch = std::clamp(value, 0, maxResearch);
+    // The status-panel "Výzkum" value in the original UI is the current
+    // per-turn research allocation, not a banked currency.
+    m_research = m_resourcesGlobalResearch;
+    m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
+    if (m_resourcesSlider)
+    {
+        m_resourcesSlider->SetRange(0, std::max(1, maxResearch));
+        m_resourcesSlider->Enable(maxResearch > 0);
+        m_resourcesSlider->SetValue(std::clamp(m_resourcesGlobalResearch, 0, std::max(1, maxResearch)));
+    }
+}
 
 void StrategicLevelFrame::BuildResourcesPage()
 {
@@ -6548,7 +10674,7 @@ void StrategicLevelFrame::BuildResourcesPage()
     allocCaption->SetForegroundColour(m_palette.text);
     allocRow->Add(allocCaption, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
 
-    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 5,
+    m_resourcesSlider = new wxSlider(under, wxID_ANY, 0, 0, 100,
         wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
     m_resourcesSlider->SetMinSize(wxSize(-1, 40));
     allocRow->Add(m_resourcesSlider, 1, wxALIGN_CENTER_VERTICAL | wxEXPAND);
@@ -6567,9 +10693,9 @@ void StrategicLevelFrame::BuildResourcesPage()
     m_resourcesTable->SetForegroundColour(m_palette.text);
     m_resourcesTable->SetMinSize(wxSize(1, 1));
     m_resourcesTable->InsertColumn(0, "Territory", wxLIST_FORMAT_LEFT, -1);
-    m_resourcesTable->InsertColumn(1, "Resources", wxLIST_FORMAT_CENTER, -1);
-    m_resourcesTable->InsertColumn(2, "Money/turn", wxLIST_FORMAT_CENTER, -1);
-    m_resourcesTable->InsertColumn(3, "Res./turn", wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(1, "Strategic points", wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(2, "SB / turn", wxLIST_FORMAT_CENTER, -1);
+    m_resourcesTable->InsertColumn(3, "Turns left", wxLIST_FORMAT_CENTER, -1);
     // Stretch columns after first layout
     m_resourcesTable->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev)
         {
@@ -6598,8 +10724,7 @@ void StrategicLevelFrame::BuildResourcesPage()
     m_resourcesSlider->Bind(wxEVT_SLIDER, [this](wxCommandEvent&)
         {
             if (!m_resourcesSlider) return;
-            m_resourcesGlobalResearch = ClampGlobalResearch(m_resourcesSlider->GetValue());
-            m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
+            SetGlobalResearchAllocation(m_resourcesSlider->GetValue());
             SaveStrategicState();
             RefreshResourcesPage();
         });
@@ -6613,24 +10738,50 @@ void StrategicLevelFrame::BuildResourcesPage()
 
 void StrategicLevelFrame::RefreshResourcesPage()
 {
-    // Ensure all territories have a state entry
+    // Ensure every territory mirrors its DefineStrategicPoints() definition.
     for (const auto& t : m_level.territories)
     {
-        if (m_territoryResources.find(t.id) == m_territoryResources.end())
-            m_territoryResources[t.id] = TerritoryResourceState{};
+        auto it = m_territoryResources.find(t.id);
+        if (it == m_territoryResources.end())
+        {
+            TerritoryResourceState st;
+            st.total = std::max(0, t.strategic_points_total);
+            st.remaining = st.total;
+            st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+            m_territoryResources[t.id] = st;
+        }
+        else
+        {
+            // Old saves did not persist incomePerTurn; recover it from LEVEL_XX.DEF.
+            if (it->second.total <= 0 && t.strategic_points_total > 0)
+            {
+                it->second.total = t.strategic_points_total;
+                if (it->second.remaining <= 0) it->second.remaining = it->second.total;
+            }
+            if (it->second.incomePerTurn <= 0 && t.strategic_points_per_turn > 0)
+                it->second.incomePerTurn = t.strategic_points_per_turn;
+            it->second.remaining = std::clamp(it->second.remaining, 0, std::max(0, it->second.total));
+        }
     }
 
-    // Load global allocation from meta entry
+    // Current strategic-point yield from owned, non-depleted territories.
+    const int totalIncome = GetCurrentStrategicPointIncome();
+    const int maxResearch = totalIncome / 3; // 3 SB -> 1 research point (manual/original UI)
+
+    // Load/persist the global desired research output in the id=0 meta record.
     auto itMeta = m_territoryResources.find(kResourcesMetaTerritoryId);
     if (itMeta != m_territoryResources.end())
-        m_resourcesGlobalResearch = ClampGlobalResearch(itMeta->second.researchCarry);
+        m_resourcesGlobalResearch = std::clamp(itMeta->second.researchCarry, 0, maxResearch);
     else
+    {
+        m_resourcesGlobalResearch = std::clamp(m_resourcesGlobalResearch, 0, maxResearch);
         m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
+    }
+    m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
 
-    const int R = ClampGlobalResearch(m_resourcesGlobalResearch);
-    const int M = 20 - 4 * R;
+    const int R = m_resourcesGlobalResearch;
+    const int M = std::max(0, totalIncome - 3 * R);
 
-    // ── Header label ──
     if (m_resourcesSelectedLabel)
     {
         const bool ownedSel = (m_selectedTerritory > 0 &&
@@ -6639,25 +10790,30 @@ void StrategicLevelFrame::RefreshResourcesPage()
         if (ownedSel)
         {
             const auto& st = m_territoryResources[m_selectedTerritory];
+            const int rounds = st.incomePerTurn > 0
+                ? (st.remaining + st.incomePerTurn - 1) / st.incomePerTurn : 0;
             m_resourcesSelectedLabel->SetLabel(
-                wxString::Format("Territory T%02d  -  Resources: %d / %d",
-                    m_selectedTerritory, st.remaining, st.total));
+                wxString::Format("Territory T%02d  -  %d SB/turn, %d turns (%d/%d SB)",
+                    m_selectedTerritory, st.incomePerTurn, rounds, st.remaining, st.total));
         }
         else
         {
             m_resourcesSelectedLabel->SetLabel(
-                wxString::Format("Owned territories: %d", (int)m_ownedTerritories.size()));
+                wxString::Format("Owned territories: %d  -  %d SB/turn",
+                    (int)m_ownedTerritories.size(), totalIncome));
         }
     }
 
-    // ── Slider + ratio label ──
     if (m_resourcesSlider)
-        m_resourcesSlider->SetValue(R);
+    {
+        m_resourcesSlider->SetRange(0, std::max(1, maxResearch));
+        m_resourcesSlider->Enable(maxResearch > 0);
+        m_resourcesSlider->SetValue(std::clamp(R, 0, std::max(1, maxResearch)));
+    }
     if (m_resourcesRatioLabel)
         m_resourcesRatioLabel->SetLabel(
-            wxString::Format("Money: %d  Research: %d", M, R));
+            wxString::Format("Money: %d  Research: %d  (total SB: %d)", M, R, totalIncome));
 
-    // ── Per-territory table ──
     if (m_resourcesTable)
     {
         m_resourcesTable->Freeze();
@@ -6672,19 +10828,20 @@ void StrategicLevelFrame::RefreshResourcesPage()
             if (tid <= 0) continue;
             const auto& st = m_territoryResources.count(tid)
                 ? m_territoryResources.at(tid) : TerritoryResourceState{};
+            const int yield = std::min(std::max(0, st.incomePerTurn), std::max(0, st.remaining));
+            const int rounds = st.incomePerTurn > 0
+                ? (st.remaining + st.incomePerTurn - 1) / st.incomePerTurn : 0;
 
             const wxString resStr = wxString::Format("%d / %d", st.remaining, st.total);
-            const wxString monStr = wxString::Format("%.1f", (double)M / 20.0);
-            const wxString resRStr = (R > 0)
-                ? wxString::Format("1/%d", 20 / R)
-                : wxString("-");
+            const wxString yieldStr = wxString::Format("%d", yield);
+            const wxString turnsStr = st.incomePerTurn > 0 ? wxString::Format("%d", rounds) : wxString("-");
 
             long row = m_resourcesTable->InsertItem(
                 m_resourcesTable->GetItemCount(), wxString::Format("T%02d", tid));
             m_resourcesTable->SetItem(row, 1, resStr);
-            m_resourcesTable->SetItem(row, 2, monStr);
-            m_resourcesTable->SetItem(row, 3, resRStr);
-            m_resourcesTable->SetItemData(row, (long)tid);  // store tid for click handler
+            m_resourcesTable->SetItem(row, 2, yieldStr);
+            m_resourcesTable->SetItem(row, 3, turnsStr);
+            m_resourcesTable->SetItemData(row, (long)tid);
 
             const bool depleted = (st.remaining <= 0);
             const bool selected = (tid == m_selectedTerritory);
@@ -6694,8 +10851,6 @@ void StrategicLevelFrame::RefreshResourcesPage()
         m_resourcesTable->Thaw();
     }
 
-    // ── Map overlay + canvas refresh ──
-    // Always rebuild overlay - selected territory highlight may have changed
     MarkOverlayDirty();
     if (m_resourcesCanvas)
         m_resourcesCanvas->Refresh();
@@ -6703,49 +10858,36 @@ void StrategicLevelFrame::RefreshResourcesPage()
 
 void StrategicLevelFrame::ApplyResourceTickEndTurn()
 {
-    // One resource per owned territory per turn, until exhausted.
+    // Spellcross strategic points: each owned territory yields up to its
+    // DefineStrategicPoints(..., total, perTurn) rate until the finite pool is empty.
+    int generated = 0;
     for (int tid : m_ownedTerritories)
     {
-        if (tid <= 0)
-            continue;
+        if (tid <= 0) continue;
+        auto it = m_territoryResources.find(tid);
+        if (it == m_territoryResources.end()) continue;
+        auto& st = it->second;
+        if (st.remaining <= 0 || st.incomePerTurn <= 0) continue;
 
-        auto& st = m_territoryResources[tid];
-        if (st.total <= 0) st.total = 20;
-        if (st.remaining <= 0)
-            continue;
-
-        // spend 1 resource
-        st.remaining -= 1;
-        if (st.remaining < 0) st.remaining = 0;
-
-        // route this tick either to money or to research using a deterministic 20-step distribution:
-        // Research points per territory: R (0..5) => 4*R ticks go to research, the rest to money.
-        const int R = ClampGlobalResearch(m_resourcesGlobalResearch);
-        const int researchTicksPer20 = 4 * R; // 0..20
-        st.allocAccum += researchTicksPer20;
-        bool toResearch = false;
-        if (st.allocAccum >= 20)
-        {
-            toResearch = true;
-            st.allocAccum -= 20;
-        }
-
-        if (toResearch)
-        {
-            st.researchCarry += 2;  // doubled research income
-            if (st.researchCarry >= 4)
-            {
-                m_research += 1;
-                st.researchCarry -= 4;
-            }
-        }
-        else
-        {
-            m_money += 1;
-        }
+        const int take = std::min(st.remaining, st.incomePerTurn);
+        st.remaining -= take;
+        generated += take;
     }
 
-    // If resources page is open, update it.
+    // Original conversion ratios documented by the game:
+    //   1 SB -> 1 money
+    //   3 SB -> 1 research point
+    // m_resourcesGlobalResearch stores the desired research points per turn.
+    const int researchPoints = std::min(std::max(0, m_resourcesGlobalResearch), generated / 3);
+    const int moneyPoints = std::max(0, generated - researchPoints * 3);
+    m_money += moneyPoints;
+    m_research = researchPoints;
+
+    // Do not clamp the next-turn allocation here: ApplyResearchTickEndTurn()
+    // still needs this turn's generated research value. The allocation is
+    // clamped immediately afterwards in OnEndTurn(), once research progressed.
+    m_territoryResources[kResourcesMetaTerritoryId].researchCarry = m_resourcesGlobalResearch;
+
     RefreshResourcesPage();
 }
 
@@ -6853,14 +10995,27 @@ static wxString DecodeCp852Text(const std::string& bytes)
 void StrategicLevelFrame::EnsureResearchLoaded()
 {
     if (!m_researchDb.empty())
+    {
+        NormalizeResearchSelection();
         return;
+    }
 
     namespace fs = std::filesystem;
     std::error_code ec;
 
     const fs::path base = GetStableBaseDir();
-    const fs::path researchDir = base / "temp" / "RESEARCH";
-    const fs::path commonDir = base / "temp" / "COMMON";
+    const std::vector<fs::path> commonDirs = {
+        base / "temp" / "COMMON",
+        fs::current_path(ec) / "temp" / "COMMON",
+        base / "builds" / "x64" / "Release" / "temp" / "COMMON",
+        base / "builds" / "x64" / "Debug" / "temp" / "COMMON",
+    };
+    const std::vector<fs::path> researchDirs = {
+        base / "temp" / "RESEARCH",
+        fs::current_path(ec) / "temp" / "RESEARCH",
+        base / "builds" / "x64" / "Release" / "temp" / "RESEARCH",
+        base / "builds" / "x64" / "Debug" / "temp" / "RESEARCH",
+    };
 
     auto loadFileBin = [&](const fs::path& p) -> std::string
         {
@@ -6869,21 +11024,71 @@ void StrategicLevelFrame::EnsureResearchLoaded()
             return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         };
 
+    auto loadExtracted = [&](const std::vector<fs::path>& dirs, const char* name) -> std::string
+        {
+            for (const auto& dir : dirs)
+            {
+                if (dir.empty()) continue;
+                const fs::path pth = dir / name;
+                if (!fs::exists(pth, ec)) continue;
+                std::string raw = loadFileBin(pth);
+                if (!raw.empty()) return raw;
+            }
+            return {};
+        };
+
+    auto archiveCandidates = [&](const wchar_t* archiveName) -> std::vector<fs::path>
+        {
+            std::vector<fs::path> out;
+            if (m_spellData)
+            {
+                if (!m_spellData->data_path.empty())
+                    out.emplace_back(fs::path(m_spellData->data_path) / archiveName);
+                if (!m_spellData->cd_data_path.empty())
+                    out.emplace_back(fs::path(m_spellData->cd_data_path) / archiveName);
+            }
+            out.emplace_back(base / archiveName);
+            out.emplace_back(fs::current_path(ec) / archiveName);
+            return out;
+        };
+
+    auto loadArchiveMember = [&](const wchar_t* archiveName, const char* member) -> std::string
+        {
+            for (const auto& pth : archiveCandidates(archiveName))
+            {
+                if (pth.empty() || !fs::exists(pth, ec) || fs::is_directory(pth, ec)) continue;
+                try
+                {
+                    FSarchive arc(pth.wstring(), FSarchive::Options::NONE);
+                    uint8_t* data = nullptr;
+                    int size = 0;
+                    if (arc.GetFile(member, &data, &size) == 0 && data && size > 0)
+                        return std::string(reinterpret_cast<const char*>(data), static_cast<size_t>(size));
+                }
+                catch (...) {}
+            }
+            return {};
+        };
+
     // ----------------------------------------------------------------
-    // 1.  Parse RESEARCH.DEF → group, level, cost (Time), flags, prereqs per item
+    // 1. Parse RESEARCH.DEF -> group, level, Time(), flags and OR prerequisites.
+    //    Prefer the exported COMMON directory but fall back directly to COMMON.FS;
+    //    this keeps Research/Info functional in a clean runtime with no pre-extract step.
     // ----------------------------------------------------------------
     struct DefRec
     {
         wxString group;
         int level = 0;
         int time = 0;
+        int data = -1;
         wxString flags;
         std::vector<int> prereqs;
     };
     std::unordered_map<int, DefRec> defById;
 
     {
-        const std::string raw = loadFileBin(commonDir / "RESEARCH.DEF");
+        std::string raw = loadExtracted(commonDirs, "RESEARCH.DEF");
+        if (raw.empty()) raw = loadArchiveMember(L"COMMON.FS", "RESEARCH.DEF");
         if (!raw.empty())
         {
             DefRec cur;
@@ -6894,12 +11099,11 @@ void StrategicLevelFrame::EnsureResearchLoaded()
             while (std::getline(ss, line))
             {
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                size_t s = line.find_first_not_of(" \t");
-                if (s == std::string::npos) continue;
-                line = line.substr(s);
-                if (line[0] == ';') continue;
+                size_t first = line.find_first_not_of(" \t");
+                if (first == std::string::npos) continue;
+                line = line.substr(first);
+                if (line.empty() || line[0] == ';') continue;
 
-                // Item(N) {
                 static const std::regex rxItem(R"(Item\((\d+)\)\s*\{)");
                 std::smatch m;
                 if (std::regex_search(line, m, rxItem))
@@ -6910,9 +11114,11 @@ void StrategicLevelFrame::EnsureResearchLoaded()
                     continue;
                 }
                 if (!inside) continue;
-                if (line == "}") {
+                if (line == "}")
+                {
                     if (curId >= 0) defById[curId] = std::move(cur);
-                    inside = false; curId = -1;
+                    inside = false;
+                    curId = -1;
                     continue;
                 }
 
@@ -6920,12 +11126,14 @@ void StrategicLevelFrame::EnsureResearchLoaded()
                 static const std::regex rxFlags(R"(Flags\((\w+)\))");
                 static const std::regex rxLevel(R"(Level\((\d+)\))");
                 static const std::regex rxTime(R"(Time\((\d+)\))");
+                static const std::regex rxData(R"(Data\(([-]?\d+)\))");
                 static const std::regex rxOr(R"(ORconnections\(([^)]+)\))");
 
                 if (std::regex_search(line, m, rxGroup)) cur.group = wxString::FromUTF8(m[1].str());
                 if (std::regex_search(line, m, rxFlags)) cur.flags = wxString::FromUTF8(m[1].str());
                 if (std::regex_search(line, m, rxLevel)) cur.level = std::stoi(m[1].str());
-                if (std::regex_search(line, m, rxTime))  cur.time = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxTime)) cur.time = std::stoi(m[1].str());
+                if (std::regex_search(line, m, rxData)) cur.data = std::stoi(m[1].str());
                 if (std::regex_search(line, m, rxOr))
                 {
                     std::istringstream argss(m[1].str());
@@ -6933,8 +11141,9 @@ void StrategicLevelFrame::EnsureResearchLoaded()
                     while (std::getline(argss, tok, ','))
                     {
                         size_t ts = tok.find_first_not_of(" \t");
-                        if (ts != std::string::npos)
-                            cur.prereqs.push_back(std::stoi(tok.substr(ts)));
+                        if (ts == std::string::npos) continue;
+                        try { cur.prereqs.push_back(std::stoi(tok.substr(ts))); }
+                        catch (...) {}
                     }
                 }
             }
@@ -6942,15 +11151,15 @@ void StrategicLevelFrame::EnsureResearchLoaded()
     }
 
     // ----------------------------------------------------------------
-    // 2.  Title list from RESEARCH.CZ / fallback .ENG
-    //     Line N (0-based) = title for Item(N)
+    // 2. Item titles from RESEARCH.CZ / fallback RESEARCH.ENG.
     // ----------------------------------------------------------------
     std::vector<wxString> titleByIndex;
     {
         std::string raw;
         for (const char* name : { "RESEARCH.CZ", "RESEARCH.ENG" })
         {
-            raw = loadFileBin(commonDir / name);
+            raw = loadExtracted(commonDirs, name);
+            if (raw.empty()) raw = loadArchiveMember(L"COMMON.FS", name);
             if (!raw.empty()) break;
         }
         if (!raw.empty())
@@ -6960,8 +11169,7 @@ void StrategicLevelFrame::EnsureResearchLoaded()
             while (std::getline(ss, line))
             {
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                // Strip trailing control chars (0x1A etc.)
-                while (!line.empty() && (unsigned char)line.back() < 0x20)
+                while (!line.empty() && static_cast<unsigned char>(line.back()) < 0x20)
                     line.pop_back();
                 titleByIndex.push_back(DecodeCp895Text(line));
             }
@@ -6969,113 +11177,265 @@ void StrategicLevelFrame::EnsureResearchLoaded()
     }
 
     // ----------------------------------------------------------------
-    // 3.  BRF / INF texts from temp/RESEARCH/
+    // 3. BRF / INF texts. Read extracted temp/RESEARCH first, then fill gaps
+    //    directly from RESEARCH.FS.  Stage 6 previously depended on a manually
+    //    extracted directory, which is why this page could be visually present
+    //    yet empty/non-functional in a normal build.
     // ----------------------------------------------------------------
     struct TextRec { wxString inf, brf; };
     std::unordered_map<int, TextRec> textById;
+    static const std::regex rxTextFile(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)",
+        std::regex_constants::icase);
 
-    if (fs::exists(researchDir, ec) && fs::is_directory(researchDir, ec))
+    auto absorbText = [&](const std::string& fn, const std::string& raw)
+        {
+            if (raw.empty()) return;
+            std::smatch m;
+            if (!std::regex_match(fn, m, rxTextFile) || !m[2].matched) return;
+            std::string ext = m[3].str();
+            for (auto& ch : ext) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            const int id = std::atoi(m[2].str().c_str());
+            const wxString decoded = DecodeCp895Text(raw);
+            if (ext == "INF") textById[id].inf = decoded;
+            else              textById[id].brf = decoded;
+        };
+
+    for (const auto& researchDir : researchDirs)
     {
-        static const std::regex rxFile(R"(^(R(\d{3})|RACES)\.(INF|BRF)$)",
-            std::regex_constants::icase);
-        for (auto it = fs::directory_iterator(researchDir, ec);
-            it != fs::directory_iterator(); ++it)
+        if (!fs::exists(researchDir, ec) || !fs::is_directory(researchDir, ec)) continue;
+        for (auto it = fs::directory_iterator(researchDir, ec); it != fs::directory_iterator(); ++it)
         {
             if (ec) break;
             if (!it->is_regular_file(ec)) continue;
             const std::string fn = it->path().filename().string();
-            std::smatch m;
-            if (!std::regex_match(fn, m, rxFile)) continue;
-
-            std::string idStr = m[2].matched ? m[2].str() : "";
-            std::string ext = m[3].str();
-            for (auto& ch : ext) ch = (char)std::toupper((unsigned char)ch);
-
-            if (idStr.empty()) continue; // skip RACES.* for now
-
-            const std::string raw = loadFileBin(it->path());
-            if (raw.empty()) continue;
-            wxString decoded = DecodeCp895Text(raw);
-
-            int id = std::atoi(idStr.c_str());
-            if (ext == "INF") textById[id].inf = decoded;
-            else               textById[id].brf = decoded;
+            if (!std::regex_match(fn, rxTextFile)) continue;
+            absorbText(fn, loadFileBin(it->path()));
         }
+        if (!textById.empty()) break;
+    }
+
+    for (const auto& pth : archiveCandidates(L"RESEARCH.FS"))
+    {
+        if (pth.empty() || !fs::exists(pth, ec) || fs::is_directory(pth, ec)) continue;
+        try
+        {
+            FSarchive arc(pth.wstring(), FSarchive::Options::NONE);
+            for (auto* file : arc.GetFiles())
+            {
+                if (!file) continue;
+                if (!std::regex_match(file->name, rxTextFile)) continue;
+                if (file->data.empty()) continue;
+                const std::string raw(reinterpret_cast<const char*>(file->data.data()), file->data.size());
+                absorbText(file->name, raw);
+            }
+            break;
+        }
+        catch (...) {}
     }
 
     // ----------------------------------------------------------------
-    // 4.  Build m_researchDb
+    // 4. Build database.  Keep Time(0) entries: they are not research choices,
+    //    but they are essential encyclopedia/base-unit records for the Info page.
     // ----------------------------------------------------------------
     m_researchDb.clear();
-
-    // All IDs from DEF (source of truth) + any with text but missing from DEF
     std::unordered_set<int> allIds;
-    for (auto& kv : defById)  allIds.insert(kv.first);
-    for (auto& kv : textById) allIds.insert(kv.first);
+    for (const auto& kv : defById) allIds.insert(kv.first);
+    for (const auto& kv : textById) allIds.insert(kv.first);
 
     for (int id : allIds)
     {
         const DefRec* def = defById.count(id) ? &defById[id] : nullptr;
-        const TextRec* text = textById.count(id) ? &textById[id] : nullptr;
-
-        // Special items are internal game triggers, not player-researchable
-        if (def && def->flags == "Special")
-            continue;
-
-        // Items with Time(0) are already available by default (base unit types etc.)
-        // – they do not appear in the research screen.
-        if (def && def->time == 0)
-            continue;
+        const TextRec* textRec = textById.count(id) ? &textById[id] : nullptr;
+        if (def && def->flags == "Special") continue;
 
         ResearchItem item;
         item.id = id;
         item.code = wxString::Format("R%03d", id);
-        item.title = (id >= 0 && id < (int)titleByIndex.size() && !titleByIndex[id].empty())
+        item.title = (id >= 0 && id < static_cast<int>(titleByIndex.size()) && !titleByIndex[id].empty())
             ? titleByIndex[id] : item.code;
-
-        if (text) { item.brief = text->brf; item.info = text->inf; }
+        if (textRec) { item.brief = textRec->brf; item.info = textRec->inf; }
 
         if (def)
         {
             item.group = def->group;
             item.level = def->level;
-            item.cost = std::max(1, def->time);
+            item.researchable = def->time > 0;
+            item.cost = item.researchable ? std::max(1, def->time) : 0;
             item.flags = def->flags;
+            item.data = def->data;
             item.prerequisites = def->prereqs;
         }
         else
         {
+            item.researchable = true;
             item.cost = 20;
         }
-
         m_researchDb.push_back(std::move(item));
     }
 
-    // Sort: group order → level → id
     auto groupOrder = [](const wxString& g) -> int {
-        if (g == "Global")       return 0;
+        if (g == "Global") return 0;
         if (g == "Technologies") return 1;
-        if (g == "Upgrades")     return 2;
-        if (g == "Races")        return 3;
+        if (g == "Upgrades") return 2;
+        if (g == "Races") return 3;
         return 4;
-        };
+    };
     std::sort(m_researchDb.begin(), m_researchDb.end(),
         [&](const ResearchItem& a, const ResearchItem& b)
         {
-            int ga = groupOrder(a.group), gb = groupOrder(b.group);
+            const int ga = groupOrder(a.group), gb = groupOrder(b.group);
             if (ga != gb) return ga < gb;
             if (a.level != b.level) return a.level < b.level;
             return a.id < b.id;
         });
 
-    // Preselect first item if nothing active yet
-    if (!m_researchDb.empty() && m_researchActiveIndex < 0)
+    NormalizeResearchSelection();
+}
+
+bool StrategicLevelFrame::IsResearchUnlocked(const ResearchItem& item) const
+{
+    if (item.prerequisites.empty()) return true;
+    for (int pre : item.prerequisites)
+        if (m_researchCompleted.count(pre) > 0) return true;
+    return false;
+}
+
+bool StrategicLevelFrame::IsResearchAvailable(const ResearchItem& item) const
+{
+    if (!item.researchable || item.id < 0) return false;
+    if (m_researchCompleted.count(item.id) > 0) return false;
+    if (m_gameModeEnabled)
     {
-        m_researchActiveIndex = 0;
-        m_researchActiveId = m_researchDb[0].id;
+        const int levelNum = StrategicLevelNumberFromPath(m_level.source_path);
+        if (levelNum > 0 && item.level > levelNum) return false;
     }
-    if (!m_researchDb.empty() && m_researchBrowseIndex < 0)
-        m_researchBrowseIndex = 0;
+    return IsResearchUnlocked(item);
+}
+
+bool StrategicLevelFrame::IsInfoItemVisible(const ResearchItem& item) const
+{
+    if (!m_gameModeEnabled) return true;
+    if (item.id < 0) return false;
+
+    // Player-researchable knowledge moves to Info only after completion.
+    if (item.researchable)
+        return m_researchCompleted.count(item.id) > 0;
+
+    // Time(0) UnitType/NewUnit records are known through the campaign's
+    // SetResearchFlag(unitType) state, rather than through research completion.
+    if ((item.flags == "UnitType" || item.flags == "NewUnit") && item.data >= 0)
+    {
+        if (item.flags == "NewUnit")
+            return IsCampaignUnitUnlocked(item.data);
+        if (!m_levelResearchFlags.empty())
+            return m_levelResearchFlags.count(item.data) > 0;
+        if (!item.prerequisites.empty())
+            return IsResearchUnlocked(item);
+        return true;
+    }
+
+    return true;
+}
+
+bool StrategicLevelFrame::IsCampaignUnitUnlocked(int unitType) const
+{
+    if (!m_gameModeEnabled) return true;
+    if (unitType < 0) return false;
+    if (m_levelResearchFlags.count(unitType) > 0) return true;
+    for (const auto& item : m_researchDb)
+    {
+        if (item.flags != "NewUnit" || item.data != unitType) continue;
+        if (item.researchable)
+        {
+            if (item.id >= 0 && m_researchCompleted.count(item.id) > 0) return true;
+        }
+        else if (IsResearchUnlocked(item))
+            return true;
+    }
+    return false;
+}
+
+void StrategicLevelFrame::NormalizeResearchSelection()
+{
+    if (m_researchDb.empty())
+    {
+        m_researchActiveId = -1;
+        m_researchActiveIndex = -1;
+        m_researchBrowseIndex = -1;
+        m_infoBrowseIndex = -1;
+        return;
+    }
+
+    int resolvedActive = -1;
+    if (m_researchActiveId >= 0)
+    {
+        for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+            if (m_researchDb[static_cast<size_t>(i)].id == m_researchActiveId)
+            { resolvedActive = i; break; }
+    }
+    else if (m_researchActiveIndex >= 0 && m_researchActiveIndex < static_cast<int>(m_researchDb.size()))
+    {
+        const ResearchItem& old = m_researchDb[static_cast<size_t>(m_researchActiveIndex)];
+        if (old.researchable && old.id >= 0)
+        {
+            resolvedActive = m_researchActiveIndex;
+            m_researchActiveId = old.id;
+        }
+    }
+
+    if (resolvedActive >= 0)
+    {
+        const ResearchItem& active = m_researchDb[static_cast<size_t>(resolvedActive)];
+        if (!active.researchable || m_researchCompleted.count(active.id) > 0)
+            resolvedActive = -1;
+    }
+    m_researchActiveIndex = resolvedActive;
+    if (resolvedActive < 0)
+    {
+        m_researchActiveId = -1;
+        m_researchAllocPerTurn = 0;
+    }
+
+    if (m_researchBrowseIndex < 0 || m_researchBrowseIndex >= static_cast<int>(m_researchDb.size()) ||
+        !IsResearchAvailable(m_researchDb[static_cast<size_t>(m_researchBrowseIndex)]))
+    {
+        // Native behaviour is friendlier when the browser follows the active
+        // project first; only if there is no valid active project do we fall
+        // back to the first researchable item in the list.
+        m_researchBrowseIndex = -1;
+        if (resolvedActive >= 0 && resolvedActive < static_cast<int>(m_researchDb.size()) &&
+            IsResearchAvailable(m_researchDb[static_cast<size_t>(resolvedActive)]))
+        {
+            m_researchBrowseIndex = resolvedActive;
+        }
+        else
+        {
+            for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+                if (IsResearchAvailable(m_researchDb[static_cast<size_t>(i)]))
+                { m_researchBrowseIndex = i; break; }
+        }
+    }
+
+    if (m_infoBrowseIndex < 0 || m_infoBrowseIndex >= static_cast<int>(m_researchDb.size()) ||
+        !IsInfoItemVisible(m_researchDb[static_cast<size_t>(m_infoBrowseIndex)]))
+    {
+        m_infoBrowseIndex = -1;
+        for (int i = 0; i < static_cast<int>(m_researchDb.size()); ++i)
+            if (IsInfoItemVisible(m_researchDb[static_cast<size_t>(i)]))
+            { m_infoBrowseIndex = i; break; }
+    }
+}
+
+bool StrategicLevelFrame::StartResearchIndex(int idx)
+{
+    if (idx < 0 || idx >= static_cast<int>(m_researchDb.size())) return false;
+    const ResearchItem& item = m_researchDb[static_cast<size_t>(idx)];
+    if (!IsResearchAvailable(item)) return false;
+    m_researchBrowseIndex = idx;
+    m_researchActiveIndex = idx;
+    m_researchActiveId = item.id;
+    m_researchAllocPerTurn = 1;
+    return true;
 }
 
 void StrategicLevelFrame::EnterResearchMode()
@@ -7128,22 +11488,16 @@ void StrategicLevelFrame::OnResearchAlloc(wxCommandEvent&)
 
 void StrategicLevelFrame::OnResearchStartStop(wxCommandEvent&)
 {
+    EnsureResearchLoaded();
     if (m_researchAllocPerTurn > 0)
-    {
-        // Stop
         m_researchAllocPerTurn = 0;
-    }
+    else if (m_researchActiveIndex >= 0 &&
+             m_researchActiveIndex < static_cast<int>(m_researchDb.size()) &&
+             IsResearchAvailable(m_researchDb[static_cast<size_t>(m_researchActiveIndex)]))
+        m_researchAllocPerTurn = 1;
     else
-    {
-        // Start – commit browsed item as the active research target
-        if (m_researchBrowseIndex >= 0 && m_researchBrowseIndex < (int)m_researchDb.size())
-        {
-            m_researchActiveIndex = m_researchBrowseIndex;
-            m_researchActiveId = m_researchDb[m_researchActiveIndex].id;
-        }
-        if (m_researchActiveIndex >= 0)
-            m_researchAllocPerTurn = 1;
-    }
+        StartResearchIndex(m_researchBrowseIndex);
+
     RefreshResearchUI();
     SaveStrategicState();
 }
@@ -7162,15 +11516,7 @@ void StrategicLevelFrame::RefreshResearchUI()
 
     EnsureResearchLoaded();
 
-    const int campaignLevel = m_gameModeEnabled
-        ? std::max(1, (m_turn / 8) + 1) : 999;
-
-    auto isUnlocked = [&](const ResearchItem& it) -> bool {
-        if (it.prerequisites.empty()) return true;
-        for (int pre : it.prerequisites)
-            if (m_researchCompleted.count(pre)) return true;
-        return false;
-        };
+    NormalizeResearchSelection();
 
     // ----------------------------------------------------------------
     // Categorized list (wxListCtrl)
@@ -7186,8 +11532,6 @@ void StrategicLevelFrame::RefreshResearchUI()
 
         const wxColour clrHeader = m_palette.heading;
         const wxColour clrNormal = m_palette.text;
-        const wxColour clrDone(0x4A, 0x7A, 0x4A);
-        const wxColour clrLocked(0x60, 0x60, 0x60);
 
         wxString lastGroup;
         long row = 0, selRow = -1;
@@ -7195,7 +11539,7 @@ void StrategicLevelFrame::RefreshResearchUI()
         for (int i = 0; i < (int)m_researchDb.size(); ++i)
         {
             const ResearchItem& it = m_researchDb[i];
-            if (m_gameModeEnabled && it.level > campaignLevel)
+            if (!IsResearchAvailable(it))
                 continue;
 
             // Group header
@@ -7211,21 +11555,12 @@ void StrategicLevelFrame::RefreshResearchUI()
                 }
             }
 
-            const bool done = (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
-            const bool locked = !isUnlocked(it);
             const bool active = (it.id == m_researchActiveId && m_researchAllocPerTurn > 0);
-
             wxString label = wxString("  ") + it.title;
-            if (done)        label += " [+]";
-            else if (locked) label += " [?]";
-            else if (active) label += " >";
-
+            if (active) label += " >";
             m_researchList->InsertItem(row, label);
             m_researchList->SetItemData(row, static_cast<wxUIntPtr>(i));
-
-            if (done)         m_researchList->SetItemTextColour(row, clrDone);
-            else if (locked)  m_researchList->SetItemTextColour(row, clrLocked);
-            else              m_researchList->SetItemTextColour(row, clrNormal);
+            m_researchList->SetItemTextColour(row, clrNormal);
 
             if (i == m_researchBrowseIndex)
                 selRow = row;
@@ -7262,8 +11597,7 @@ void StrategicLevelFrame::RefreshResearchUI()
     if (m_researchActiveText)
     {
         if (m_researchActiveIndex >= 0
-            && m_researchActiveIndex < (int)m_researchDb.size()
-            && m_researchAllocPerTurn > 0)
+            && m_researchActiveIndex < (int)m_researchDb.size())
         {
             const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
             m_researchActiveText->SetValue(cur.brief.empty() ? cur.info : cur.brief);
@@ -7278,8 +11612,7 @@ void StrategicLevelFrame::RefreshResearchUI()
     if (m_researchGauge && m_researchGaugeLabel)
     {
         if (m_researchActiveIndex >= 0
-            && m_researchActiveIndex < (int)m_researchDb.size()
-            && m_researchAllocPerTurn > 0)
+            && m_researchActiveIndex < (int)m_researchDb.size())
         {
             const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
             const int cost = std::max(1, cur.cost);
@@ -7308,10 +11641,6 @@ void StrategicLevelFrame::RefreshResearchUI()
         {
             const ResearchItem& cur = m_researchDb[bi];
             wxString txt = cur.info.empty() ? cur.brief : cur.info;
-            if (cur.id >= 0 && m_researchCompleted.count(cur.id))
-                txt << "\n\n[COMPLETED]";
-            else if (!isUnlocked(cur))
-                txt << "\n\n[LOCKED - prerequisite required]";
             m_researchText->SetValue(txt);
         }
         else
@@ -7372,14 +11701,7 @@ void StrategicLevelFrame::RefreshInfoUI()
 
     EnsureResearchLoaded();
 
-    // In game mode: show only completed research
-    // Without game mode: show everything
-    auto isVisible = [&](const ResearchItem& it) -> bool {
-        if (!m_gameModeEnabled)
-            return true;  // Show all in sandbox mode
-        // In game mode: only show completed items
-        return (it.id >= 0 && m_researchCompleted.count(it.id) > 0);
-        };
+    NormalizeResearchSelection();
 
     // ----------------------------------------------------------------
     // Categorized list (wxListCtrl)
@@ -7402,7 +11724,7 @@ void StrategicLevelFrame::RefreshInfoUI()
             const ResearchItem& it = m_researchDb[i];
 
             // Filter: only show items that pass visibility check
-            if (!isVisible(it))
+            if (!IsInfoItemVisible(it))
                 continue;
 
             // Group header
@@ -7489,8 +11811,10 @@ void StrategicLevelFrame::OnShowInfo(wxCommandEvent&)
 
 void StrategicLevelFrame::ApplyResearchTickEndTurn()
 {
-    // Research allocation is automatic: when research is active (m_researchAllocPerTurn > 0),
-    // ALL accumulated research points from resources are spent on the active item.
+    // Research allocation is automatic: when research is active, the current
+    // per-turn research allocation advances the active project.  The original
+    // UI displays this allocation continuously in the top-right status panel;
+    // it is not a bank that gets zeroed after every turn.
     if (m_researchAllocPerTurn <= 0)
         return;
 
@@ -7500,25 +11824,28 @@ void StrategicLevelFrame::ApplyResearchTickEndTurn()
         return;
 
     const ResearchItem& cur = m_researchDb[m_researchActiveIndex];
-    if (cur.id < 0 || m_researchCompleted.count(cur.id))
+    if (!cur.researchable || cur.id < 0 || m_researchCompleted.count(cur.id) || !IsResearchUnlocked(cur))
         return;
 
-    if (m_research <= 0)
+    const int spend = std::max(0, m_research);
+    if (spend <= 0)
         return;
 
     const int cost = std::max(1, cur.cost);
     int& prog = m_researchProgressById[cur.id];
 
-    // Spend all available points this turn (doubled research speed)
-    const int spend = m_research * 2;
-    m_research = 0;
+    // 3 strategic points produce one research point. Apply that point once;
+    // Stage 6 both accumulated it as currency and multiplied it again by two.
     prog += spend;
 
     if (prog >= cost)
     {
         prog = cost;
         m_researchCompleted.insert(cur.id);
-        m_researchAllocPerTurn = 0; // auto-stop when done
+        m_researchAllocPerTurn = 0;
+        m_researchActiveId = -1;
+        m_researchActiveIndex = -1;
+        NormalizeResearchSelection();
     }
 }
 
@@ -7938,6 +12265,8 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
         box->SetValue(info);
         box->ShowPosition(0);
     }
+    m_originalBriefingText = info;
+    m_originalStrategicDirty = true;
     RefreshUI();
 }
 
@@ -8009,9 +12338,9 @@ bool StrategicLevelFrame::EnsureCommanderNamesLoaded()
 
 wxString StrategicLevelFrame::GetRankAbbrev(int rank) const
 {
-    // Abbreviations (Czech-ish). Keep stable for UI.
+    // Exact order/abbreviations from the original HODNOSTI.ENG.
     static const char* kAbbr[] = {
-        "2Lt.", "1Lt.", "Cpt.", "Maj.", "LtCol.", "Col.", "MajGen.", "LtGen.", "Gen."
+        "2nd Lt.", "1st Lt.", "Cpt.", "Maj.", "Lt. Col.", "Col.", "Bgd. Gen.", "Maj. Gen.", "Gen."
     };
     if (rank < 0) rank = 0;
     if (rank >= (int)(sizeof(kAbbr) / sizeof(kAbbr[0])))
@@ -8063,15 +12392,12 @@ void StrategicLevelFrame::MaybeGenerateCommanderOffer()
     if (name.empty())
         name = m_commanderNames[(size_t)(std::rand() % (int)m_commanderNames.size())];
 
-    // Rank is never higher than player's rank.
-    int rankMax = std::max(0, m_player.rank);
-    int rank = 0;
-    if (rankMax > 0)
-        rank = std::rand() % (rankMax + 1);
-
+    // Original manual/data: newly offered commanders always arrive as
+    // nadporucik / 1st Lieutenant. Their later promotions use the
+    // actions_required column from HODNOSTI.DEF.
     CommanderRec rec;
     rec.name = name;
-    rec.rank = rank;
+    rec.rank = 1;
 
     m_availableCommanders.push_back(rec);
     m_cmdGenCountInWindow += 1;
@@ -8079,9 +12405,16 @@ void StrategicLevelFrame::MaybeGenerateCommanderOffer()
 
 void StrategicLevelFrame::OnBuyCommander(wxCommandEvent&)
 {
-    if ((int)m_playerCommanders.size() >= 14)
+    LoadRanksTable();
+    RecomputePlayerRank();
+    int maxCommanders = 0;
+    if (const CommanderRankRec* rank = FindRankRec(m_player.rank))
+        maxCommanders = std::clamp(rank->max_commanders, 0, 14);
+
+    if ((int)m_playerCommanders.size() >= maxCommanders)
     {
-        wxMessageBox("Commander limit reached (14).", "Buy commander", wxOK | wxICON_INFORMATION, this);
+        wxMessageBox(wxString::Format("Commander limit reached (%d).", maxCommanders),
+            "Buy commander", wxOK | wxICON_INFORMATION, this);
         return;
     }
 
@@ -8597,16 +12930,9 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     // update launch count
     m_territoryLaunchCount[terr_id] += 1;
 
-    // very simple progression for multi-variant missions:
-    // if Mission(MXX_YYA) has EndOKMission(MXX_YYB) -> advance.
-    const std::string upperName = to_upper(token);
-    if (const LevelMission* m = FindMissionByNameUpper(upperName))
-    {
-        if (!m->end_ok_mission.empty() && m->end_ok_mission != "none")
-        {
-            m_territoryCurrentMission[terr_id] = to_lower(m->end_ok_mission);
-        }
-    }
+    // IMPORTANT: mission progression happens only after HandleMissionResult().
+    // Advancing EndOKMission here used to corrupt the campaign when a mission
+    // was failed/aborted and also skipped chained final missions.
 
     // Clear selection after launch
     m_selectedUnitsForMission.clear();
@@ -8614,6 +12940,17 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 
     // persist progression before leaving the strategic screen
     SaveStrategicState();
+
+    // Apply the resolution selected on the reconstructed strategic Options screen.
+    // Do not fight a maximized main window; in that case the platform owns its size.
+    if (!m_main->IsMaximized())
+    {
+        static const std::array<wxSize, 3> kBattleClientSizes = {
+            wxSize(640, 480), wxSize(800, 600), wxSize(1024, 768)
+        };
+        const int resolutionIndex = std::clamp(m_originalBattleResolution, 0, 2);
+        m_main->SetClientSize(kBattleClientSizes[static_cast<size_t>(resolutionIndex)]);
+    }
 
     // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
     m_main->SetGameModeUI(true);
@@ -8626,8 +12963,6 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 {
     m_turn += 1;
-    // TODO: Replace this placeholder income with Resources system once economy is balanced.
-    m_money += 50;
 
     // Check timeouts (auto-BAD for territories)
     CheckTimeouts();
@@ -8646,6 +12981,11 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
 
     ApplyResearchTickEndTurn();
 
+    // Pools may have depleted this turn. Clamp the next-turn research allocation
+    // only after the current turn's research points have been applied.
+    SetGlobalResearchAllocation(m_resourcesGlobalResearch);
+    RefreshResourcesPage();
+
     // Apply unit cooldown ticks (recruit/upgrade completion)
     ApplyUnitsCooldownTick();
 
@@ -8653,7 +12993,13 @@ void StrategicLevelFrame::OnEndTurn(wxCommandEvent&)
     // Offers do not carry over between turns.
     // Store offer of commanders only for the current turn.
     // m_availableCommanders.clear();
+    const std::size_t commanderOffersBefore = m_availableCommanders.size();
     MaybeGenerateCommanderOffer();
+    if (m_availableCommanders.size() > commanderOffersBefore)
+    {
+        wxMessageBox(L"Nov\u00FD d\u016Fstojn\u00EDk p\u0159i\u0161el do gener\u00E1ln\u00EDho \u0161t\u00E1bu.",
+            L"Gener\u00E1ln\u00ED \u0161t\u00E1b", wxOK | wxICON_INFORMATION, this);
+    }
 
     SaveStrategicState();
     RefreshUI();
@@ -8784,11 +13130,16 @@ static bool LoadStrategicStateFile(
         territoryLaunchCount[t.id] = 0;
     }
 
-    // default resources state
+    // Default finite strategic-point state from LEVEL_XX.DEF.
     for (const auto& t : level.territories)
     {
-        territoryResources[t.id] = StrategicLevelFrame::TerritoryResourceState{};
+        StrategicLevelFrame::TerritoryResourceState st;
+        st.total = std::max(0, t.strategic_points_total);
+        st.remaining = st.total;
+        st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+        territoryResources[t.id] = st;
     }
+    territoryResources[0] = StrategicLevelFrame::TerritoryResourceState{};
 
     if (out_level_def) out_level_def->clear();
     if (out_timestamp) out_timestamp->clear();
@@ -8921,18 +13272,102 @@ static bool LoadStrategicStateFile(
                 StrategicLevelFrame::TerritoryResourceState st;
                 if (std::regex_search(obj, mo, std::regex("\\\"id\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
                     id = std::stoi(mo[1].str());
-                if (id <= 0) continue;
+                if (id < 0) continue;
                 if (std::regex_search(obj, mo, std::regex("\\\"total\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
                     st.total = std::max(0, std::stoi(mo[1].str()));
                 if (std::regex_search(obj, mo, std::regex("\\\"remaining\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
                     st.remaining = std::max(0, std::stoi(mo[1].str()));
+                const bool hasIncomePerTurn =
+                    std::regex_search(obj, mo, std::regex("\\\"income_per_turn\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1;
+                if (hasIncomePerTurn)
+                    st.incomePerTurn = std::max(0, std::stoi(mo[1].str()));
                 if (std::regex_search(obj, mo, std::regex("\\\"research_percent\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
                     st.researchPercent = std::clamp(std::stoi(mo[1].str()), 0, 100);
                 if (std::regex_search(obj, mo, std::regex("\\\"alloc_accum\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
                     st.allocAccum = std::clamp(std::stoi(mo[1].str()), 0, 99);
                 if (std::regex_search(obj, mo, std::regex("\\\"research_carry\\\"\\s*:\\s*(-?\\d+)")) && mo.size() > 1)
-                    st.researchCarry = std::clamp(std::stoi(mo[1].str()), 0, 3);
+                    st.researchCarry = id == 0 ? std::max(0, std::stoi(mo[1].str()))
+                                               : std::clamp(std::stoi(mo[1].str()), 0, 3);
+                if (id > 0)
+                {
+                    for (const auto& t : level.territories)
+                    {
+                        if (t.id != id) continue;
+                        // Stage 6 originally saved a synthetic 20/20 pool and did not
+                        // persist income_per_turn at all. Such saves cannot describe
+                        // the real Spellcross economy, so rebuild those legacy pools
+                        // from DefineStrategicPoints() instead of preserving bad data.
+                        if (!hasIncomePerTurn)
+                        {
+                            st.total = std::max(0, t.strategic_points_total);
+                            st.remaining = st.total;
+                            st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+                        }
+                        else
+                        {
+                            if (st.total <= 0 && t.strategic_points_total > 0)
+                                st.total = t.strategic_points_total;
+                            if (st.incomePerTurn <= 0)
+                                st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+                            if (st.remaining > st.total && st.total > 0)
+                                st.remaining = st.total;
+                        }
+                        break;
+                    }
+                }
                 territoryResources[id] = st;
+            }
+        }
+    }
+
+    // mission-flow runtime state (optional/backward compatible)
+    if (g_missionFlowPersistLoad)
+    {
+        if (g_missionFlowPersistLoad->timeoutTurn) g_missionFlowPersistLoad->timeoutTurn->clear();
+        if (g_missionFlowPersistLoad->triggeredEvents) g_missionFlowPersistLoad->triggeredEvents->clear();
+        if (g_missionFlowPersistLoad->activatedEvents) g_missionFlowPersistLoad->activatedEvents->clear();
+        if (g_missionFlowPersistLoad->counterAttacks) g_missionFlowPersistLoad->counterAttacks->clear();
+
+        const std::string mf = ExtractJsonBlock(data, "mission_flow");
+        if (!mf.empty() && mf != "null")
+        {
+            if (g_missionFlowPersistLoad->timeoutTurn)
+            {
+                const std::string obj = ExtractJsonBlock(mf, "timeouts");
+                std::regex pair_re("\"(\\d+)\"\\s*:\\s*(-?\\d+)");
+                for (auto it = std::sregex_iterator(obj.begin(), obj.end(), pair_re); it != std::sregex_iterator(); ++it)
+                    (*g_missionFlowPersistLoad->timeoutTurn)[std::stoi((*it)[1].str())] = std::stoi((*it)[2].str());
+            }
+            if (g_missionFlowPersistLoad->triggeredEvents)
+            {
+                const std::string arr = ExtractJsonBlock(mf, "triggered_events");
+                std::regex num_re("(-?\\d+)");
+                for (auto it = std::sregex_iterator(arr.begin(), arr.end(), num_re); it != std::sregex_iterator(); ++it)
+                    g_missionFlowPersistLoad->triggeredEvents->insert(std::stoi((*it)[1].str()));
+            }
+            if (g_missionFlowPersistLoad->activatedEvents)
+            {
+                const std::string obj = ExtractJsonBlock(mf, "activated_events");
+                std::regex pair_re("\"(\\d+)\"\\s*:\\s*(-?\\d+)");
+                for (auto it = std::sregex_iterator(obj.begin(), obj.end(), pair_re); it != std::sregex_iterator(); ++it)
+                    (*g_missionFlowPersistLoad->activatedEvents)[std::stoi((*it)[1].str())] = std::stoi((*it)[2].str());
+            }
+            if (g_missionFlowPersistLoad->counterAttacks)
+            {
+                const std::string arr = ExtractJsonBlock(mf, "counter_attacks");
+                std::regex obj_re("\\{[^\\}]*\\}");
+                for (auto it = std::sregex_iterator(arr.begin(), arr.end(), obj_re); it != std::sregex_iterator(); ++it)
+                {
+                    const std::string obj = (*it)[0].str();
+                    StrategicLevelFrame::CounterAttackState ca;
+                    (void)ParseJsonIntField(obj, "territory_id", ca.territory_id);
+                    (void)ParseJsonIntField(obj, "conquest_turn", ca.conquest_turn);
+                    (void)ParseJsonIntField(obj, "trigger_turn", ca.trigger_turn);
+                    (void)ParseJsonStringField(obj, "counter_mission", ca.counter_mission);
+                    ca.triggered = obj.find("\"triggered\":true") != std::string::npos || obj.find("\"triggered\": true") != std::string::npos;
+                    ca.completed = obj.find("\"completed\":true") != std::string::npos || obj.find("\"completed\": true") != std::string::npos;
+                    if (ca.territory_id > 0) g_missionFlowPersistLoad->counterAttacks->push_back(std::move(ca));
+                }
             }
         }
     }
@@ -9133,25 +13568,93 @@ static void SaveStrategicStateFile(
         f << "  \"research_state\": null,\n";
     }
 
-    // Resources per-territory state (optional on load, defaults to 20/20)
+    // Resources state.  id=0 stores the global research allocation; positive
+    // IDs store the finite strategic-point pools for each territory.
     f << "  \"resources\": [\n";
+    {
+        const auto mit = territoryResources.find(0);
+        const auto meta = mit != territoryResources.end()
+            ? mit->second : StrategicLevelFrame::TerritoryResourceState{};
+        f << "    {\"id\": 0, \"total\": 0, \"remaining\": 0, \"income_per_turn\": 0"
+          << ", \"research_percent\": 0, \"alloc_accum\": 0"
+          << ", \"research_carry\": " << meta.researchCarry << "}";
+        if (!level.territories.empty()) f << ",";
+        f << "\n";
+    }
     for (size_t i = 0; i < level.territories.size(); ++i)
     {
         const int tid = level.territories[i].id;
         auto it = territoryResources.find(tid);
-        const auto st = (it != territoryResources.end()) ? it->second : StrategicLevelFrame::TerritoryResourceState{};
+        auto st = (it != territoryResources.end()) ? it->second : StrategicLevelFrame::TerritoryResourceState{};
+        if (st.total <= 0 && level.territories[i].strategic_points_total > 0)
+        {
+            st.total = level.territories[i].strategic_points_total;
+            if (st.remaining <= 0) st.remaining = st.total;
+        }
+        if (st.incomePerTurn <= 0)
+            st.incomePerTurn = std::max(0, level.territories[i].strategic_points_per_turn);
         f << "    {\"id\": " << tid
             << ", \"total\": " << st.total
             << ", \"remaining\": " << st.remaining
+            << ", \"income_per_turn\": " << st.incomePerTurn
             << ", \"research_percent\": " << st.researchPercent
             << ", \"alloc_accum\": " << st.allocAccum
             << ", \"research_carry\": " << st.researchCarry
             << "}";
-        if (i + 1 < level.territories.size())
-            f << ",";
+        if (i + 1 < level.territories.size()) f << ",";
         f << "\n";
     }
     f << "  ],\n";
+
+    // Mission-flow runtime state. Deadlines are absolute strategic turns so
+    // saving/loading cannot reset a timed mission.
+    if (g_missionFlowPersistSave && g_missionFlowPersistSave->timeoutTurn &&
+        g_missionFlowPersistSave->triggeredEvents && g_missionFlowPersistSave->activatedEvents &&
+        g_missionFlowPersistSave->counterAttacks)
+    {
+        f << "  \"mission_flow\": {\n";
+        f << "    \"timeouts\": {";
+        bool firstT = true;
+        for (const auto& kv : *g_missionFlowPersistSave->timeoutTurn)
+        {
+            if (!firstT) f << ", "; firstT = false;
+            f << "\"" << kv.first << "\": " << kv.second;
+        }
+        f << "},\n";
+        f << "    \"triggered_events\": [";
+        bool firstE = true;
+        for (int id : *g_missionFlowPersistSave->triggeredEvents)
+        {
+            if (!firstE) f << ", "; firstE = false; f << id;
+        }
+        f << "],\n";
+        f << "    \"activated_events\": {";
+        bool firstA = true;
+        for (const auto& kv : *g_missionFlowPersistSave->activatedEvents)
+        {
+            if (!firstA) f << ", "; firstA = false;
+            f << "\"" << kv.first << "\": " << kv.second;
+        }
+        f << "},\n";
+        f << "    \"counter_attacks\": [";
+        bool firstC = true;
+        for (const auto& ca : *g_missionFlowPersistSave->counterAttacks)
+        {
+            if (!firstC) f << ", "; firstC = false;
+            f << "{\"territory_id\":" << ca.territory_id
+              << ",\"conquest_turn\":" << ca.conquest_turn
+              << ",\"trigger_turn\":" << ca.trigger_turn
+              << ",\"counter_mission\":\"" << EscapeJson(ca.counter_mission) << "\""
+              << ",\"triggered\":" << (ca.triggered ? "true" : "false")
+              << ",\"completed\":" << (ca.completed ? "true" : "false") << "}";
+        }
+        f << "]\n";
+        f << "  },\n";
+    }
+    else
+    {
+        f << "  \"mission_flow\": null,\n";
+    }
 
     f << "  \"player\": {"
         << "\"name\": \"" << EscapeJson(player.name) << "\", "
@@ -9280,10 +13783,19 @@ void StrategicLevelFrame::LoadStrategicState()
     UnitStatePersistLoadView* prevU = g_unitStatePersistLoad;
     g_unitStatePersistLoad = &ulv;
 
+    MissionFlowPersistLoadView mflv;
+    mflv.timeoutTurn = &m_territoryTimeoutTurn;
+    mflv.triggeredEvents = &m_triggeredLevelEvents;
+    mflv.activatedEvents = &m_activatedEvents;
+    mflv.counterAttacks = &m_counterAttacks;
+    MissionFlowPersistLoadView* prevMF = g_missionFlowPersistLoad;
+    g_missionFlowPersistLoad = &mflv;
+
     const bool ok = LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
         playerCmds, availCmds, windowStart, genCount,
         gm, owned, terrRes,
         &level_def, &ts);
+    g_missionFlowPersistLoad = prevMF;
     g_unitStatePersistLoad = prevU;
     g_researchPersistLoad = prevR;
 
@@ -9303,6 +13815,10 @@ void StrategicLevelFrame::LoadStrategicState()
         m_research = research;
         m_selectedTerritory = selected;
         m_player = player;
+        // Rank is derived data.  Recompute it from the canonical player-XP
+        // thresholds so old saves made by the broken actions+XP logic repair
+        // themselves immediately after loading.
+        RecomputePlayerRank();
         m_territoryCurrentMission = std::move(terrM);
         m_territoryLaunchCount = std::move(terrL);
         m_playerUnits = std::move(units);
@@ -9344,12 +13860,25 @@ void StrategicLevelFrame::LoadStrategicState()
         }
 
         m_territoryResources = std::move(terrRes);
-        // Backfill missing territories to defaults
+        // Backfill missing territories from the canonical LEVEL_XX.DEF economy.
         for (const auto& tt : m_level.territories)
         {
             if (m_territoryResources.find(tt.id) == m_territoryResources.end())
-                m_territoryResources[tt.id] = TerritoryResourceState{};
+            {
+                TerritoryResourceState st;
+                st.total = std::max(0, tt.strategic_points_total);
+                st.remaining = st.total;
+                st.incomePerTurn = std::max(0, tt.strategic_points_per_turn);
+                m_territoryResources[tt.id] = st;
+            }
         }
+        // Restore the global allocation immediately.  Previously it was only
+        // copied out of the id=0 meta record after opening the Resources page,
+        // so ending a turn straight after loading silently routed everything to money.
+        const auto metaIt = m_territoryResources.find(kResourcesMetaTerritoryId);
+        m_resourcesGlobalResearch = metaIt != m_territoryResources.end()
+            ? std::max(0, metaIt->second.researchCarry) : 0;
+        SetGlobalResearchAllocation(m_resourcesGlobalResearch);
 
         // Ensure start territory when loading older saves / empty campaign state.
         if (m_gameModeEnabled && m_ownedTerritories.empty())
@@ -9427,6 +13956,8 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     m_money = money;
     m_research = research;
     m_player = player;
+    // Never carry a stale serialized rank into a new chapter.
+    RecomputePlayerRank();
     m_playerUnits = std::move(units);
     m_unitStates = std::move(loadedUnitStates);
     m_playerCommanders = std::move(playerCmds);
@@ -9548,6 +14079,14 @@ void StrategicLevelFrame::SaveStrategicState() const
     const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
     g_unitStatePersistSave = &usv;
 
+    MissionFlowPersistSaveView mfsv;
+    mfsv.timeoutTurn = &m_territoryTimeoutTurn;
+    mfsv.triggeredEvents = &m_triggeredLevelEvents;
+    mfsv.activatedEvents = &m_activatedEvents;
+    mfsv.counterAttacks = &m_counterAttacks;
+    const MissionFlowPersistSaveView* prevMF = g_missionFlowPersistSave;
+    g_missionFlowPersistSave = &mfsv;
+
     SaveStrategicStateFile(
         path, m_level, m_turn, m_money, m_research, m_selectedTerritory,
         m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
@@ -9555,9 +14094,134 @@ void StrategicLevelFrame::SaveStrategicState() const
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         NowIsoLocal());
 
+    g_missionFlowPersistSave = prevMF;
     g_unitStatePersistSave = prevU;
     g_researchPersistSave = prev;
 }
+
+bool StrategicLevelFrame::ExportBattleSaveContext(std::string& level_def_path,
+    std::string& strategic_state_json, PendingMissionResult& pending) const
+{
+    // A tactical save is a snapshot taken *inside* a mission.  Persist the
+    // strategic side first, then embed those exact bytes into the battle save.
+    // This is intentionally not just a filename link: loading an older battle
+    // save must roll the strategic campaign back to the matching point in time.
+    SaveStrategicState();
+
+    level_def_path = m_level.source_path;
+    pending = m_pendingMission;
+
+    const auto path = GetStrategicStatePath(m_level);
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return false;
+
+    strategic_state_json.assign(std::istreambuf_iterator<char>(f),
+        std::istreambuf_iterator<char>());
+    return !strategic_state_json.empty();
+}
+
+bool StrategicLevelFrame::ImportBattleSaveContext(const std::string& strategic_state_json,
+    const PendingMissionResult& pending)
+{
+    if (strategic_state_json.empty())
+        return false;
+
+    const auto path = GetStrategicStatePath(m_level);
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec)
+        return false;
+
+    {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (!f)
+            return false;
+        f.write(strategic_state_json.data(), static_cast<std::streamsize>(strategic_state_json.size()));
+        if (!f)
+            return false;
+    }
+
+    LoadStrategicState();
+    m_pendingMission = pending;
+    return true;
+}
+
+bool StrategicLevelFrame::HasStrategicAutosave() const
+{
+    std::error_code ec;
+    const auto path = GetStrategicStatePath(m_level);
+    return std::filesystem::exists(path, ec) && !ec && std::filesystem::is_regular_file(path, ec);
+}
+
+bool StrategicLevelFrame::RecoverPendingMissionFromLoadedBattle(const std::string& mission_token)
+{
+    if (mission_token.empty())
+        return false;
+
+    const std::string token_up = to_upper(mission_token);
+    int territory_id = -1;
+
+    auto matches = [&](const std::string& candidate) -> bool
+    {
+        if (candidate.empty() || to_lower(candidate) == "none")
+            return false;
+        const std::string c = to_upper(candidate);
+        return token_up == c || token_up.rfind(c, 0) == 0 || c.rfind(token_up, 0) == 0;
+    };
+
+    // Prefer the live mission state from the strategic autosave; fall back to
+    // canonical territory mission/intro tokens for legacy saves.
+    for (const auto& t : m_level.territories)
+    {
+        auto it = m_territoryCurrentMission.find(t.id);
+        if (it != m_territoryCurrentMission.end() && matches(it->second))
+        {
+            territory_id = t.id;
+            break;
+        }
+        if (matches(t.mission) || matches(t.intro_mission))
+        {
+            territory_id = t.id;
+            break;
+        }
+    }
+    if (territory_id < 0)
+        return false;
+
+    PendingMissionResult recovered;
+    recovered.valid = true;
+    recovered.territory_id = territory_id;
+    recovered.mission_token = mission_token;
+
+    // Old .scsave files did not store the sent-roster mapping.  Reconstruct it
+    // from tactical Alliance unit types and the strategic roster.  This is a
+    // best-effort compatibility path only; new saves embed the exact mapping.
+    SpellMap* tactical = m_main ? m_main->GetSpellMap() : nullptr;
+    if (tactical && tactical->IsLoaded())
+    {
+        std::unordered_map<int, int> needed;
+        for (auto* u : tactical->units)
+        {
+            if (!u || !u->unit || u->is_enemy)
+                continue;
+            needed[u->unit->type_id] += 1;
+        }
+
+        for (size_t i = 0; i < m_playerUnits.size(); ++i)
+        {
+            auto& n = needed[m_playerUnits[i].unit_id];
+            const int take = std::min(std::max(0, m_playerUnits[i].count), n);
+            for (int k = 0; k < take; ++k)
+                recovered.sent_unit_indices.push_back(i);
+            n -= take;
+        }
+    }
+
+    m_pendingMission = std::move(recovered);
+    return true;
+}
+
 
 wxString StrategicLevelFrame::GetUnitDisplayName(int unit_id) const
 {
@@ -10079,7 +14743,10 @@ static bool BuildStrategicScreenBitmap(SpellData* spellData, const char* resourc
     else if (screenName == "VMU_FULL.LZ")
     {
         blitLayer("UNITS.LZ", 406, 464, 6, 8);
-        blitLayer("VMU_LST2.LZ", 241, 141, 334, 292);
+        // Positions measured by matching the original layers against a native
+        // 640x480 screenshot (not guessed from neighbouring frames).
+        blitLayer("VMU_LST2.LZ", 241, 141, 334, 291);
+        blitLayer("VMU_LST1.LZ", 154, 41, 421, 434);
     }
     else if (screenName == "VMB_FULL.LZ")
     {
@@ -11050,8 +15717,8 @@ void StrategicLevelFrame::RefreshStatsPage()
         m_fontText, m_palette.shadow);
 
     const CommanderRankRec* rec = FindRankRec(m_player.rank);
-    const int maxUnits = rec ? rec->max_units : 0;
-    const int maxCmds = rec ? rec->max_commanders : 0;
+    const int maxUnits = rec ? std::clamp(rec->max_units, 0, 32) : 0;
+    const int maxCmds = rec ? std::clamp(rec->max_commanders, 0, 14) : 0;
     const int nextExp = FindNextRankExp(m_player.rank);
 
     UpdateStrategicLabel(m_lblPlayerName, { { wxString::Format("Player - %s", wxString::FromUTF8(m_player.name)), m_palette.text, &m_fontText } },
@@ -11114,17 +15781,20 @@ void StrategicLevelFrame::LoadRanksTable()
     wxString p = FindHodnostiDefPath();
     if (p.empty())
     {
-        // Fallback defaults (kept identical to former form_strategic.*)
+        // Exact values from the original COMMON.FS/HODNOSTI.DEF.
+        // Parameter 3 is the number of battles a *subordinate commander* needs
+        // for that commander rank; parameter 4 is John Alexander's strategic
+        // experience threshold.  Do not conflate the two progression systems.
         m_ranks = {
             {0,  2,  2,     0,  0},
             {1,  4,  6,     0,  0},
             {2,  9, 10,     0,  2},
-            {3, 12, 18,   300,  4},
-            {4, 14, 26,  2550,  6},
-            {5, 18, 36,  5350,  8},
-            {6, 22, 48, 10000, 10},
-            {7, 26, 66, 16000, 12},
-            {8, 32, 84, 26000, 14},
+            {3, 14, 18,   300,  4},
+            {4, 18, 26,  2550,  6},
+            {5, 22, 36,  5350,  8},
+            {6, 28, 48, 10000, 10},
+            {7, 34, 66, 16000, 12},
+            {8, 40, 84, 26000, 14},
         };
         return;
     }
@@ -11205,10 +15875,20 @@ void StrategicLevelFrame::LoadMissionStatsIfPresent()
 
 void StrategicLevelFrame::RecomputePlayerRank()
 {
+    if (m_ranks.empty())
+        LoadRanksTable();
+
+    // HODNOSTI.DEF has two independent progression columns:
+    //   actions_required = battles needed by a recruited subordinate commander
+    //   exp_required     = strategic XP needed by the player/John Alexander
+    // The old implementation incorrectly required BOTH values for John, which
+    // left a fresh campaign at rank 0.  In the original data ranks 0..2 all
+    // have player XP threshold 0, so John enters the strategic game as Captain
+    // (rank 2) and immediately has two commander slots.
     int best = 0;
     for (const auto& r : m_ranks)
     {
-        if (m_player.experience >= r.exp_required && m_player.actions >= r.actions_required)
+        if (m_player.experience >= r.exp_required)
             best = std::max(best, r.rank);
     }
     m_player.rank = best;
@@ -11262,8 +15942,21 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
 
 void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, const std::string& mission_token)
 {
-    // Collect battle results from the tactical map (losses, damage, experience)
-    LossBlock mission_enemy_kills = CollectAndApplyBattleResults(success);
+    // Collect battle results from the tactical map (losses, damage, unit experience).
+    // John Alexander's *strategic* XP is not derived from kill counts; the
+    // original campaign scripts provide the mission rewards explicitly via
+    // EndOK(money, experience) in LEVEL_XX.DEF.
+    CollectAndApplyBattleResults(success);
+
+    // Resolve the exact mission record once. Territory tokens often omit the
+    // trailing variant letter (m02_02 -> M02_02A).
+    const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
+    if (!mission)
+    {
+        std::string tokenUp = to_upper(mission_token);
+        if (!tokenUp.empty() && std::isdigit((unsigned char)tokenUp.back()))
+            mission = FindMissionByNameUpper(tokenUp + "A");
+    }
 
     // Check if this was a counter-attack mission
     bool wasCounterAttack = false;
@@ -11292,26 +15985,23 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
     if (success)
     {
         m_stats.missions_completed++;
+        // Keep this legacy counter for save compatibility/debug statistics.
+        // It is deliberately NOT used for John Alexander's rank.
         m_player.actions++;
 
-        // Award player experience for completed mission
-        // Base: 100 XP per mission + bonus per enemy killed
-        int xp_award = 100 + mission_enemy_kills.light * 10
-                           + mission_enemy_kills.heavy * 15
-                           + mission_enemy_kills.air * 15
-                           + mission_enemy_kills.commanders * 25;
+        // Original strategic reward semantics from LEVEL_XX.DEF:
+        //     EndOK(<money>, <player experience>)
+        // Examples from the original data:
+        //     M02_02A EndOK(50,40)
+        //     M04_16A EndOK(780,2800)
+        //     M09_13A EndOK(600,15000)
+        // The previous restoration ignored these fields and invented XP from
+        // enemy unit kills, which broke the intended promotion curve.
+        const int money_award = mission ? std::max(0, mission->end_ok_x) : 0;
+        const int xp_award = mission ? std::max(0, mission->end_ok_y) : 0;
+        m_money += money_award;
         m_player.experience += xp_award;
         RecomputePlayerRank();
-
-        const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
-        // Territory tokens like "m01_01" don't include the variant suffix;
-        // mission names in the DEF are "M01_01A". Try with 'A' appended.
-        if (!mission)
-        {
-            std::string tokenUp = to_upper(mission_token);
-            if (!tokenUp.empty() && std::isdigit((unsigned char)tokenUp.back()))
-                mission = FindMissionByNameUpper(tokenUp + "A");
-        }
 
         // Play end_ok_video if defined
         if (mission && !mission->end_ok_video.empty() && mission->end_ok_video != "none")
@@ -11319,27 +16009,73 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
             PlayVideo(mission->end_ok_video);
         }
 
-        // Conquest territory (skip if this was a counter-attack — already owned)
-        if (!wasCounterAttack)
-            ConquestTerritory(territory_id);
+        const bool hasSuccessor = mission && !mission->end_ok_mission.empty() && mission->end_ok_mission != "none";
 
-        // Check if this mission advances to next variant
-        if (mission && !mission->end_ok_mission.empty() && mission->end_ok_mission != "none")
+        if (hasSuccessor)
         {
+            // Multi-stage territory: keep it hostile and move to the next mission
+            // only after a successful result.  This is essential for e.g. the
+            // final territories in LEVEL_07 and LEVEL_10 (A -> B).
             m_territoryCurrentMission[territory_id] = to_lower(mission->end_ok_mission);
+            m_territoryTimeoutTurn.erase(territory_id);
+        }
+        else if (!wasCounterAttack)
+        {
+            // A territory is secured only when its successful mission chain ends.
+            ConquestTerritory(territory_id);
         }
 
-        // Check if level is complete
+        // Campaign progression is driven by LevelInit::End(n).  Earlier builds
+        // also treated "all territories conquered" (and a mission-level flag)
+        // as an unconditional completion trigger.  That is NOT the original
+        // strategic flow and could jump LEVEL_02 -> LEVEL_03 after the first
+        // conquered territory when restored/save state got out of sync.
+        //
+        // In the original campaign the crossed-swords territory is exactly the
+        // End(n) territory.  A level advances only after the terminal successful
+        // mission on that territory.  If that mission has EndOKMission(next), the
+        // territory remains hostile and the next stage must be completed first.
         bool isLevelComplete = false;
+        if (!hasSuccessor)
+        {
+            if (m_level.end_territory > 0)
+            {
+                // Be deliberately strict: both the pending territory id and the
+                // resolved mission token must belong to the End(n) territory.
+                // This also protects against stale pending-mission state from an
+                // older save/build.
+                const LevelTerritory* finalTerr = nullptr;
+                for (const auto& t : m_level.territories)
+                    if (t.id == m_level.end_territory) { finalTerr = &t; break; }
 
-        if (mission && mission->is_level_final)
-            isLevelComplete = true;
+                bool tokenMatchesFinal = (territory_id == m_level.end_territory);
+                if (tokenMatchesFinal && finalTerr && !mission_token.empty())
+                {
+                    const std::string tokenUp = to_upper(mission_token);
+                    const std::string baseUp = to_upper(finalTerr->mission);
+                    const std::string introUp = to_upper(finalTerr->intro_mission);
+                    tokenMatchesFinal =
+                        (!baseUp.empty() && baseUp != "NONE" && tokenUp.rfind(baseUp, 0) == 0) ||
+                        (!introUp.empty() && introUp != "NONE" && tokenUp.rfind(introUp, 0) == 0);
+                }
+                isLevelComplete = (territory_id == m_level.end_territory) && tokenMatchesFinal;
+            }
+            else if (mission && mission->is_level_final)
+            {
+                // Compatibility for custom definitions that do not use End(n).
+                isLevelComplete = true;
+            }
+            else if (!m_gameModeEnabled)
+            {
+                // Editor/debug fallback only.  The campaign must never use this
+                // shortcut because discovery order and End(n) are authoritative.
+                isLevelComplete = AreAllTerritoriesConquered();
+            }
+        }
 
-        if (IsFinalTerritory(territory_id))
-            isLevelComplete = true;
-
-        if (AreAllTerritoriesConquered())
-            isLevelComplete = true;
+        wxLogMessage("[STRATEGIC FLOW] result terr=%d end=%d token='%s' successor=%s complete=%s",
+            territory_id, m_level.end_territory, mission_token.c_str(),
+            hasSuccessor ? "YES" : "NO", isLevelComplete ? "YES" : "NO");
 
         if (isLevelComplete)
         {
@@ -11353,14 +16089,6 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
     {
         m_stats.missions_failed++;
 
-        const LevelMission* mission = FindMissionByNameUpper(to_upper(mission_token));
-        if (!mission)
-        {
-            std::string tokenUp = to_upper(mission_token);
-            if (!tokenUp.empty() && std::isdigit((unsigned char)tokenUp.back()))
-                mission = FindMissionByNameUpper(tokenUp + "A");
-        }
-
         // Play end_bad_video if defined
         if (mission && !mission->end_bad_video.empty() && mission->end_bad_video != "none")
         {
@@ -11371,6 +16099,8 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
         if (mission && !mission->end_bad_mission.empty() && mission->end_bad_mission != "none")
         {
             m_territoryCurrentMission[territory_id] = to_lower(mission->end_bad_mission);
+            // The replacement mission owns its own Time(...) rule.
+            m_territoryTimeoutTurn.erase(territory_id);
         }
     }
 
@@ -11648,7 +16378,18 @@ void StrategicLevelFrame::ConquestTerritory(int territory_id)
     m_ownedTerritories.push_back(territory_id);
     m_stats.territories_conquered++;
     
-    m_territoryResources[territory_id] = TerritoryResourceState{};
+    {
+        TerritoryResourceState st;
+        for (const auto& t : m_level.territories)
+        {
+            if (t.id != territory_id) continue;
+            st.total = std::max(0, t.strategic_points_total);
+            st.remaining = st.total;
+            st.incomePerTurn = std::max(0, t.strategic_points_per_turn);
+            break;
+        }
+        m_territoryResources[territory_id] = st;
+    }
     
     const LevelTerritory* terr = nullptr;
     for (const auto& t : m_level.territories)
@@ -11697,10 +16438,22 @@ void StrategicLevelFrame::CheckTimeouts()
         if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id) != m_ownedTerritories.end())
             continue;
         
-        // Skip territories without timeout
-        if (t.timeout_turns <= 0)
+        // Time limit belongs to the CURRENT mission variant, not permanently
+        // to the territory.  Some original chains introduce Time(...) only in
+        // a later B/C mission (e.g. M03_05B).
+        std::string curToken = ResolveMissionTokenForTerritory(t.id);
+        std::string lookupToken = to_upper(curToken);
+        const LevelMission* currentMission = FindMissionByNameUpper(lookupToken);
+        if (!currentMission && !lookupToken.empty() && std::isdigit((unsigned char)lookupToken.back()))
+            currentMission = FindMissionByNameUpper(lookupToken + "A");
+        const int timeLimit = currentMission ? std::max(0, currentMission->time_limit) : 0;
+        if (timeLimit <= 0)
+        {
+            // Do not carry a deadline from a previous mission stage.
+            m_territoryTimeoutTurn.erase(t.id);
             continue;
-        
+        }
+
         // Check if territory is visible
         if (t.id < (int)m_visibleTerritory.size() && m_visibleTerritory[t.id] == 0)
             continue;
@@ -11708,8 +16461,8 @@ void StrategicLevelFrame::CheckTimeouts()
         auto it = m_territoryTimeoutTurn.find(t.id);
         if (it == m_territoryTimeoutTurn.end())
         {
-            // Set timeout from now
-            m_territoryTimeoutTurn[t.id] = m_turn + t.timeout_turns;
+            // Start countdown when this mission stage first becomes available.
+            m_territoryTimeoutTurn[t.id] = m_turn + timeLimit;
         }
         else if (it->second <= 0)
         {
@@ -11720,31 +16473,27 @@ void StrategicLevelFrame::CheckTimeouts()
         {
             if (m_turn >= it->second)
             {
-                // Resolve the current mission token for this territory
-                std::string curToken = ResolveMissionTokenForTerritory(t.id);
-                // Try to append 'A' if token ends with digit (m04_07 -> M04_07A)
-                std::string lookupToken = to_upper(curToken);
-                if (!lookupToken.empty() && std::isdigit((unsigned char)lookupToken.back()))
-                    lookupToken += "A";
-
-                // Find the mission and its EndBadMission
-                const LevelMission* mission = FindMissionByNameUpper(lookupToken);
-                if (!mission && lookupToken != to_upper(curToken))
-                    mission = FindMissionByNameUpper(to_upper(curToken));
+                // Resolve the current mission record already used for the timer.
+                const LevelMission* mission = currentMission;
 
                 if (mission && !mission->end_bad_mission.empty() && mission->end_bad_mission != "none")
                 {
-                    // Switch territory to the BAD mission variant (e.g. M04_07A -> M04_07B)
+                    // Switch to the BAD mission variant. Its own Time(...) starts
+                    // on the next CheckTimeouts pass; do not leave the old deadline.
                     m_territoryCurrentMission[t.id] = to_lower(mission->end_bad_mission);
+                    const LevelMission* nextMission = FindMissionByNameUpper(to_upper(mission->end_bad_mission));
+                    if (nextMission && nextMission->time_limit > 0)
+                        m_territoryTimeoutTurn[t.id] = m_turn + nextMission->time_limit;
+                    else
+                        m_territoryTimeoutTurn.erase(t.id);
                 }
                 else
                 {
-                    // No EndBadMission defined -> territory is truly lost
+                    // No replacement mission: keep an expired sentinel so this
+                    // one-shot timeout cannot be restarted by visibility refresh.
                     m_stats.territories_lost++;
+                    it->second = -1;
                 }
-
-                // Mark as expired (sentinel -1); prevents re-adding on next CheckTimeouts call
-                it->second = -1;
             }
         }
     }
@@ -12336,28 +17085,28 @@ void StrategicLevelFrame::DrawTerritoryMarker(wxDC& dc, int territory_id, int x,
 
 bool StrategicLevelFrame::AreAllTerritoriesConquered() const
 {
+    // No hard-coded "territory 1" exception.  The starting territory is already
+    // present in m_ownedTerritories, and some original levels do not start at 1.
     for (const auto& t : m_level.territories)
     {
-        if (t.id == 1)
-            continue;
-        
         if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), t.id) == m_ownedTerritories.end())
-        {
             return false;
-        }
     }
     return true;
 }
 
 bool StrategicLevelFrame::IsFinalTerritory(int territory_id) const
 {
+    // End(n) is the canonical original-data definition of the crossed-swords
+    // / final territory.  Prefer it over the cached convenience flag so campaign
+    // completion cannot be affected by stale or incorrectly reconstructed flags.
+    if (m_level.end_territory > 0)
+        return territory_id == m_level.end_territory;
+
+    // Compatibility for custom/legacy definitions without End(n).
     for (const auto& t : m_level.territories)
-    {
         if (t.id == territory_id)
-        {
             return t.is_final;
-        }
-    }
     return false;
 }
 
@@ -12486,8 +17235,10 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     
     auto* newWin = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
 
-    // Transfer player progress to next level
+    // Transfer player progress to next level. Rank is derived from XP, so
+    // normalize it on the destination frame as well.
     newWin->m_player = m_player;
+    newWin->RecomputePlayerRank();
     newWin->m_money = m_money;
     newWin->m_research = m_research;
     newWin->m_playerUnits = m_playerUnits;
@@ -12571,4 +17322,3 @@ void StrategicLevelFrame::AdvanceToNextLevel()
 
     Destroy();
 }
-

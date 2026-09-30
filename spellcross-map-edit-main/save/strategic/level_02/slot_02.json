@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "timestamp": "2026-09-29 06:27:14",
+  "level_def": "Z:\\Games\\Spellcross\\Spellcross - pokusy\\SPELCROS\\DATA\\COMMON\\LEVEL_02.DEF",
+  "turn": 2,
+  "money": 100,
+  "research": 0,
+  "selected_territory": 5,
+  "game_mode": true,
+  "owned_territories": [1, 4],
+  "research_state": {
+    "active_id": -1,
+    "active_index": -1,
+    "alloc_per_turn": 0,
+    "progress": {},
+    "completed": []
+  },
+  "resources": [
+    {"id": 0, "total": 0, "remaining": 0, "income_per_turn": 0, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 1, "total": 100, "remaining": 90, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 2, "total": 180, "remaining": 180, "income_per_turn": 20, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 3, "total": 180, "remaining": 180, "income_per_turn": 20, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 4, "total": 200, "remaining": 180, "income_per_turn": 20, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 5, "total": 0, "remaining": 0, "income_per_turn": 0, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 6, "total": 100, "remaining": 100, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0}
+  ],
+  "mission_flow": {
+    "timeouts": {},
+    "triggered_events": [],
+    "activated_events": {},
+    "counter_attacks": []
+  },
+  "player": {"name": "John Alexander", "rank": 2, "experience": 30, "actions": 1},
+  "territories": [
+    {"id": 1, "mission": "m02_01", "launches": 0},
+    {"id": 2, "mission": "m02_02", "launches": 0},
+    {"id": 3, "mission": "m02_03", "launches": 0},
+    {"id": 4, "mission": "m02_04", "launches": 0},
+    {"id": 5, "mission": "m02_05", "launches": 0},
+    {"id": 6, "mission": "m02_06", "launches": 0}
+  ],
+  "commander_generation": {"window_start_turn": 1, "generated_in_window": 0},
+  "player_commanders": [
+  ],
+  "available_commanders": [
+  ],
+  "units": [
+    {"unit_id": 0, "count": 1, "health": 100, "cooldown": 0, "experience": 0, "level": 0},
+    {"unit_id": 0, "count": 1, "health": 100, "cooldown": 0, "experience": 0, "level": 0},
+    {"unit_id": 2, "count": 1, "health": 100, "cooldown": 0, "experience": 88, "level": 1},
+    {"unit_id": 3, "count": 2, "health": 100, "cooldown": 0, "experience": 249, "level": 1},
+    {"unit_id": 29, "count": 1, "health": 100, "cooldown": 0, "experience": 13, "level": 1},
+    {"unit_id": 3, "count": 1, "health": 100, "cooldown": 0, "experience": 168, "level": 1}
+  ]
+}

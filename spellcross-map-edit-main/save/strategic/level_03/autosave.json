@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "timestamp": "2026-09-28 21:48:40",
+  "level_def": "Z:\\Games\\Spellcross\\Spellcross - pokusy\\SPELCROS\\DATA\\COMMON\\LEVEL_03.DEF",
+  "turn": 1,
+  "money": 0,
+  "research": 0,
+  "selected_territory": -1,
+  "game_mode": true,
+  "owned_territories": [1, 3],
+  "research_state": {
+    "active_id": -1,
+    "active_index": -1,
+    "alloc_per_turn": 0,
+    "progress": {},
+    "completed": []
+  },
+  "resources": [
+    {"id": 0, "total": 0, "remaining": 0, "income_per_turn": 0, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 1, "total": 100, "remaining": 100, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 2, "total": 90, "remaining": 90, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 3, "total": 100, "remaining": 100, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 4, "total": 160, "remaining": 160, "income_per_turn": 20, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 5, "total": 120, "remaining": 120, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 6, "total": 60, "remaining": 60, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 7, "total": 250, "remaining": 250, "income_per_turn": 25, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 8, "total": 100, "remaining": 100, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 9, "total": 200, "remaining": 200, "income_per_turn": 20, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 10, "total": 80, "remaining": 80, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 11, "total": 80, "remaining": 80, "income_per_turn": 10, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 12, "total": 120, "remaining": 120, "income_per_turn": 12, "research_percent": 0, "alloc_accum": 0, "research_carry": 0},
+    {"id": 13, "total": 0, "remaining": 0, "income_per_turn": 0, "research_percent": 0, "alloc_accum": 0, "research_carry": 0}
+  ],
+  "mission_flow": {
+    "timeouts": {},
+    "triggered_events": [],
+    "activated_events": {},
+    "counter_attacks": []
+  },
+  "player": {"name": "John Alexander", "rank": 2, "experience": 0, "actions": 0},
+  "territories": [
+    {"id": 1, "mission": "m03_01", "launches": 0},
+    {"id": 2, "mission": "m03_02", "launches": 0},
+    {"id": 3, "mission": "m03_03", "launches": 0},
+    {"id": 4, "mission": "m03_04", "launches": 0},
+    {"id": 5, "mission": "m03_05", "launches": 0},
+    {"id": 6, "mission": "m03_06", "launches": 0},
+    {"id": 7, "mission": "m03_07", "launches": 0},
+    {"id": 8, "mission": "m03_08", "launches": 0},
+    {"id": 9, "mission": "m03_09", "launches": 0},
+    {"id": 10, "mission": "m03_10", "launches": 0},
+    {"id": 11, "mission": "m03_11", "launches": 0},
+    {"id": 12, "mission": "m03_12", "launches": 0},
+    {"id": 13, "mission": "m03_13", "launches": 0}
+  ],
+  "commander_generation": {"window_start_turn": 1, "generated_in_window": 0},
+  "player_commanders": [
+  ],
+  "available_commanders": [
+  ],
+  "units": [
+    {"unit_id": 3, "count": 1, "health": 100, "cooldown": 0, "experience": 0, "level": 0}
+  ]
+}

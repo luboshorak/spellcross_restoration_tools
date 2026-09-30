@@ -55,9 +55,112 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include <fstream>
+#include <sstream>
+#include <cstdint>
+#include <iterator>
 
 namespace
 {
+
+    struct TacticalCampaignContext
+    {
+        bool present = false;
+        std::string level_def_path;
+        std::string strategic_state_json;
+        bool pending_valid = false;
+        int territory_id = -1;
+        std::string mission_token;
+        std::vector<std::uint64_t> sent_unit_indices;
+    };
+
+    static constexpr char kTacticalContextMarker[] = "\n--SPELLCROSS-STRATEGIC-CONTEXT-V1--\n";
+    static constexpr std::uint32_t kTacticalContextMagic = 0x31584353u; // SCX1
+    static constexpr std::uint32_t kTacticalContextVersion = 1u;
+
+    template <typename T>
+    static bool WriteCtxPod(std::ostream& os, const T& v)
+    {
+        os.write(reinterpret_cast<const char*>(&v), sizeof(T));
+        return static_cast<bool>(os);
+    }
+
+    template <typename T>
+    static bool ReadCtxPod(std::istream& is, T& v)
+    {
+        is.read(reinterpret_cast<char*>(&v), sizeof(T));
+        return static_cast<bool>(is);
+    }
+
+    static bool WriteCtxString(std::ostream& os, const std::string& v)
+    {
+        const std::uint64_t n = static_cast<std::uint64_t>(v.size());
+        if (!WriteCtxPod(os, n)) return false;
+        if (n) os.write(v.data(), static_cast<std::streamsize>(n));
+        return static_cast<bool>(os);
+    }
+
+    static bool ReadCtxString(std::istream& is, std::string& v)
+    {
+        std::uint64_t n = 0;
+        if (!ReadCtxPod(is, n)) return false;
+        constexpr std::uint64_t kMaxBlob = 64ull * 1024ull * 1024ull;
+        if (n > kMaxBlob) return false;
+        v.resize(static_cast<size_t>(n));
+        if (n) is.read(v.data(), static_cast<std::streamsize>(n));
+        return static_cast<bool>(is);
+    }
+
+    static bool AppendTacticalCampaignContext(const std::wstring& path, const TacticalCampaignContext& ctx)
+    {
+        std::ofstream os(std::filesystem::path(path), std::ios::binary | std::ios::app);
+        if (!os) return false;
+        os.write(kTacticalContextMarker, sizeof(kTacticalContextMarker) - 1);
+        if (!WriteCtxPod(os, kTacticalContextMagic) || !WriteCtxPod(os, kTacticalContextVersion)) return false;
+        if (!WriteCtxString(os, ctx.level_def_path)) return false;
+        if (!WriteCtxString(os, ctx.strategic_state_json)) return false;
+        const std::uint8_t pv = ctx.pending_valid ? 1u : 0u;
+        if (!WriteCtxPod(os, pv)) return false;
+        const std::int32_t terr = static_cast<std::int32_t>(ctx.territory_id);
+        if (!WriteCtxPod(os, terr)) return false;
+        if (!WriteCtxString(os, ctx.mission_token)) return false;
+        const std::uint64_t count = static_cast<std::uint64_t>(ctx.sent_unit_indices.size());
+        if (!WriteCtxPod(os, count)) return false;
+        for (std::uint64_t idx : ctx.sent_unit_indices)
+            if (!WriteCtxPod(os, idx)) return false;
+        return static_cast<bool>(os);
+    }
+
+    static bool ReadTacticalCampaignContext(const std::wstring& path, TacticalCampaignContext& ctx)
+    {
+        ctx = {};
+        std::ifstream f(std::filesystem::path(path), std::ios::binary);
+        if (!f) return false;
+        std::string all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        const std::string marker(kTacticalContextMarker, sizeof(kTacticalContextMarker) - 1);
+        const size_t pos = all.rfind(marker);
+        if (pos == std::string::npos) return false;
+        std::istringstream is(all.substr(pos + marker.size()), std::ios::binary);
+        std::uint32_t magic = 0, ver = 0;
+        if (!ReadCtxPod(is, magic) || !ReadCtxPod(is, ver) ||
+            magic != kTacticalContextMagic || ver != kTacticalContextVersion)
+            return false;
+        if (!ReadCtxString(is, ctx.level_def_path)) return false;
+        if (!ReadCtxString(is, ctx.strategic_state_json)) return false;
+        std::uint8_t pv = 0;
+        std::int32_t terr = -1;
+        if (!ReadCtxPod(is, pv) || !ReadCtxPod(is, terr)) return false;
+        ctx.pending_valid = pv != 0;
+        ctx.territory_id = static_cast<int>(terr);
+        if (!ReadCtxString(is, ctx.mission_token)) return false;
+        std::uint64_t count = 0;
+        if (!ReadCtxPod(is, count) || count > 100000ull) return false;
+        ctx.sent_unit_indices.resize(static_cast<size_t>(count));
+        for (std::uint64_t& idx : ctx.sent_unit_indices)
+            if (!ReadCtxPod(is, idx)) return false;
+        ctx.present = true;
+        return true;
+    }
 
     static bool IsUsableConfig(const std::filesystem::path& path)
     {
@@ -961,8 +1064,7 @@ void MainFrame::OnSaveGameState(wxCommandEvent& event)
 
     std::wstring path = dlg.GetPath().ToStdWstring();
 
-    int rc = spell_map->SaveGameStateToFile(path);
-    if (rc != 0)
+    if (!SaveTacticalGameWithCampaignContext(path))
         wxMessageBox("Save game state failed!", "Error", wxICON_ERROR);
 }
 
@@ -1347,40 +1449,11 @@ bool MainFrame::LoadGameStateFromDialog()
     wxString path = openFileDialog.GetPath();
     std::wstring wpath = path.ToStdWstring();
 
-    int r = spell_map->LoadGameStateFromFile(wpath);
-    if (r)
+    if (!LoadTacticalGameWithCampaignContext(wpath))
     {
         wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()),
             "Load error", wxICON_ERROR | wxOK, this);
         return false;
-    }
-
-    // Sync UI with game mode (LoadGameStateFromFile sets game_mode=1 internally,
-    // but UI elements like menu checkbox, ribbon panel, etc. need updating too)
-    if (spell_map->isGameMode())
-    {
-        if (GetMenuBar())
-        {
-            if (auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
-                item->Check(true);
-        }
-        if (ribbonBar)
-            ribbonBar->HidePanels();
-
-        // hide editor overlays
-        if(menuView)
-        {
-            if(menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
-            if(menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
-            if(menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
-        }
-        wxCommandEvent dummy;
-        OnViewLayer(dummy);
-
-        UpdateMenuForGameMode();
-
-        if (canvas)
-            canvas->Refresh();
     }
 
     return true;
@@ -1400,6 +1473,180 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
 
 static std::string FindLevelDefContainingMission(const std::string& missionStem,
     const SpellData* spellData);
+
+void MainFrame::SyncUiAfterTacticalLoad()
+{
+    if (!spell_map || !spell_map->isGameMode())
+        return;
+
+    if (GetMenuBar())
+    {
+        if (auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
+            item->Check(true);
+    }
+    if (ribbonBar)
+        ribbonBar->HidePanels();
+
+    if (menuView)
+    {
+        if (menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
+        if (menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
+        if (menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
+    }
+    wxCommandEvent dummy;
+    OnViewLayer(dummy);
+    UpdateMenuForGameMode();
+    if (canvas)
+        canvas->Refresh();
+}
+
+bool MainFrame::SaveTacticalGameWithCampaignContext(const std::wstring& path)
+{
+    if (!spell_map || !spell_map->IsLoaded())
+        return false;
+
+    const int rc = spell_map->SaveGameStateToFile(path);
+    if (rc != 0)
+        return false;
+
+    // The very first tactical mission legitimately has no strategic frame yet.
+    // Every mission launched from the strategic layer does, and its exact state
+    // is embedded so the battle save can be resumed days later on its own.
+    if (!m_strategicLevel)
+        return true;
+
+    TacticalCampaignContext ctx;
+    StrategicLevelFrame::PendingMissionResult pending;
+    if (!m_strategicLevel->ExportBattleSaveContext(
+            ctx.level_def_path, ctx.strategic_state_json, pending))
+        return false;
+
+    ctx.present = true;
+    ctx.pending_valid = pending.valid;
+    ctx.territory_id = pending.territory_id;
+    ctx.mission_token = pending.mission_token;
+    ctx.sent_unit_indices.reserve(pending.sent_unit_indices.size());
+    for (size_t idx : pending.sent_unit_indices)
+        ctx.sent_unit_indices.push_back(static_cast<std::uint64_t>(idx));
+
+    return AppendTacticalCampaignContext(path, ctx);
+}
+
+bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
+{
+    if (!spell_map)
+        return false;
+
+    TacticalCampaignContext ctx;
+    const bool hasEmbeddedContext = ReadTacticalCampaignContext(path, ctx);
+
+    const int rc = spell_map->LoadGameStateFromFile(path);
+    if (rc != 0)
+        return false;
+
+    auto destroyOldStrategic = [this]()
+    {
+        if (m_strategicLevel)
+        {
+            StrategicLevelFrame* old = m_strategicLevel;
+            m_strategicLevel = nullptr;
+            old->Destroy();
+        }
+    };
+
+    if (hasEmbeddedContext && ctx.present && !ctx.strategic_state_json.empty())
+    {
+        namespace fs = std::filesystem;
+        fs::path levelDef(ctx.level_def_path);
+        std::error_code ec;
+
+        if (!fs::exists(levelDef, ec))
+        {
+            // Saves may move between installs/machines. Recover the canonical
+            // LEVEL_XX.DEF from the mission token rather than trusting an old
+            // absolute path.
+            std::string mission = ctx.mission_token;
+            if (mission.empty() && spell_map->IsLoaded())
+                mission = fs::path(spell_map->map_path).stem().string();
+            const std::string found = FindLevelDefContainingMission(mission, spell_data);
+            if (!found.empty())
+                levelDef = fs::path(found);
+        }
+
+        LevelData lvl;
+        std::string err;
+        LevelLoader loader;
+        if (!levelDef.empty() && loader.LoadLevelDef(levelDef.string(), lvl, &err))
+        {
+            destroyOldStrategic();
+            auto* win = new StrategicLevelFrame(this, lvl, true);
+            m_strategicLevel = win;
+
+            StrategicLevelFrame::PendingMissionResult pending;
+            pending.valid = ctx.pending_valid;
+            pending.territory_id = ctx.territory_id;
+            pending.mission_token = ctx.mission_token;
+            pending.sent_unit_indices.reserve(ctx.sent_unit_indices.size());
+            for (std::uint64_t idx : ctx.sent_unit_indices)
+                pending.sent_unit_indices.push_back(static_cast<size_t>(idx));
+
+            if (!win->ImportBattleSaveContext(ctx.strategic_state_json, pending))
+            {
+                m_strategicLevel = nullptr;
+                win->Destroy();
+                return false;
+            }
+            win->Hide();
+        }
+        else
+        {
+            wxLogWarning("Battle save contains strategic context, but its LEVEL DEF could not be restored: %s",
+                err.c_str());
+            return false;
+        }
+    }
+    else
+    {
+        // Compatibility for old Stage/build saves: they did not embed strategic
+        // context at all. If the matching strategic autosave still exists on the
+        // same installation, reconnect it and reconstruct the pending mission.
+        // This is deliberately best-effort; new saves are self-contained.
+        namespace fs = std::filesystem;
+        std::string missionStem;
+        if (spell_map->IsLoaded())
+            missionStem = fs::path(spell_map->map_path).stem().string();
+
+        if (!missionStem.empty())
+        {
+            const std::string levelDefPath = FindLevelDefContainingMission(missionStem, spell_data);
+            if (!levelDefPath.empty())
+            {
+                LevelData lvl;
+                std::string err;
+                LevelLoader loader;
+                if (loader.LoadLevelDef(levelDefPath, lvl, &err))
+                {
+                    auto* candidate = new StrategicLevelFrame(this, lvl, true);
+                    if (candidate->HasStrategicAutosave())
+                    {
+                        destroyOldStrategic();
+                        m_strategicLevel = candidate;
+                        candidate->LoadStrategicState();
+                        candidate->RecoverPendingMissionFromLoadedBattle(missionStem);
+                        candidate->Hide();
+                    }
+                    else
+                    {
+                        candidate->Destroy();
+                    }
+                }
+            }
+        }
+    }
+
+    SyncUiAfterTacticalLoad();
+    return true;
+}
 
 void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 {
@@ -1534,39 +1781,10 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                 else
                 {
                     // classic scsave
-                    int r = spell_map->LoadGameStateFromFile(load_path);
-                    if (r)
+                    if (!LoadTacticalGameWithCampaignContext(load_path))
                     {
                         wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()), "Load error", wxICON_ERROR | wxOK, this);
                         break;
-                    }
-                    // Sync UI only: game_mode is already set by LoadGameStateFromFile.
-                    // Do NOT call SetGameModeUI(true) which would reset saves, fire
-                    // MissionStartEvent and destroy the loaded state.
-                    if (spell_map->isGameMode())
-                    {
-                        if (GetMenuBar())
-                        {
-                            if (auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
-                                item->Check(true);
-                        }
-                        if (ribbonBar)
-                            ribbonBar->HidePanels();
-
-                        // hide editor overlays
-                        if(menuView)
-                        {
-                            if(menuView->FindItem(ID_ViewSoundLoops)) menuView->FindItem(ID_ViewSoundLoops)->Check(false);
-                            if(menuView->FindItem(ID_ViewSounds))     menuView->FindItem(ID_ViewSounds)->Check(false);
-                            if(menuView->FindItem(ID_ViewEvents))     menuView->FindItem(ID_ViewEvents)->Check(false);
-                        }
-                        wxCommandEvent dummyEvt;
-                        OnViewLayer(dummyEvt);
-
-                        UpdateMenuForGameMode();
-
-                        if (canvas)
-                            canvas->Refresh();
                     }
                 }
                 break;

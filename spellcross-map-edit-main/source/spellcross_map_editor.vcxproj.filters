@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -171,6 +171,7 @@
     <ClCompile Include="forms\form_level.cpp">
       <Filter>Source Files\forms</Filter>
     </ClCompile>
+    <ClCompile Include="strategic_original_renderer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="fs_archive.h">
@@ -386,6 +387,7 @@
     <ClInclude Include="forms\form_strategic.h">
       <Filter>Header Files\forms</Filter>
     </ClInclude>
+    <ClInclude Include="strategic_original_renderer.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources.rc">

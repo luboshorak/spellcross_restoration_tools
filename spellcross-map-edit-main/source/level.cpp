@@ -227,9 +227,18 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
             if (cmd == "DefineStrategicPoints" && args.size() >= 3) {
                 int tid = 0, x = 0, y = 0;
                 if (parse_int(args[0], tid) && parse_int(args[1], x) && parse_int(args[2], y)) {
-                    // pøiøaï k poslednímu territory se stejným id
+                    // DefineStrategicPoints(id,total,perTurn) controls the finite
+                    // strategic-point pool and its per-turn yield.  Keep the legacy
+                    // x/y aliases populated because older custom-editor views used
+                    // them as a last-resort map-label fallback.
                     for (auto& t : out.territories) {
-                        if (t.id == tid) { t.strategic_x = x; t.strategic_y = y; break; }
+                        if (t.id == tid) {
+                            t.strategic_points_total = x;
+                            t.strategic_points_per_turn = y;
+                            t.strategic_x = x;
+                            t.strategic_y = y;
+                            break;
+                        }
                     }
                 }
                 continue;

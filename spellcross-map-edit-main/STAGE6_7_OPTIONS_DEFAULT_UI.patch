@@ -1,0 +1,756 @@
+--- a/source/forms/form_level.h
++++ b/source/forms/form_level.h
+@@ -102,6 +102,8 @@
+     void BuildMenu();
+     void OnSaveGame(wxCommandEvent& ev);
+     void OnLoadGame(wxCommandEvent& ev);
++    void SaveStrategicGameToSlot(int slot, bool notify = true);
++    void LoadStrategicGameFromSlot(int slot, bool notify = true);
+ 
+     void OnOptionsAudio(wxCommandEvent& ev);
+     void OnOptionsScreen(wxCommandEvent& ev);
+@@ -735,7 +737,8 @@
+         Research = 4,
+         Info = 5,
+         Resources = 6,
+-        Stats = 7
++        Stats = 7,
++        Options = 8
+     };
+     OriginalStrategicScreen m_originalStrategicScreen = OriginalStrategicScreen::Map;
+     int m_originalHierarchyPage = 1;
+@@ -755,6 +758,8 @@
+     int m_originalResearchListScroll = 0;
+     int m_originalInfoListScroll = 0;
+     int m_originalInfoTextScroll = 0;
++    int m_originalBattleResolution = 2; // 0=640x480, 1=800x600, 2=1024x768
++    bool m_originalQuickHelp = true;
+ 
+     wxPanel* m_normalLayoutPanel = nullptr;  // container for left+mid+right
+     wxPanel* m_buyMainPanel = nullptr;  // root buy panel
+--- a/source/forms/form_level.cpp
++++ b/source/forms/form_level.cpp
+@@ -10,6 +10,7 @@
+ #include <wx/dcscreen.h>
+ 
+ #include <filesystem>
++#include <functional>
+ #include <fstream>
+ #include <vector>
+ #include <unordered_map>
+@@ -415,6 +416,8 @@
+ static bool BuildStrategicScreenBitmap(SpellData* spellData, const char* resourceName, wxBitmap& outBmp);
+ static bool BindStrategicScreenSlice(wxPanel* panel, SpellData* spellData,
+     const char* resourceName, const wxRect& sourceRect);
++static std::filesystem::path GetStrategicSaveSlotPath(const LevelData& level, int slot);
++static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& outMoney, int& outRank, int& outExp, std::string& outTs);
+ 
+ // Best-effort background decoding.
+ // Some LEVEL_XX.LZ files are *compressed* using Spellcross LZW variant.
+@@ -1832,6 +1835,10 @@
+ 
+     RefreshUI();
+ 
++    // The reconstructed 640x480 strategic UI is now the default. The wx-based
++    // implementation remains available from Strategic UI -> Current UI.
++    SetOriginalStrategicUi(true);
++
+     // Initialize timeout tracking so countdown markers are visible from turn 1
+     CheckTimeouts();
+ 
+@@ -2038,9 +2045,9 @@
+ 
+     // Parallel UI switch: the old implementation remains intact and usable.
+     auto* strategicUi = new wxMenu();
+-    strategicUi->AppendRadioItem(ID_MENU_STRATEGIC_UI_CURRENT, L"&Current UI");
+-    strategicUi->AppendRadioItem(ID_MENU_STRATEGIC_UI_ORIGINAL, L"&Original / restored UI (experimental)");
+-    strategicUi->Check(ID_MENU_STRATEGIC_UI_CURRENT, true);
++    strategicUi->AppendRadioItem(ID_MENU_STRATEGIC_UI_CURRENT, L"&Current / wx UI");
++    strategicUi->AppendRadioItem(ID_MENU_STRATEGIC_UI_ORIGINAL, L"&Reconstructed original UI");
++    strategicUi->Check(ID_MENU_STRATEGIC_UI_ORIGINAL, true);
+     bar->Append(strategicUi, "Strategic &UI");
+ 
+     SetMenuBar(bar);
+@@ -2278,6 +2285,22 @@
+         RecomputePlayerRank();
+         rendered = renderer.RenderStats(loader, rgb, &error);
+         break;
++    case OriginalStrategicScreen::Options:
++    {
++        StrategicOriginalRenderer::OptionsState optionsState;
++        SpellMap* spellMap = m_main ? m_main->GetSpellMap() : nullptr;
++        const double gamma = spellMap ? spellMap->GetGamma() : 1.3;
++        optionsState.gammaPercent = std::clamp(
++            static_cast<int>(std::lround((gamma - 0.5) * (100.0 / 1.5))), 0, 100);
++        if (m_spellData && m_spellData->midi)
++            optionsState.musicPercent = std::clamp(
++                static_cast<int>(std::lround(m_spellData->midi->GetVolume() * 100.0)), 0, 100);
++        if (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
++            optionsState.soundPercent = std::clamp(
++                static_cast<int>(std::lround(m_spellData->sounds->channels->GetVolume() * 100.0)), 0, 100);
++        rendered = renderer.RenderOptions(loader, optionsState, rgb, &error);
++        break;
++    }
+     case OriginalStrategicScreen::Map:
+     default:
+         rendered = renderer.RenderStrategicMap(loader, state, rgb, &error);
+@@ -3727,6 +3750,101 @@
+         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
+     }
+ 
++    if (image.IsOk() && m_spellData->font &&
++        m_originalStrategicScreen == OriginalStrategicScreen::Options)
++    {
++        SpellFont* font = m_spellData->font;
++        const wxColour green(0, 242, 0);
++        const wxColour dim(90, 112, 90);
++        const wxColour selected(255, 224, 24);
++
++        // OPTIONS.LZ contains the exact nine slot wells but leaves their
++        // labels/buttons dynamic. Keep the native 31px row pitch.
++        for (int i = 0; i < 9; ++i)
++        {
++            const int slot = i + 1;
++            const int y = 22 + i * 31;
++            const auto path = GetStrategicSaveSlotPath(m_level, slot);
++            std::error_code ec;
++            const bool exists = std::filesystem::exists(path, ec);
++            OriginalDrawActionButton(image, font, 20, y, 75, 27, L"Load", exists);
++            OriginalDrawActionButton(image, font, 490, y, 75, 27, L"Save", true);
++
++            wxString slotText = L"-= EMPTY =-";
++            if (exists)
++            {
++                int money = 0, rank = 0, xp = 0;
++                std::string ts;
++                if (PeekStrategicSaveSummary(path, money, rank, xp, ts))
++                {
++                    // ISO local timestamp -> compact DOS-style slot caption.
++                    // Example: 2026-09-29T21:48:10 -> 29092026 21:48
++                    if (ts.size() >= 16 && ts[4] == '-' && ts[7] == '-')
++                    {
++                        slotText = wxString::FromUTF8(
++                            (ts.substr(8,2) + ts.substr(5,2) + ts.substr(0,4) +
++                             " " + ts.substr(11,5)).c_str());
++                    }
++                    else if (!ts.empty())
++                        slotText = wxString::FromUTF8(ts);
++                    else
++                        slotText = wxString::Format(L"SLOT %02d", slot);
++                }
++            }
++            OriginalDrawSpellText(image, font, slotText, 115, y + 6,
++                exists ? green : dim, 355, true);
++        }
++
++        OriginalDrawSpellText(image, font, L"Gamma Correction", 28, 337, green, 178, true);
++        OriginalDrawSpellText(image, font, L"Music Volume", 28, 384, green, 178, true);
++        OriginalDrawSpellText(image, font, L"Sound Volume", 28, 429, green, 178, true);
++
++        // OPTIONS.LZ carries the metal plates but not their live +/- glyphs.
++        // Draw them at native pixels so they stay inside the recessed buttons.
++        const wxColour controlGlyph(174, 178, 168);
++        for (int cy : { 361, 408, 455 })
++        {
++            OriginalHLine(image, 32, 40, cy, controlGlyph);
++            OriginalHLine(image, 189, 197, cy, controlGlyph);
++            OriginalVLine(image, 193, cy - 4, cy + 4, controlGlyph);
++        }
++
++        OriginalDrawSpellText(image, font, L"War map resolution", 234, 345, green, 166, true);
++        const std::array<wxString,3> resolutions = { L"640x480", L"800x600", L"1024x768" };
++        for (int i = 0; i < 3; ++i)
++            OriginalDrawSpellText(image, font, resolutions[static_cast<size_t>(i)],
++                250, 363 + i * 15,
++                i == m_originalBattleResolution ? selected : green, 134, true);
++
++        // Native selection brackets visible in the reference OPTIONS screen.
++        const int resolutionY = 366 + std::clamp(m_originalBattleResolution, 0, 2) * 15;
++        OriginalVLine(image, 269, 355, resolutionY, green);
++        OriginalVLine(image, 359, 355, resolutionY, green);
++        OriginalHLine(image, 269, 282, resolutionY, green);
++        OriginalHLine(image, 346, 359, resolutionY, green);
++        OriginalSetPixel(image, 281, resolutionY - 1, green);
++        OriginalSetPixel(image, 281, resolutionY + 1, green);
++        OriginalSetPixel(image, 347, resolutionY - 1, green);
++        OriginalSetPixel(image, 347, resolutionY + 1, green);
++
++        OriginalDrawSpellText(image, font, L"Quick Help", 434, 345, green, 74, true);
++        OriginalDrawSpellText(image, font, L"On", 434, 367, m_originalQuickHelp ? selected : green, 74, true);
++        OriginalDrawSpellText(image, font, L"Off", 434, 383, !m_originalQuickHelp ? selected : green, 74, true);
++        const int helpY = m_originalQuickHelp ? 370 : 386;
++        OriginalVLine(image, 434, 356, helpY, green);
++        OriginalVLine(image, 507, 356, helpY, green);
++        OriginalHLine(image, 434, 455, helpY, green);
++        OriginalHLine(image, 486, 507, helpY, green);
++        OriginalSetPixel(image, 454, helpY - 1, green);
++        OriginalSetPixel(image, 454, helpY + 1, green);
++        OriginalSetPixel(image, 487, helpY - 1, green);
++        OriginalSetPixel(image, 487, helpY + 1, green);
++
++        OriginalDrawSpellText(image, font, L"Exit", 327, 447, green, 113, true);
++
++        OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
++    }
++
+     m_originalStrategicBitmap = image.IsOk() ? wxBitmap(image) : wxBitmap();
+     if (!m_originalStrategicBitmap.IsOk())
+         m_originalStrategicError = "Original UI: wxImage/wxBitmap creation failed after successful render.";
+@@ -3783,7 +3901,7 @@
+         // screenshots: x=591..596 and y=132 + slot*31 .. +5.  The old
+         // x=581 marker visibly leaked ten pixels into the screen content.
+         const int activeSlot = static_cast<int>(m_originalStrategicScreen);
+-        if (activeSlot >= 0 && activeSlot < 8)
++        if (activeSlot >= 0 && activeSlot < 9)
+         {
+             const int y = kOriginalToolbarY0 + activeSlot * kOriginalToolbarPitch;
+             wxPoint tri[3] = { wxPoint(591, y), wxPoint(597, y), wxPoint(591, y + 6) };
+@@ -3939,7 +4057,8 @@
+                     refreshRestored();
+                     return;
+                 case 8:
+-                    OnOptionsScreen(dummy);
++                    m_originalStrategicScreen = OriginalStrategicScreen::Options;
++                    refreshRestored();
+                     return;
+                 default:
+                     break;
+@@ -4042,7 +4161,8 @@
+                 refreshRestored();
+                 return;
+             case 8:
+-                OnOptionsScreen(dummy);
++                m_originalStrategicScreen = OriginalStrategicScreen::Options;
++                refreshRestored();
+                 return;
+             default:
+                 break;
+@@ -4241,7 +4361,8 @@
+                 refreshRestored();
+                 return;
+             case 8:
+-                OnOptionsScreen(dummy);
++                m_originalStrategicScreen = OriginalStrategicScreen::Options;
++                refreshRestored();
+                 return;
+             default:
+                 break;
+@@ -4368,7 +4489,8 @@
+     if (m_originalStrategicScreen == OriginalStrategicScreen::Research ||
+         m_originalStrategicScreen == OriginalStrategicScreen::Info ||
+         m_originalStrategicScreen == OriginalStrategicScreen::Resources ||
+-        m_originalStrategicScreen == OriginalStrategicScreen::Stats)
++        m_originalStrategicScreen == OriginalStrategicScreen::Stats ||
++        m_originalStrategicScreen == OriginalStrategicScreen::Options)
+     {
+         // End-turn plate is shared by every strategic page.
+         if (lx >= 578 && ly >= 420)
+@@ -4379,8 +4501,8 @@
+             return;
+         }
+ 
+-        // Shared nine-button original toolbar. All pages through statistics now
+-        // remain inside the restored 640x480 renderer; only options stays native.
++        // Shared nine-button original toolbar. All nine strategic pages now
++        // remain inside the restored 640x480 renderer.
+         if (lx >= kOriginalToolbarX0 && lx < kOriginalToolbarX1 &&
+             ly >= kOriginalToolbarY0 && ly < kOriginalToolbarY0 + kOriginalToolbarCount * kOriginalToolbarPitch)
+         {
+@@ -4399,7 +4521,7 @@
+             case 5: m_originalStrategicScreen = OriginalStrategicScreen::Info; EnsureResearchLoaded(); break;
+             case 6: m_originalStrategicScreen = OriginalStrategicScreen::Resources; break;
+             case 7: m_originalStrategicScreen = OriginalStrategicScreen::Stats; break;
+-            case 8: OnOptionsScreen(dummy); return;
++            case 8: m_originalStrategicScreen = OriginalStrategicScreen::Options; break;
+             default: return;
+             }
+             refreshRestored();
+@@ -4577,6 +4699,93 @@
+             return;
+         }
+ 
++        if (m_originalStrategicScreen == OriginalStrategicScreen::Options)
++        {
++            // Nine native save rows (STROPT.QH: load 20,22,75,280;
++            // save 490,22,75,280). Gaps between the 27px buttons remain inert.
++            for (int i = 0; i < 9; ++i)
++            {
++                const int y = 22 + i * 31;
++                if (ly < y || ly >= y + 27)
++                    continue;
++                const int slot = i + 1;
++                if (lx >= 20 && lx < 95)
++                {
++                    LoadStrategicGameFromSlot(slot, false);
++                    refreshRestored();
++                    return;
++                }
++                if (lx >= 490 && lx < 565)
++                {
++                    SaveStrategicGameToSlot(slot, false);
++                    refreshRestored();
++                    return;
++                }
++            }
++
++            auto sliderPercentFromX = [](int x)
++            {
++                return std::clamp(((x - 47) * 100 + 65) / 130, 0, 100);
++            };
++            auto sliderHit = [&](int y0, int current, const std::function<void(int)>& apply) -> bool
++            {
++                if (ly < y0 || ly >= y0 + 41 || lx < 28 || lx >= 206)
++                    return false;
++                int value = current;
++                if (lx < 47) value = std::max(0, current - 5);
++                else if (lx >= 187) value = std::min(100, current + 5);
++                else value = sliderPercentFromX(lx);
++                apply(value);
++                refreshRestored();
++                return true;
++            };
++
++            SpellMap* spellMap = m_main ? m_main->GetSpellMap() : nullptr;
++            const int gammaPct = std::clamp(static_cast<int>(std::lround(
++                ((spellMap ? spellMap->GetGamma() : 1.3) - 0.5) * (100.0 / 1.5))), 0, 100);
++            if (sliderHit(333, gammaPct, [&](int p) {
++                if (spellMap) spellMap->SetGamma(0.5 + p * 0.015);
++            })) return;
++
++            const int musicPct = (m_spellData && m_spellData->midi)
++                ? std::clamp(static_cast<int>(std::lround(m_spellData->midi->GetVolume() * 100.0)), 0, 100) : 0;
++            if (sliderHit(380, musicPct, [&](int p) {
++                if (m_spellData && m_spellData->midi) m_spellData->midi->SetVolume(p / 100.0);
++            })) return;
++
++            const int soundPct = (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
++                ? std::clamp(static_cast<int>(std::lround(m_spellData->sounds->channels->GetVolume() * 100.0)), 0, 100) : 0;
++            if (sliderHit(425, soundPct, [&](int p) {
++                if (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
++                    m_spellData->sounds->channels->SetVolume(p / 100.0);
++            })) return;
++
++            if (wxRect(234, 339, 166, 76).Contains(lx, ly))
++            {
++                if (ly >= 358 && ly < 375) m_originalBattleResolution = 0;
++                else if (ly >= 375 && ly < 390) m_originalBattleResolution = 1;
++                else if (ly >= 390) m_originalBattleResolution = 2;
++                refreshRestored();
++                return;
++            }
++
++            if (wxRect(434, 336, 74, 77).Contains(lx, ly))
++            {
++                if (ly >= 360 && ly < 382) m_originalQuickHelp = true;
++                else if (ly >= 382) m_originalQuickHelp = false;
++                refreshRestored();
++                return;
++            }
++
++            if (wxRect(327, 435, 113, 41).Contains(lx, ly))
++            {
++                SaveStrategicState();
++                Close(true);
++                return;
++            }
++            return;
++        }
++
+         // Statistics is informational; toolbar and end-turn are its only controls.
+         return;
+     }
+@@ -4700,7 +4909,8 @@
+                 refreshRestored();
+                 return;
+             case 8:
+-                OnOptionsScreen(dummy);
++                m_originalStrategicScreen = OriginalStrategicScreen::Options;
++                refreshRestored();
+                 return;
+             default:
+                 break;
+@@ -4978,7 +5188,8 @@
+     }
+ 
+     if (m_originalStrategicScreen == OriginalStrategicScreen::Resources ||
+-        m_originalStrategicScreen == OriginalStrategicScreen::Stats)
++        m_originalStrategicScreen == OriginalStrategicScreen::Stats ||
++        m_originalStrategicScreen == OriginalStrategicScreen::Options)
+     {
+         ev.Skip();
+         return;
+@@ -5065,6 +5276,193 @@
+     return true;
+ }
+ 
++void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
++{
++    slot = std::clamp(slot, 1, 10);
++    const auto path = GetStrategicSaveSlotPath(m_level, slot);
++
++    ResearchPersistSaveView rsv;
++    rsv.activeId = m_researchActiveId;
++    rsv.activeIndex = m_researchActiveIndex;
++    rsv.allocPerTurn = m_researchAllocPerTurn;
++    rsv.progressById = &m_researchProgressById;
++    rsv.completed = &m_researchCompleted;
++    const ResearchPersistSaveView* prevR = g_researchPersistSave;
++    g_researchPersistSave = &rsv;
++
++    UnitStatePersistSaveView usv;
++    usv.states = &m_unitStates;
++    const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
++    g_unitStatePersistSave = &usv;
++
++    MissionFlowPersistSaveView mfsv;
++    mfsv.timeoutTurn = &m_territoryTimeoutTurn;
++    mfsv.triggeredEvents = &m_triggeredLevelEvents;
++    mfsv.activatedEvents = &m_activatedEvents;
++    mfsv.counterAttacks = &m_counterAttacks;
++    const MissionFlowPersistSaveView* prevMF = g_missionFlowPersistSave;
++    g_missionFlowPersistSave = &mfsv;
++
++    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
++        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
++        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
++        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
++        /*timestamp*/NowIsoLocal());
++
++    g_missionFlowPersistSave = prevMF;
++    g_unitStatePersistSave = prevU;
++    g_researchPersistSave = prevR;
++
++    m_originalStrategicDirty = true;
++    if (notify)
++        wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
++}
++
++void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
++{
++    slot = std::clamp(slot, 1, 10);
++    const auto path = GetStrategicSaveSlotPath(m_level, slot);
++    std::error_code ec;
++    if (!std::filesystem::exists(path, ec))
++    {
++        if (notify)
++            wxMessageBox("This slot is empty.", "Load game", wxOK | wxICON_WARNING, this);
++        return;
++    }
++
++    std::string loaded_level_def;
++    std::string ts;
++
++    std::vector<UnitInstanceState> loadedUnitStates;
++    UnitStatePersistLoadView ulv;
++    ulv.states = &loadedUnitStates;
++    UnitStatePersistLoadView* prevUL = g_unitStatePersistLoad;
++    g_unitStatePersistLoad = &ulv;
++
++    MissionFlowPersistLoadView mflv;
++    mflv.timeoutTurn = &m_territoryTimeoutTurn;
++    mflv.triggeredEvents = &m_triggeredLevelEvents;
++    mflv.activatedEvents = &m_activatedEvents;
++    mflv.counterAttacks = &m_counterAttacks;
++    MissionFlowPersistLoadView* prevMFL = g_missionFlowPersistLoad;
++    g_missionFlowPersistLoad = &mflv;
++
++    if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
++        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
++        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
++        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
++        &loaded_level_def, &ts))
++    {
++        g_missionFlowPersistLoad = prevMFL;
++        g_unitStatePersistLoad = prevUL;
++        if (notify)
++            wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
++        return;
++    }
++    g_missionFlowPersistLoad = prevMFL;
++    g_unitStatePersistLoad = prevUL;
++    m_unitStates = std::move(loadedUnitStates);
++
++    if (GetMenuBar())
++    {
++        auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
++        if (item) item->Check(m_gameModeEnabled);
++    }
++
++    if (!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
++    {
++        if (!m_main)
++        {
++            if (notify)
++            {
++                wxString msg;
++                msg << L"This save belongs to a different level/DEF:\n\n";
++                msg << wxString::FromUTF8(loaded_level_def) << L"\n\n";
++                msg << L"Current level is:\n\n";
++                msg << wxString::FromUTF8(m_level.source_path) << L"\n";
++                wxMessageBox(msg, L"Load game", wxOK | wxICON_WARNING, this);
++            }
++            return;
++        }
++
++        LevelData lvl;
++        std::string err;
++        LevelLoader loader;
++        if (!loader.LoadLevelDef(loaded_level_def, lvl, &err))
++        {
++            if (notify)
++                wxMessageBox(L"Failed to load the level DEF from this save:\n" + wxString::FromUTF8(err),
++                    L"Load game", wxOK | wxICON_ERROR, this);
++            return;
++        }
++
++        int turn = 1, money = 0, research = 0, selTerr = -1;
++        PlayerProgress pl;
++        std::unordered_map<int, std::string> terrMission;
++        std::unordered_map<int, int> terrLaunch;
++        std::vector<LevelData::PlayerUnitAdd> units;
++        std::string def2, ts2;
++        std::vector<CommanderRec> playerCmds2;
++        std::vector<CommanderRec> availCmds2;
++        int windowStart2 = 1;
++        int genCount2 = 0;
++        bool gm2 = false;
++        std::vector<int> owned2;
++        std::unordered_map<int, TerritoryResourceState> terrRes;
++
++        std::vector<UnitInstanceState> loadedUnitStates2;
++        UnitStatePersistLoadView ulv2;
++        ulv2.states = &loadedUnitStates2;
++        UnitStatePersistLoadView* prevUL2 = g_unitStatePersistLoad;
++        g_unitStatePersistLoad = &ulv2;
++
++        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch,
++            units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2))
++        {
++            g_unitStatePersistLoad = prevUL2;
++            if (notify)
++                wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
++            return;
++        }
++        g_unitStatePersistLoad = prevUL2;
++
++        auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
++        win->m_turn = turn;
++        win->m_money = money;
++        win->m_research = research;
++        win->m_selectedTerritory = selTerr;
++        win->m_player = pl;
++        win->m_territoryCurrentMission = std::move(terrMission);
++        win->m_territoryLaunchCount = std::move(terrLaunch);
++        win->m_playerUnits = std::move(units);
++        win->m_unitStates = std::move(loadedUnitStates2);
++        win->m_playerCommanders = std::move(playerCmds2);
++        win->m_availableCommanders = std::move(availCmds2);
++        win->m_cmdGenWindowStartTurn = windowStart2;
++        win->m_cmdGenCountInWindow = genCount2;
++        win->m_gameModeEnabled = gm2;
++        win->m_ownedTerritories = std::move(owned2);
++        win->TryLoadBackground();
++        win->RefreshUI();
++        win->SetOriginalStrategicUi(true);
++        if (win->m_selectedTerritory >= 0)
++            win->SelectTerritoryById(win->m_selectedTerritory);
++        win->Show();
++        win->Raise();
++        Close(true);
++        return;
++    }
++
++    TryLoadBackground();
++    CheckTimeouts();
++    if (m_selectedTerritory >= 0)
++        SelectTerritoryById(m_selectedTerritory);
++    RefreshUI();
++    m_originalStrategicDirty = true;
++    if (notify)
++        wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
++}
++
+ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
+ {
+     wxArrayString choices;
+@@ -12543,6 +12941,17 @@
+     // persist progression before leaving the strategic screen
+     SaveStrategicState();
+ 
++    // Apply the resolution selected on the reconstructed strategic Options screen.
++    // Do not fight a maximized main window; in that case the platform owns its size.
++    if (!m_main->IsMaximized())
++    {
++        static const std::array<wxSize, 3> kBattleClientSizes = {
++            wxSize(640, 480), wxSize(800, 600), wxSize(1024, 768)
++        };
++        const int resolutionIndex = std::clamp(m_originalBattleResolution, 0, 2);
++        m_main->SetClientSize(kBattleClientSizes[static_cast<size_t>(resolutionIndex)]);
++    }
++
+     // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
+     m_main->SetGameModeUI(true);
+     m_main->Raise();
+--- a/source/strategic_original_renderer.h
++++ b/source/strategic_original_renderer.h
+@@ -105,6 +105,19 @@
+                      RgbImage& out,
+                      std::string* error = nullptr) const;
+ 
++    // Restored save/options screen: VMO_FULL + OPTIONS. VMO_BAR is the
++    // native 10x12 slider thumb, positioned from live gamma/audio values.
++    struct OptionsState
++    {
++        int gammaPercent = 50;
++        int musicPercent = 100;
++        int soundPercent = 50;
++    };
++    bool RenderOptions(const AssetLoader& load,
++                       const OptionsState& state,
++                       RgbImage& out,
++                       std::string* error = nullptr) const;
++
+     // Public so the controller/view can reuse the decoded CLK mask for hit tests.
+     static bool DecodeClk(const std::vector<std::uint8_t>& bytes,
+                           int& outW,
+--- a/source/strategic_original_renderer.cpp
++++ b/source/strategic_original_renderer.cpp
+@@ -673,3 +673,58 @@
+     return true;
+ }
+ 
++
++bool StrategicOriginalRenderer::RenderOptions(const AssetLoader& load,
++                                               const OptionsState& state,
++                                               RgbImage& out,
++                                               std::string* error) const
++{
++    out = {};
++
++    Palette pal{};
++    for(auto& c : pal) c = {0,0,0};
++
++    std::vector<std::uint8_t> shared, optionsPal, bigMapPal;
++    if(!LoadExact(load, "_SHARED1.PAL", 128u * 3u, shared, error)) return false;
++    if(!LoadExact(load, "_OPTIONS.PAL", 64u * 3u, optionsPal, error)) return false;
++    if(!LoadExact(load, "BIG_MAP.PAL", 64u * 3u, bigMapPal, error)) return false;
++
++    for(int i = 0; i < 128; ++i)
++        pal[static_cast<std::size_t>(i)] = {shared[i*3+0], shared[i*3+1], shared[i*3+2]};
++    for(int i = 0; i < 64; ++i)
++        pal[static_cast<std::size_t>(128+i)] = {optionsPal[i*3+0], optionsPal[i*3+1], optionsPal[i*3+2]};
++    for(int i = 0; i < 64; ++i)
++        pal[static_cast<std::size_t>(192+i)] = {bigMapPal[i*3+0], bigMapPal[i*3+1], bigMapPal[i*3+2]};
++
++    std::vector<std::uint8_t> bigMap, vmo, options, slider;
++    if(!LoadExact(load, "BIG_MAP.LZ", kScreenW * kScreenH, bigMap, error)) return false;
++    if(!LoadExact(load, "VMO_FULL.LZ", kScreenSpecificW * kScreenH, vmo, error)) return false;
++    if(!LoadExact(load, "OPTIONS.LZ", 569u * 464u, options, error)) return false;
++    if(!LoadExact(load, "VMO_BAR.LZ", 10u * 12u, slider, error)) return false;
++
++    std::vector<std::uint8_t> canvas = bigMap;
++    BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmo, kScreenSpecificW, kScreenH);
++    BlitOpaque(canvas, kScreenW, kScreenH, 3, 8, options, 569, 464);
++
++    // Native slider travel: black groove x=47..186, 10 px thumb.
++    // Keep the whole thumb inside that groove, matching the DOS OPTIONS screen.
++    auto sliderX = [](int percent)
++    {
++        return 47 + (std::clamp(percent, 0, 100) * 130 + 50) / 100;
++    };
++    BlitOpaque(canvas, kScreenW, kScreenH, sliderX(state.gammaPercent), 356, slider, 10, 12);
++    BlitOpaque(canvas, kScreenW, kScreenH, sliderX(state.musicPercent), 403, slider, 10, 12);
++    BlitOpaque(canvas, kScreenW, kScreenH, sliderX(state.soundPercent), 448, slider, 10, 12);
++
++    out.width = kScreenW;
++    out.height = kScreenH;
++    out.rgb.resize(static_cast<std::size_t>(kScreenW) * kScreenH * 3u);
++    for(std::size_t p = 0; p < canvas.size(); ++p)
++    {
++        const auto& c = pal[canvas[p]];
++        out.rgb[p*3u+0u] = c[0];
++        out.rgb[p*3u+1u] = c[1];
++        out.rgb[p*3u+2u] = c[2];
++    }
++    return true;
++}
+--- /dev/null
++++ b/ORIGINAL_STRATEGIC_UI_STAGE6_7_OPTIONS.md
+@@ -0,0 +1,77 @@
++# Original strategic UI — Stage 6.7 (save/options + default restored UI)
++
++This pass completes the ninth strategic screen and makes the reconstructed
++640x480 strategic UI the default branch. The previous wx strategic UI remains
++available from `Strategic UI -> Current UI`.
++
++## Native OPTIONS reconstruction
++
++The screen is composed from original `COMMON.FS` resources:
++
++- `BIG_MAP.LZ` / `BIG_MAP.PAL` — common 640x480 right-side chrome
++- `VMO_FULL.LZ` — screen-specific shell
++- `OPTIONS.LZ` — 569x464 save/options panel at `(3,8)`
++- `_SHARED1.PAL` + `_OPTIONS.PAL` + `BIG_MAP.PAL` — native palette banks
++- `VMO_BAR.LZ` — native 10x12 slider thumb
++- `STROPT.QH` — recovered interaction rectangles
++
++Recovered `STROPT.QH` geometry used by the implementation:
++
++- saved positions: `115,25,355,277`
++- Load column: `20,22,75,280`
++- Save column: `490,22,75,280`
++- gamma: `28,333,178,41`
++- music: `28,380,178,41`
++- sound effects: `28,425,178,41`
++- battlefield resolution: `234,339,166,76`
++- Quick Help: `434,336,74,77`
++- Exit: `327,435,113,41`
++
++## Functional controls
++
++- Nine visible DOS-style save rows.
++- Empty slots disable Load while Save remains available.
++- Slot captions are generated from the persisted ISO save timestamp.
++- Gamma is connected to `SpellMap::GetGamma/SetGamma`.
++- Music volume is connected to the live MIDI volume.
++- Sound volume is connected to the live sound-channel volume.
++- Battlefield resolution is applied when launching a tactical map (640x480 / 800x600 / 1024x768) when the main window is not maximized.
++- Quick Help selection is represented and clickable; the remake currently has no native contextual Quick Help subsystem to toggle behind it.
++- Exit persists the strategic autosave and closes the strategic screen.
++- The ninth toolbar icon stays inside the restored framebuffer instead of
++  opening the wx Screen dialog.
++- The native selection brackets and +/- slider glyphs are reconstructed at
++  pixel level so they remain inside their original plates.
++- Mouse-wheel input on Options/Resources/Stats is explicitly kept out of the
++  strategic-map unit list, avoiding hidden cross-screen scrolling.
++
++## Default UI
++
++New strategic windows enter the reconstructed UI by default. The older wx
++layout is intentionally kept intact and can be selected from the Strategic UI
++menu at any time.
++
++## Verification
++
++- `source/strategic_original_renderer.cpp` compiles cleanly as C++17 with GCC.
++- OPTIONS palette/resource dimensions were verified directly from the original
++  English Spellcross `COMMON.FS` supplied with the project sources.
++- Static OPTIONS composition was compared with the supplied `Spell_settings.png`
++  reference before adding live labels and slider positions.
++
++## Conservative visual audit
++
++The pass deliberately does not replace already-working screens with new generic
++controls. Existing stage 6 fixes were retained: native asset palettes, clipped
++DOS-font text, the corrected BUY info-panel seam, the 31px toolbar pitch and
++the 591..596 active-screen wedge. The ninth screen uses the same 640x480
++framebuffer path, so it cannot overflow its original 575px strategic-content
++area into the right toolbar/status chrome.
++
++## Build note
++
++The independent renderer translation unit and a RenderOptions smoke test were
++compiled with GCC C++17 against the extracted original assets. A full Windows
++GUI executable cannot be produced in this Linux environment because the
++solution depends on MSVC/wxWidgets; the package therefore contains the complete
++modified source tree plus an applyable patch.

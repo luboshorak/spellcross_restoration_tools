@@ -102,9 +102,23 @@ public:
     void BuildMenu();
     void OnSaveGame(wxCommandEvent& ev);
     void OnLoadGame(wxCommandEvent& ev);
+    void SaveStrategicGameToSlot(int slot, bool notify = true);
+    void LoadStrategicGameFromSlot(int slot, bool notify = true);
 
     void OnOptionsAudio(wxCommandEvent& ev);
     void OnOptionsScreen(wxCommandEvent& ev);
+
+    // Experimental second strategic UI branch. This stays completely separate
+    // from the existing wx strategic layout while the restored 640x480 UI is
+    // developed and tested screen-by-screen.
+    void OnStrategicUiCurrent(wxCommandEvent& ev);
+    void OnStrategicUiOriginal(wxCommandEvent& ev);
+    void SetOriginalStrategicUi(bool enabled);
+    void RefreshOriginalStrategicView();
+    void OnOriginalStrategicPaint(wxPaintEvent& ev);
+    void OnOriginalStrategicLeftDown(wxMouseEvent& ev);
+    void OnOriginalStrategicRightDown(wxMouseEvent& ev);
+    void OnOriginalStrategicMouseWheel(wxMouseEvent& ev);
 
     struct PlayerProgress
     {
@@ -191,6 +205,16 @@ public:
         bool completed = false;
     };
     
+    // Tactical battle saves must carry the strategic campaign snapshot that
+    // existed when the battle was launched.  These helpers make a .scsave
+    // self-contained without conflating tactical and strategic save formats.
+    bool ExportBattleSaveContext(std::string& level_def_path, std::string& strategic_state_json,
+        PendingMissionResult& pending) const;
+    bool ImportBattleSaveContext(const std::string& strategic_state_json,
+        const PendingMissionResult& pending);
+    bool HasStrategicAutosave() const;
+    bool RecoverPendingMissionFromLoadedBattle(const std::string& mission_token);
+
     // Handle mission completion (called from main.cpp after returning from tactical map)
     void HandleMissionResult(int territory_id, bool success, const std::string& mission_token);
 
@@ -292,6 +316,25 @@ private:
         wxColour shadow;
     };
 
+    enum class OriginalBuyRowKind : int
+    {
+        Heading,
+        Unit,
+        Commander,
+        Spacer
+    };
+
+    struct OriginalBuyRow
+    {
+        OriginalBuyRowKind kind = OriginalBuyRowKind::Spacer;
+        wxString label;
+        int id = -1;
+        bool enabled = false;
+    };
+
+    std::vector<OriginalBuyRow> BuildOriginalBuyRows();
+    void GetOriginalBuyLimits(int& maxUnits, int& maxCommanders);
+
     // stats page helpers (integrated from former form_strategic.*)
     void BuildStatsPage();
     void RefreshStatsPage();
@@ -320,6 +363,7 @@ public:
         const wxString& placeholder);
     void ApplyHierarchyDrop(const std::string& slotId, const wxString& data);
     void ChooseUnitForHierarchySlot(const std::string& unitSlotId);
+    void ChooseCommanderForHierarchySlot(const std::string& commanderSlotId);
     void ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId);
     void TryAssignCommanderToUnitSlot(const std::string& unitSlotId);
     std::string GetCommanderSlotForUnitSlot(const std::string& unitSlotId) const;
@@ -371,9 +415,12 @@ public:
     // Tech upgrades from UPGRADES.DEF (Engine/Weapon/Armour style)
     struct UpgradeDefRec
     {
+        enum Kind : int { Unknown = 0, Engine, Weapon, Armor };
         int id = -1;
         int price = 0;
         int time = 1;
+        Kind kind = Unknown;
+        wxString title;
         std::set<int> suitableTypes; // unit type_ids this upgrade applies to
     };
     std::unordered_map<int, UpgradeDefRec> m_upgradeDefs;
@@ -385,13 +432,13 @@ public:
 
     struct TerritoryResourceState
     {
-        int total = 20;
-        int remaining = 20;
-        // 0..100: percent of extracted resource "ticks" routed toward research.
+        int total = 0;
+        int remaining = 0;
+        int incomePerTurn = 0; // DefineStrategicPoints(..., total, perTurn)
+        // Legacy Stage-6 fields kept for backward-compatible save loading.
         int researchPercent = 0;
-        // 0..99 accumulator for deterministic ratio routing.
         int allocAccum = 0;
-        // 0..3 carry for converting 4 resource ticks -> 1 research point.
+        // Territory id 0 uses this as the persisted global research allocation.
         int researchCarry = 0;
     };
 
@@ -406,11 +453,13 @@ public:
         wxString brief;         // short flavour text (BRF) – shown in top box when active
         wxString info;          // long detail text (INF) – shown in bottom box when browsing
         int cost = 20;          // research duration (Time() from RESEARCH.DEF)
+        bool researchable = true; // Time(0) entries are Info/base-knowledge only
         // parsed from RESEARCH.DEF
         wxString group;         // "Races" / "Technologies" / "Upgrades" / "Global"
         int level = 0;          // minimum campaign level to unlock
         std::vector<int> prerequisites; // OR-connected prerequisite ids
         wxString flags;         // "UnitType" / "NewUnit" / "Info" / "UpgradeItem" / "Special"
+        int data = -1;          // Data(...) payload; for UpgradeItem this is UPGRADES.DEF id
     };
 
     void EnsureResearchLoaded();
@@ -419,6 +468,12 @@ public:
     void RefreshResearchUI();
     void ApplyResearchTickEndTurn();
     void SelectResearchIndex(int idx);
+    bool IsResearchUnlocked(const ResearchItem& item) const;
+    bool IsResearchAvailable(const ResearchItem& item) const;
+    bool IsInfoItemVisible(const ResearchItem& item) const;
+    bool IsCampaignUnitUnlocked(int unitType) const;
+    bool StartResearchIndex(int idx);
+    void NormalizeResearchSelection();
 
     void OnResearchList(wxCommandEvent& ev);
     void OnResearchStartStop(wxCommandEvent& ev);
@@ -432,10 +487,12 @@ public:
     void RefreshInfoUI();
     void SelectInfoIndex(int idx);
 
+    void SetGlobalResearchAllocation(int value);
+    int GetCurrentStrategicPointIncome() const;
 
     std::unordered_map<int, TerritoryResourceState> m_territoryResources;
 
-    // Global allocation for all territories: research points per territory (0..5). Money per territory = 20 - 4*R.
+    // Global allocation: research points produced this turn. Each research point costs 3 strategic points; remainder becomes money.
     int m_resourcesGlobalResearch = 0;
 
 
@@ -666,6 +723,44 @@ public:
     wxStaticText* m_buyLblTurnCaption = nullptr;
     wxStaticText* m_buyLblTurnValue = nullptr;
 
+    // Root + alternate restored UI canvas. The restored branch owns one
+    // logical 640x480 framebuffer and does not participate in the legacy
+    // strategic sizer hierarchy.
+    wxPanel* m_rootPanel = nullptr;
+    wxPanel* m_originalStrategicPanel = nullptr;
+    enum class OriginalStrategicScreen : int
+    {
+        Map = 0,
+        Hierarchy = 1,
+        Units = 2,
+        Buy = 3,
+        Research = 4,
+        Info = 5,
+        Resources = 6,
+        Stats = 7,
+        Options = 8
+    };
+    OriginalStrategicScreen m_originalStrategicScreen = OriginalStrategicScreen::Map;
+    int m_originalHierarchyPage = 1;
+    bool m_originalStrategicUi = false;
+    bool m_originalStrategicDirty = true;
+    wxBitmap m_originalStrategicBitmap;
+    wxString m_originalStrategicError;
+    wxString m_originalBriefingText;
+    wxRect m_originalStrategicDrawRect;
+    int m_originalUnitScroll = 0;
+    int m_originalHierarchyUnitScroll = 0;
+    int m_originalUnitsRosterScroll = 0;
+    int m_originalUnitsOptionScroll = 0;
+    int m_originalBuyListScroll = 0;
+    int m_originalBuySelectedUnitId = -1;
+    int m_originalBuySelectedCommander = -1;
+    int m_originalResearchListScroll = 0;
+    int m_originalInfoListScroll = 0;
+    int m_originalInfoTextScroll = 0;
+    int m_originalBattleResolution = 2; // 0=640x480, 1=800x600, 2=1024x768
+    bool m_originalQuickHelp = true;
+
     wxPanel* m_normalLayoutPanel = nullptr;  // container for left+mid+right
     wxPanel* m_buyMainPanel = nullptr;  // root buy panel
     wxListCtrl* m_buyShopList = nullptr;  // shop list (right top)
@@ -776,6 +871,8 @@ public:
         ID_MENU_OPTIONS_AUDIO,
         ID_MENU_OPTIONS_SCREEN,
         ID_MENU_GAME_MODE_TOGGLE,
+        ID_MENU_STRATEGIC_UI_CURRENT,
+        ID_MENU_STRATEGIC_UI_ORIGINAL,
         // Units management page IDs
         ID_BTN_UNITS,
         ID_BTN_UNITS_ACTION,

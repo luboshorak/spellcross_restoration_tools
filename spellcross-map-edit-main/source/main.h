@@ -148,6 +148,9 @@ private:
     void OnOpenMainMenu(wxCommandEvent& event);
     void OnMainMenuAction(FormMainMenuAction action);
     bool LoadGameStateFromDialog();
+    bool SaveTacticalGameWithCampaignContext(const std::wstring& path);
+    bool LoadTacticalGameWithCampaignContext(const std::wstring& path);
+    void SyncUiAfterTacticalLoad();
 
     void OnExit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);

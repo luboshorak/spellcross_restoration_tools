@@ -1,0 +1,20 @@
+Spellcross reconstructed strategic UI - Stage 6.7 verification
+
+Implemented:
+- Ninth reconstructed Options / Save screen from original COMMON.FS assets.
+- Nine visible save slots with direct load/save.
+- Live gamma, music and sound sliders.
+- Tactical resolution selection wired to 640x480 / 800x600 / 1024x768 for non-maximized main window.
+- Quick Help state and native selection indicator.
+- Native +/- slider glyphs and selection brackets.
+- Reconstructed UI is default; Current / wx UI remains selectable from Strategic UI menu.
+- Options mouse wheel no longer falls through to map unit scrolling.
+
+Checks performed:
+- strategic_original_renderer.cpp compiles as C++17 with GCC.
+- RenderOptions smoke test produced a 640x480 / 921600-byte RGB framebuffer using the extracted original assets.
+- Delimiter/conflict-marker sanity checks passed for modified sources.
+- Original OPTIONS resources and STROPT.QH hit rectangles were used for screen geometry.
+
+Environment limitation:
+- Full Windows GUI link/build was not run in this Linux container because the solution requires the MSVC/wxWidgets Windows toolchain.
