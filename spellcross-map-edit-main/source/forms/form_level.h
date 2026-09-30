@@ -119,6 +119,9 @@ public:
     void OnOriginalStrategicLeftDown(wxMouseEvent& ev);
     void OnOriginalStrategicRightDown(wxMouseEvent& ev);
     void OnOriginalStrategicMouseWheel(wxMouseEvent& ev);
+    void OnOriginalStrategicMouseMove(wxMouseEvent& ev);
+    void OnOriginalStrategicMouseLeave(wxMouseEvent& ev);
+    void OnOriginalStrategicAnimTimer(wxTimerEvent& ev);
 
     struct PlayerProgress
     {
@@ -303,6 +306,16 @@ private:
         wxString placeholder;
     };
 
+
+    struct HierarchyBattleMeta
+    {
+        int formation_id = 0;
+        int formation_level = 0;
+        int attack_bonus = 0;
+        int defence_bonus = 0;
+        bool carries_commander = false;
+    };
+
     struct UiPalette
     {
         wxColour text;
@@ -365,6 +378,15 @@ public:
     void ChooseUnitForHierarchySlot(const std::string& unitSlotId);
     void ChooseCommanderForHierarchySlot(const std::string& commanderSlotId);
     void ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId);
+    bool AssignCommanderToHierarchySlot(const std::string& commanderSlotId,
+        uint32_t commanderUid,
+        int rank,
+        const wxString& commanderName);
+    bool AssignUnitToHierarchySlot(const std::string& unitSlotId,
+        uint32_t unitUid,
+        const wxString& unitDisplay);
+    void ClearOriginalHierarchyPoolSelection();
+    bool ApplyOriginalHierarchyPoolSelectionToSlot(const std::string& slotId);
     void TryAssignCommanderToUnitSlot(const std::string& unitSlotId);
     std::string GetCommanderSlotForUnitSlot(const std::string& unitSlotId) const;
     struct RosterPickItem { uint32_t uid; wxString display; wxString label; };
@@ -691,6 +713,9 @@ public:
 
     // Get all unit UIDs assigned under a commander in hierarchy
     std::vector<uint32_t> GetUnitsUnderCommander(uint32_t commander_uid) const;
+    HierarchyBattleMeta GetHierarchyBattleMeta(uint32_t unit_uid,
+        const std::unordered_set<uint32_t>& participating_units) const;
+    bool IsCommanderFormationActive(uint32_t commander_uid) const;
     // Handler for commander selection in roster (selects all units under them)
     void OnCommanderSelectForMission(wxListEvent& ev);
     // Handler for unit selection in roster
@@ -740,8 +765,20 @@ public:
         Stats = 7,
         Options = 8
     };
+    enum class OriginalHierarchyPoolSelectionKind : int
+    {
+        None = 0,
+        Unit = 1,
+        Commander = 2
+    };
     OriginalStrategicScreen m_originalStrategicScreen = OriginalStrategicScreen::Map;
     int m_originalHierarchyPage = 1;
+    OriginalHierarchyPoolSelectionKind m_originalHierarchyPoolSelectionKind = OriginalHierarchyPoolSelectionKind::None;
+    uint32_t m_originalHierarchySelectedUnitUid = 0;
+    wxString m_originalHierarchySelectedUnitDisplay;
+    uint32_t m_originalHierarchySelectedCommanderUid = 0;
+    int m_originalHierarchySelectedCommanderRank = -1;
+    wxString m_originalHierarchySelectedCommanderName;
     bool m_originalStrategicUi = false;
     bool m_originalStrategicDirty = true;
     wxBitmap m_originalStrategicBitmap;
@@ -760,6 +797,16 @@ public:
     int m_originalInfoTextScroll = 0;
     int m_originalBattleResolution = 2; // 0=640x480, 1=800x600, 2=1024x768
     bool m_originalQuickHelp = true;
+
+    // Native strategic-map interaction/animation state. These values are only
+    // used by the reconstructed 640x480 branch and never affect legacy wx UI.
+    wxTimer m_originalStrategicAnimTimer;
+    int m_originalStrategicAnimPhase = 0;
+    int m_originalStrategicAnimSubTick = 0;
+    int m_originalToolbarHoverSlot = -1;
+    int m_originalActionHover = -1; // 0=Attack, 1=Cancel
+    bool m_originalEndTurnHover = false;
+    int m_originalEndTurnReveal = 0; // 0..41 px, native ET_BTN0 left-to-right wipe
 
     wxPanel* m_normalLayoutPanel = nullptr;  // container for left+mid+right
     wxPanel* m_buyMainPanel = nullptr;  // root buy panel

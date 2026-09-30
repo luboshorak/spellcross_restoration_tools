@@ -1,0 +1,17 @@
+Stage 6.8 verification
+======================
+
+Scope: strategic-map visual/interaction revision only.
+
+Checks performed in the build environment:
+- strategic_original_renderer.cpp: g++ C++17 syntax check: PASS
+- standalone StrategicOriginalRenderer test against original COMMON.FS assets: PASS
+  output: 640x480 RGB, 921600 bytes
+- hover hatch phase regression test: PASS
+  phase 0 vs phase 3 changed 8814 RGB bytes with hover territory enabled
+- Original asset inspection / coordinate comparison:
+  BMPAN__*.BTN = 37x24, matches STRBAR.QH x=590,y=131 + 31px pitch
+  BIGMB__*.BTN = 70x28, best pixel match in reference at (421,439)/(496,439)
+  ET_BTN0/1 = 36x41, BIG_MAP palette bank
+
+Not linked into a Windows executable here because the MSVC + wxWidgets Windows toolchain is not available in this environment.

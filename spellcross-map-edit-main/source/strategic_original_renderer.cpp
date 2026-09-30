@@ -196,7 +196,8 @@ void StrategicOriginalRenderer::GenerateHatch(const std::vector<std::uint8_t>& t
                                                int w,
                                                int h,
                                                int territoryCount,
-                                               std::vector<std::uint8_t>& hatch)
+                                               std::vector<std::uint8_t>& hatch,
+                                               int phase)
 {
     hatch.assign(static_cast<std::size_t>(w) * h, 0);
 
@@ -223,10 +224,13 @@ void StrategicOriginalRenderer::GenerateHatch(const std::vector<std::uint8_t>& t
     };
 
     // Same 2px / 7px descending diagonal pattern used by Maslan's save editor.
-    // It matches the hatch visible in the original strategic-map screenshot.
+    // The native strategic map scrolls this hatch under the pointer. Keeping the
+    // phase modulo seven reproduces that motion without changing line density.
+    phase %= 7;
+    if(phase < 0) phase += 7;
     for(int territory = 1; territory <= territoryCount; ++territory)
     {
-        for(int x = 0; x < 2*w; x += 7)
+        for(int x = -7 + phase; x < 2*w + 7; x += 7)
         {
             for(int s = 0; s < 2; ++s)
             {
@@ -310,7 +314,9 @@ bool StrategicOriginalRenderer::RenderStrategicMap(const AssetLoader& load,
         if(v > 0 && v < 128) territoryCount = std::max(territoryCount, static_cast<int>(v));
 
     std::vector<std::uint8_t> hatch;
-    GenerateHatch(territoryMask, kMapW, kMapH, territoryCount, hatch);
+    std::vector<std::uint8_t> hoverHatch;
+    GenerateHatch(territoryMask, kMapW, kMapH, territoryCount, hatch, 0);
+    GenerateHatch(territoryMask, kMapW, kMapH, territoryCount, hoverHatch, state.animationPhase);
 
     // Indexed 640x480 canvas. BIG_MAP owns common right chrome; VMM owns left 575 px.
     std::vector<std::uint8_t> canvas = bigMap;
@@ -360,7 +366,14 @@ bool StrategicOriginalRenderer::RenderStrategicMap(const AssetLoader& load,
         for(int x = 0; x < kMapW; ++x)
         {
             const std::size_t p = static_cast<std::size_t>(y) * kMapW + x;
-            const int terr = hatch[p];
+            int terr = hatch[p];
+            if(state.hoverTerritory > 0)
+            {
+                const std::uint8_t rawTerr = territoryMask[p];
+                const int maskTerr = rawTerr >= 128 ? rawTerr - 128 : rawTerr;
+                if(maskTerr == state.hoverTerritory)
+                    terr = hoverHatch[p];
+            }
             if(terr <= 0) continue;
             TerritoryVisualState vis = TerritoryVisualState::Hidden;
             if(static_cast<std::size_t>(terr) < state.territories.size())

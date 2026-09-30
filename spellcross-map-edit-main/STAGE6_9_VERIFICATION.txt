@@ -1,0 +1,17 @@
+Stage 6.9 verification
+======================
+
+Scope: native lower-right end-turn animation only.
+
+Checks performed:
+- Original video inspected frame-by-frame at 30 fps around the hover transition.
+- Original COMMON.FS extracted from the supplied Spellcross installation.
+- ET_PAN.LZ / ET_BTN0.LZ / ET_BTN1.LZ decompressed size: 1476 bytes each.
+- Correct native dimensions verified visually and by asset composition: 41x36.
+- ET_BTN0 matches the full-hover frame in the original capture.
+- Native placement verified against the original 640x480 screenshot: (588,432).
+- Reconstruction preview generated for reveal widths 0..41 px; wipe geometry matches the source capture.
+- Stage 6.8 territory-hatch cadence preserved by advancing its phase every second 60 ms timer tick.
+- ZIP integrity checked after packaging.
+
+Windows executable is not linked in this environment because the MSVC + wxWidgets Windows toolchain is not installed here.

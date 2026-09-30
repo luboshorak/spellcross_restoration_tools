@@ -139,7 +139,7 @@ namespace
 namespace scsave
 {
 	static constexpr uint32_t MAGIC = 0x56435353; // 'SSCV'
-	static constexpr uint32_t VERSION = 1;
+	static constexpr uint32_t VERSION = 2;
 
 	template<typename T>
 	inline void write(std::ostream& os, const T& v)
@@ -258,6 +258,12 @@ static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, Spe
 
 	scsave::write(os, (int32_t)u->commander_id);
 	scsave::write(os, (uint8_t)u->is_commander);
+	// v2: strategic hierarchy metadata needed to preserve original formation
+	// HUD marks and bonuses when a tactical battle save is resumed.
+	scsave::write(os, (uint32_t)u->strategic_uid);
+	scsave::write(os, (int32_t)u->formation_level);
+	scsave::write(os, (int32_t)u->formation_attack_bonus);
+	scsave::write(os, (int32_t)u->formation_defence_bonus);
 
 	scsave::write_string(os, std::string(u->name));
 
@@ -270,7 +276,7 @@ static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, Spe
 	scsave::write(os, creator_evt);
 }
 
-static bool scsave_read_unit(std::istream& is, SpellMap* map, SpellData* data, MapUnit*& out_u, ScsaveUnitLink& out_link)
+static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, SpellData* data, MapUnit*& out_u, ScsaveUnitLink& out_link)
 {
 	int32_t id = -1, type_id = -1;
 	int32_t x = 0, y = 0;
@@ -283,6 +289,10 @@ static bool scsave_read_unit(std::istream& is, SpellMap* map, SpellData* data, M
 	std::string spec_s, beh_s;
 	int32_t commander_id = 0;
 	uint8_t is_commander = 0;
+	uint32_t strategic_uid = 0;
+	int32_t formation_level = 0;
+	int32_t formation_attack_bonus = 0;
+	int32_t formation_defence_bonus = 0;
 	std::string name;
 
 	if (!scsave::read(is, id) || !scsave::read(is, type_id)) return false;
@@ -299,6 +309,13 @@ static bool scsave_read_unit(std::istream& is, SpellMap* map, SpellData* data, M
 	if (!scsave::read_string(is, spec_s) || !scsave::read_string(is, beh_s)) return false;
 
 	if (!scsave::read(is, commander_id) || !scsave::read(is, is_commander)) return false;
+	if (version >= 2)
+	{
+		if (!scsave::read(is, strategic_uid) ||
+			!scsave::read(is, formation_level) ||
+			!scsave::read(is, formation_attack_bonus) ||
+			!scsave::read(is, formation_defence_bonus)) return false;
+	}
 
 	if (!scsave::read_string(is, name)) return false;
 
@@ -340,6 +357,10 @@ static bool scsave_read_unit(std::istream& is, SpellMap* map, SpellData* data, M
 
 	u->commander_id = commander_id;
 	u->is_commander = is_commander;
+	u->strategic_uid = strategic_uid;
+	u->formation_level = formation_level;
+	u->formation_attack_bonus = formation_attack_bonus;
+	u->formation_defence_bonus = formation_defence_bonus;
 
 	// Pvodn kd (chybn):
 	// std::memset(u->name, 0, sizeof(u->name));
@@ -863,7 +884,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	// Header
 	f << "{\n";
 	f << "  \"format\": \"spellcross_map_editor_save\",\n";
-	f << "  \"version\": 1,\n";
+	f << "  \"version\": 2,\n";
 	f << "  \"map_path\": \"" << wstring2string(GetTopPath()) << "\",\n";
 	f << "  \"note\": \"Binary payload follows after marker\",\n";
 	f << "  \"payload\": \"__BINARY__\"\n";
@@ -1213,7 +1234,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		last_error = "Invalid save payload magic.";
 		return 6;
 	}
-	if (ver != scsave::VERSION)
+	if (ver < 1 || ver > scsave::VERSION)
 	{
 		last_error = "Unsupported save payload version.";
 		return 7;
@@ -1257,7 +1278,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		{
 			MapUnit* u = nullptr;
 			ScsaveUnitLink lk;
-			if (!scsave_read_unit(is, this, spelldata, u, lk)) return 11;
+			if (!scsave_read_unit(is, ver, this, spelldata, u, lk)) return 11;
 			tmp.units.push_back(u);
 			links.push_back(lk);
 		}
@@ -1340,7 +1361,7 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 
 					MapUnit* eu = nullptr;
 					ScsaveUnitLink dummy;
-					if (!scsave_read_unit(is, this, spelldata, eu, dummy)) return 15;
+					if (!scsave_read_unit(is, ver, this, spelldata, eu, dummy)) return 15;
 
 					// push event unit record
 					SpellMapEventUnitRec rec;
@@ -8658,11 +8679,12 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 		// pos b: 579,23  size: 60x50
 		unit->unit->icon_glyph->Render(buf, buf_end, buf_x_size, hud_left + ((pid == 0) ? (1) : (579)), hud_top + 23);
 
-		// render command level mark
+		// Render active formation mark in the unit information panel.
+		// WM_FORM0/1/2 are the original battalion/regiment/brigade glyphs.
 		// pos a: 48,25
 		// pos b: 626,25
-		int command_level = 0;//rand()%4;
-		if (command_level)
+		const int command_level = (std::max)(0, (std::min)(unit->formation_level, 3));
+		if (command_level && gres.wm_form[command_level - 1])
 			gres.wm_form[command_level - 1]->Render(buf, buf_end, buf_x_size, hud_left + ix_ref + 48, hud_top + 25);
 
 		// render freeze mark

@@ -48,6 +48,12 @@ public:
         int level = 2;
         // Index 1 == territory #1. Index 0 is ignored. Missing entries are Hidden.
         std::vector<TerritoryVisualState> territories;
+
+        // Native strategic-map hover effect: enemy hatching scrolls while the
+        // pointer is over a revealed, unconquered territory. animationPhase is
+        // deliberately small (0..6) because the DOS hatch has a 7 px period.
+        int hoverTerritory = 0;
+        int animationPhase = 0;
     };
 
     bool RenderStrategicMap(const AssetLoader& load,
@@ -151,5 +157,6 @@ private:
                               int w,
                               int h,
                               int territoryCount,
-                              std::vector<std::uint8_t>& hatch);
+                              std::vector<std::uint8_t>& hatch,
+                              int phase = 0);
 };

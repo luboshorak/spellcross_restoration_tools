@@ -17,6 +17,7 @@
 #include <vector>
 #include <string>
 #include <tuple>
+#include <cstdint>
 
 //using namespace std;
 
@@ -523,9 +524,15 @@ public:
 	MapUnitType behave;
 	// custom name
 	std::string name;
-	// commander id or zero	
+	// Tactical formation metadata propagated from the strategic hierarchy.
+	// commander_id is the original HUD's one-digit formation number;
+	// is_commander draws the green commander mark on the host unit.
 	int commander_id;
 	int is_commander;
+	uint32_t strategic_uid;
+	int formation_level;          // 0=none, 1=battalion, 2=regiment, 3=brigade
+	int formation_attack_bonus;   // FORMACIE.DEF
+	int formation_defence_bonus;  // FORMACIE.DEF
 	// dig in
 	int dig_level;
 	// dig turns counter

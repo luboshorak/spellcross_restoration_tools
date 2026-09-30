@@ -1040,9 +1040,13 @@ MapUnit::MapUnit(SpellMap *map)
 	behave = MapUnitType::NormalUnit;
 	// custom name
 	name.clear();
-	// commander id or zero	
+	// formation / commander metadata
 	commander_id = 0;
 	is_commander = 0;
+	strategic_uid = 0;
+	formation_level = 0;
+	formation_attack_bonus = 0;
+	formation_defence_bonus = 0;
 	// dig in
 	dig_level = 0;
 	dig_turns = 0;
@@ -1954,9 +1958,12 @@ int MapUnit::GetAttack(MapUnit::TARGET_TYPE target)
 	if(!attack)
 		return(attack);
 	
-	// add bonuses
+	// add experience + active strategic-formation bonuses.
+	// FORMACIE.DEF defines the direct bonus for the highest active formation:
+	// battalion +1 attack, regiment +2, brigade +4.
 	auto bonus = unit->bonuses->GetBonus(experience_level);
 	attack += bonus->attack;
+	attack += formation_attack_bonus;
 		
 	return(attack);
 }
@@ -1969,8 +1976,9 @@ int MapUnit::GetDefence()
 	if(!defence)
 		return(defence);
 	
-	// add bonuses
+	// add experience + active strategic-formation bonuses.
 	defence += unit->bonuses->GetBonus(experience_level)->defence;
+	defence += formation_defence_bonus;
 	return(defence);
 }
 

@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "timestamp": "2026-09-30 06:29:38",
+  "timestamp": "2026-09-30 19:25:00",
   "level_def": "Z:\\Games\\Spellcross\\Spellcross - pokusy\\SPELCROS\\DATA\\COMMON\\LEVEL_02.DEF",
   "turn": 1,
   "money": 70,
   "research": 0,
-  "selected_territory": -1,
+  "selected_territory": 2,
   "game_mode": true,
   "owned_territories": [1, 4],
   "research_state": {
-    "active_id": -1,
-    "active_index": -1,
-    "alloc_per_turn": 0,
+    "active_id": 104,
+    "active_index": 0,
+    "alloc_per_turn": 1,
     "progress": {},
     "completed": []
   },
@@ -47,9 +47,9 @@
   "units": [
     {"unit_id": 0, "count": 1, "health": 100, "cooldown": 0, "experience": 0, "level": 0},
     {"unit_id": 0, "count": 1, "health": 100, "cooldown": 0, "experience": 0, "level": 0},
-    {"unit_id": 2, "count": 1, "health": 100, "cooldown": 1, "experience": 82, "level": 1},
-    {"unit_id": 3, "count": 2, "health": 100, "cooldown": 1, "experience": 269, "level": 1},
-    {"unit_id": 29, "count": 1, "health": 100, "cooldown": 1, "experience": 38, "level": 1},
-    {"unit_id": 3, "count": 1, "health": 100, "cooldown": 1, "experience": 172, "level": 1}
+    {"unit_id": 2, "count": 1, "health": 100, "cooldown": 1, "experience": 107, "level": 1},
+    {"unit_id": 3, "count": 2, "health": 100, "cooldown": 1, "experience": 243, "level": 1},
+    {"unit_id": 29, "count": 1, "health": 100, "cooldown": 1, "experience": 37, "level": 1},
+    {"unit_id": 3, "count": 1, "health": 100, "cooldown": 1, "experience": 176, "level": 1}
   ]
 }

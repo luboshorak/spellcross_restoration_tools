@@ -1,0 +1,41 @@
+Stage 6.11 tactical formation propagation - verification
+========================================================
+
+Source evidence checked
+-----------------------
+- Spellcross manual hierarchy/tactical HUD section:
+  formation number on floating unit status, active commander mark,
+  higher-formation mark in unit information, active battalion rules.
+- COMMON.FS/FORMACIE.DEF:
+  Formation(1): Attack +1, Defence +1
+  Formation(2): Attack +2, Defence +1
+  Formation(3): Attack +4, Defence +3
+- COMMON.FS assets: WM_FORM0.ICO / WM_FORM1.ICO / WM_FORM2.ICO.
+
+Code-path checks
+----------------
+- PlayerUnitAdd carries per-instance strategic UID + formation metadata.
+- MainFrame::LoadMapFromDefPath transfers metadata into MapUnit.
+- Existing floating HUD uses commander_id/is_commander and is now fed by hierarchy state.
+- map.cpp command-level HUD stub is replaced by MapUnit::formation_level.
+- MapUnit::GetAttack/GetDefence apply original formation bonuses.
+- Tactical save payload bumped to v2 and v1 remains accepted.
+
+Static checks performed
+-----------------------
+- delimiter/string/comment structural scan: PASS for all modified C++/headers.
+- level.h standalone C++17 syntax compile: PASS.
+- full Windows wxWidgets/MSVC build unavailable in this environment.
+
+Runtime test focus
+------------------
+1. Build an active battalion: >=3 companies, commander placed into one of them.
+2. Send all required companies to battle.
+3. On tactical map verify:
+   - smaller floating status bar + formation number,
+   - commander host has commander mark,
+   - unit information shows WM_FORM0,
+   - attack/defence totals are +1/+1 versus the same unit outside formation.
+4. Repeat with complete regiment / brigade and verify WM_FORM1 / WM_FORM2
+   and bonuses +2/+1 / +4/+3.
+5. Save/load a tactical battle and verify formation HUD/bonuses survive.

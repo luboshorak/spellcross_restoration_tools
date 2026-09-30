@@ -358,6 +358,17 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             unit->is_enemy = 0;
             unit->experience_init = 0;
             unit->experience_level = 1;
+
+            // Preserve strategic hierarchy identity in the tactical battle.
+            // The original HUD shrinks the unit status plate for formation
+            // members, prints the one-digit formation number, marks the unit
+            // carrying a commander, and shows WM_FORM0/1/2 in unit info.
+            unit->strategic_uid = entry.strategic_uid;
+            unit->commander_id = entry.formation_id;
+            unit->is_commander = entry.carries_commander ? 1 : 0;
+            unit->formation_level = entry.formation_level;
+            unit->formation_attack_bonus = entry.formation_attack_bonus;
+            unit->formation_defence_bonus = entry.formation_defence_bonus;
             unit->ResetAP();
             // entry.health is percentage (0-100), convert to actual man count based on unit_rec->cnt
             if (entry.health > 0 && entry.health <= 100)

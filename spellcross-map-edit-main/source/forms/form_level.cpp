@@ -49,10 +49,17 @@ namespace
     constexpr int kOriginalUnitRowsY = 83;
     constexpr int kOriginalUnitRowH = 14;
     constexpr int kOriginalVisibleRows = 24;
-    constexpr int kOriginalAttackX = 420;
-    constexpr int kOriginalAttackY = 438;
+    // STRMAP.QH native hit rectangles. The BIGMB sprites themselves start one
+    // pixel left and two pixels above those active rectangles (measured against
+    // the original 640x480 frame).
+    constexpr int kOriginalAttackX = 422;
+    constexpr int kOriginalCancelX = 497;
+    constexpr int kOriginalAttackY = 441;
     constexpr int kOriginalButtonW = 70;
-    constexpr int kOriginalButtonH = 28;
+    constexpr int kOriginalButtonH = 27;
+    constexpr int kOriginalAttackDrawX = 421;
+    constexpr int kOriginalCancelDrawX = 496;
+    constexpr int kOriginalAttackDrawY = 439;
 
     // Exact DOS strategic-toolbar geometry.  The buttons have a 31 px pitch;
     // the active red wedge lives *inside* the toolbar at x=591, not on the
@@ -67,6 +74,169 @@ namespace
     // Keep this declaration near the other translation-unit constants because
     // the Original UI renderer uses it before the Resources-page functions.
     constexpr int kResourcesMetaTerritoryId = 0;
+
+    using OriginalUiPalette = std::array<std::array<std::uint8_t, 3>, 256>;
+
+    // Build the palette used by the common strategic chrome/buttons.  The DOS
+    // game combines three palette banks: shared UI colours (0..127), STRATEGY
+    // as a fallback, and BIG_MAP stone/button colours (192..255).
+    static bool OriginalBuildUiPalette(const StrategicOriginalRenderer::AssetLoader& load,
+        OriginalUiPalette& pal)
+    {
+        std::vector<std::uint8_t> strategy, shared, bigMap;
+        if (!load || !load("STRATEGY.PAL", strategy) || strategy.size() < 256u * 3u)
+            return false;
+        if (!load("_SHARED1.PAL", shared) || shared.size() < 128u * 3u)
+            return false;
+        if (!load("BIG_MAP.PAL", bigMap) || bigMap.size() < 64u * 3u)
+            return false;
+
+        for (int i = 0; i < 256; ++i)
+            pal[static_cast<size_t>(i)] = {
+                strategy[static_cast<size_t>(i) * 3u + 0u],
+                strategy[static_cast<size_t>(i) * 3u + 1u],
+                strategy[static_cast<size_t>(i) * 3u + 2u]
+            };
+        for (int i = 0; i < 128; ++i)
+            pal[static_cast<size_t>(i)] = {
+                shared[static_cast<size_t>(i) * 3u + 0u],
+                shared[static_cast<size_t>(i) * 3u + 1u],
+                shared[static_cast<size_t>(i) * 3u + 2u]
+            };
+        for (int i = 0; i < 64; ++i)
+            pal[static_cast<size_t>(192 + i)] = {
+                bigMap[static_cast<size_t>(i) * 3u + 0u],
+                bigMap[static_cast<size_t>(i) * 3u + 1u],
+                bigMap[static_cast<size_t>(i) * 3u + 2u]
+            };
+        return true;
+    }
+
+    // Decode Spellcross ICO/BTN sparse scanlines into an RGBA wxImage.  Pixels
+    // not present in the sparse stream remain transparent; an encoded colour 0
+    // is the game's alternate solid black (palette entry 254), just like
+    // SpellGraphics::AddICO().
+    static wxImage OriginalDecodeIcoLike(const std::vector<std::uint8_t>& bytes,
+        const OriginalUiPalette& pal)
+    {
+        if (bytes.size() < 7)
+            return wxImage();
+
+        const int xOfs = static_cast<int>(bytes[2] | (static_cast<unsigned>(bytes[3]) << 8));
+        const int w = static_cast<int>(bytes[4] | (static_cast<unsigned>(bytes[5]) << 8));
+        const int h = static_cast<int>(bytes[6]);
+        if (w <= 0 || h <= 0)
+            return wxImage();
+
+        wxImage image(w, h, true);
+        if (!image.IsOk() || !image.GetData())
+            return wxImage();
+        image.InitAlpha();
+        std::memset(image.GetData(), 0, static_cast<size_t>(w) * h * 3u);
+        std::memset(image.GetAlpha(), 0, static_cast<size_t>(w) * h);
+
+        size_t pos = 7;
+        for (int y = 0; y < h; ++y)
+        {
+            int lineX = -xOfs;
+            while (pos < bytes.size() && bytes[pos] != 0xFF)
+            {
+                if (pos + 2 > bytes.size())
+                    return wxImage();
+                lineX += bytes[pos++];
+                const int count = bytes[pos++];
+                if (pos + static_cast<size_t>(count) > bytes.size())
+                    return wxImage();
+                for (int i = 0; i < count; ++i)
+                {
+                    const int x = lineX + i;
+                    if (x < 0 || x >= w)
+                        continue;
+                    const std::uint8_t raw = bytes[pos + static_cast<size_t>(i)];
+                    const std::uint8_t idx = raw == 0 ? 254 : raw;
+                    const auto& c = pal[idx];
+                    image.SetRGB(x, y, c[0], c[1], c[2]);
+                    image.SetAlpha(x, y, 255);
+                }
+                pos += static_cast<size_t>(count);
+                lineX += count;
+            }
+            if (pos >= bytes.size())
+                return wxImage();
+            ++pos; // 0xFF end-of-line
+        }
+        return image;
+    }
+
+    static bool OriginalBlitImage(wxImage& dst, const wxImage& src, int dx, int dy)
+    {
+        if (!dst.IsOk() || !src.IsOk() || !dst.GetData() || !src.GetData())
+            return false;
+
+        unsigned char* dd = dst.GetData();
+        const unsigned char* sd = src.GetData();
+        const unsigned char* sa = src.HasAlpha() ? src.GetAlpha() : nullptr;
+        const int dw = dst.GetWidth(), dh = dst.GetHeight();
+        const int sw = src.GetWidth(), sh = src.GetHeight();
+        for (int y = 0; y < sh; ++y)
+        {
+            const int yy = dy + y;
+            if (yy < 0 || yy >= dh) continue;
+            for (int x = 0; x < sw; ++x)
+            {
+                const int xx = dx + x;
+                if (xx < 0 || xx >= dw) continue;
+                const size_t sp = static_cast<size_t>(y) * sw + x;
+                if (sa && sa[sp] == 0) continue;
+                const size_t si = sp * 3u;
+                const size_t di = (static_cast<size_t>(yy) * dw + xx) * 3u;
+                dd[di + 0] = sd[si + 0];
+                dd[di + 1] = sd[si + 1];
+                dd[di + 2] = sd[si + 2];
+            }
+        }
+        return true;
+    }
+
+    static wxImage OriginalLoadIcoLike(const StrategicOriginalRenderer::AssetLoader& load,
+        const std::string& name, const OriginalUiPalette& pal)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (!load || !load(name, bytes))
+            return wxImage();
+        return OriginalDecodeIcoLike(bytes, pal);
+    }
+
+    static wxImage OriginalLoadRawIndexed(const StrategicOriginalRenderer::AssetLoader& load,
+        const std::string& name, int w, int h, const OriginalUiPalette& pal)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (!load || !load(name, bytes))
+            return wxImage();
+        const size_t expected = static_cast<size_t>(w) * h;
+        if (bytes.size() < expected && !bytes.empty())
+        {
+            LZWexpand delz(static_cast<int>(std::max<size_t>(expected + 64u, 4096u)));
+            auto& decoded = delz.Decode(bytes.data(), bytes.data() + bytes.size());
+            if (!decoded.empty())
+                bytes.assign(decoded.begin(), decoded.end());
+        }
+        if (bytes.size() < expected)
+            return wxImage();
+
+        wxImage image(w, h, true);
+        if (!image.IsOk() || !image.GetData())
+            return wxImage();
+        for (int y = 0; y < h; ++y)
+        {
+            for (int x = 0; x < w; ++x)
+            {
+                const auto& c = pal[bytes[static_cast<size_t>(y) * w + x]];
+                image.SetRGB(x, y, c[0], c[1], c[2]);
+            }
+        }
+        return image;
+    }
 
     struct OriginalHierarchyHitSlot
     {
@@ -594,12 +764,23 @@ namespace
 
         const wxString kind = tokens[0];
 
+        // unit:<uid>:<name>
         // unit:<name>
         if (kind == "unit" && tokens.size() >= 2)
         {
             parsed.valid = true;
             parsed.type = "unit";
-            parsed.name = tokens[1];
+            if (tokens.size() >= 3)
+            {
+                long uid = 0;
+                if (tokens[1].ToLong(&uid) && uid > 0)
+                    parsed.commander_uid = static_cast<uint32_t>(uid); // reused as generic uid carrier for legacy drag payload parsing
+                parsed.name = tokens[2];
+            }
+            else
+            {
+                parsed.name = tokens[1];
+            }
             return parsed;
         }
 
@@ -635,6 +816,7 @@ namespace
         }
 
         // slot:<slotId>:<type>:<name>
+        // slot:<slotId>:unit:<uid>:<name>
         // slot:<slotId>:commander:<uid>:<rank>:<name>
         // slot:<slotId>:commander:<rank>:<name>
         if (kind == "slot" && tokens.size() >= 4)
@@ -644,7 +826,14 @@ namespace
             parsed.slotId = tokens[1].ToStdString();
             parsed.type = tokens[2].ToStdString();
 
-            if (parsed.type == "commander" && tokens.size() >= 6)
+            if (parsed.type == "unit" && tokens.size() >= 5)
+            {
+                long uid = 0;
+                if (tokens[3].ToLong(&uid) && uid > 0)
+                    parsed.commander_uid = static_cast<uint32_t>(uid); // reused as generic uid carrier
+                parsed.name = tokens[4];
+            }
+            else if (parsed.type == "commander" && tokens.size() >= 6)
             {
                 long uid = 0;
                 long r = -1;
@@ -1691,6 +1880,14 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 {
     static bool seeded = false;
     if (!seeded) { std::srand((unsigned)std::time(nullptr)); seeded = true; }
+
+    // Small native-UI animation clock.  The original end-turn control wipes
+    // a 41 px sprite in/out in roughly 0.6 s.  Territory hatch animation used
+    // the old 120 ms cadence, so it advances only on every second 60 ms tick.
+    m_originalStrategicAnimTimer.SetOwner(this);
+    Bind(wxEVT_TIMER, &StrategicLevelFrame::OnOriginalStrategicAnimTimer, this);
+    m_originalStrategicAnimTimer.Start(60);
+
     m_money = 0;
     m_research = 0;
     m_playerUnits = m_level.start_units;
@@ -2168,6 +2365,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
     StrategicOriginalRenderer::MapState state;
     state.level = levelNum;
+    state.hoverTerritory = (m_originalStrategicScreen == OriginalStrategicScreen::Map)
+        ? m_hoverTerritory : 0;
+    state.animationPhase = m_originalStrategicAnimPhase;
     int maxId = 0;
     for (const auto& t : m_level.territories)
         maxId = std::max(maxId, t.id);
@@ -2316,6 +2516,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         return;
     }
 
+    OriginalUiPalette nativeUiPal{};
+    const bool haveNativeUiPal = OriginalBuildUiPalette(loader, nativeUiPal);
+
     wxImage image(rgb.width, rgb.height, true);
     if (image.IsOk() && image.GetData())
         std::memcpy(image.GetData(), rgb.rgb.data(), rgb.rgb.size());
@@ -2341,8 +2544,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             kOriginalListW, kOriginalListH, listBg);
         OriginalVLine(image, kOriginalListX - 2, kOriginalListY,
             kOriginalListY + kOriginalListH - 1, frame);
-        OriginalVLine(image, kOriginalListX - 1, kOriginalListY,
-            kOriginalListY + kOriginalListH - 1, wxColour(40, 40, 34));
         OriginalVLine(image, kOriginalListX + kOriginalListW,
             kOriginalListY, kOriginalListY + kOriginalListH - 1, frame);
 
@@ -2416,26 +2617,31 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         if (totalRows == 0)
             OriginalDrawSpellText(image, font, L"-- bez jednotek --", 421, 84, dim, 130, true);
 
-        // Bottom action buttons. They intentionally stay inside the restored
-        // framebuffer; the click handler routes them to existing game logic.
-        auto drawActionButton = [&](int x, const wxString& caption, bool enabled)
+        // Bottom action buttons use the actual BIGMB DOS button sprites.  The
+        // previous hand-drawn rectangles were the source of the conspicuous
+        // black boxes around Attack/Cancel in the reconstructed screen.
+        auto drawActionButton = [&](int x, int hoverIndex, const wxString& caption, bool enabled)
         {
-            OriginalFillRect(image, x, kOriginalAttackY, kOriginalButtonW, kOriginalButtonH,
-                enabled ? wxColour(13, 51, 10) : wxColour(22, 34, 20));
-            OriginalHLine(image, x, x + kOriginalButtonW - 1, kOriginalAttackY,
-                enabled ? wxColour(38, 94, 33) : wxColour(57, 61, 54));
-            OriginalVLine(image, x, kOriginalAttackY, kOriginalAttackY + kOriginalButtonH - 1,
-                enabled ? wxColour(38, 94, 33) : wxColour(57, 61, 54));
-            OriginalHLine(image, x, x + kOriginalButtonW - 1,
-                kOriginalAttackY + kOriginalButtonH - 1, wxColour(3, 17, 3));
-            OriginalVLine(image, x + kOriginalButtonW - 1, kOriginalAttackY,
-                kOriginalAttackY + kOriginalButtonH - 1, wxColour(3, 17, 3));
-            OriginalDrawSpellText(image, font, caption, x, kOriginalAttackY + 7,
+            bool nativeDrawn = false;
+            if (haveNativeUiPal)
+            {
+                const char* asset = !enabled ? "BIGMB__D.BTN"
+                    : (m_originalActionHover == hoverIndex ? "BIGMB__A.BTN" : "BIGMB__N.BTN");
+                wxImage plate = OriginalLoadIcoLike(loader, asset, nativeUiPal);
+                nativeDrawn = OriginalBlitImage(image, plate, x, kOriginalAttackDrawY);
+            }
+            if (!nativeDrawn)
+            {
+                OriginalFillRect(image, x, kOriginalAttackDrawY, kOriginalButtonW, 28,
+                    enabled ? wxColour(13, 51, 10) : wxColour(22, 34, 20));
+            }
+            OriginalDrawSpellText(image, font, caption, x, kOriginalAttackDrawY + 7,
                 enabled ? text : dim, kOriginalButtonW, true);
         };
         const bool canAttack = m_selectedTerritory > 0 && !m_selectedUnitsForMission.empty();
-        drawActionButton(kOriginalAttackX, L"\u00DAtok", canAttack);
-        drawActionButton(496, L"Zru\u0161it", !m_selectedUnitsForMission.empty() || !m_selectedCommandersForMission.empty());
+        drawActionButton(kOriginalAttackDrawX, 0, L"\u00DAtok", canAttack);
+        drawActionButton(kOriginalCancelDrawX, 1, L"Zru\u0161it",
+            !m_selectedUnitsForMission.empty() || !m_selectedCommandersForMission.empty());
 
         // Original status panel values.
         OriginalDrawSpellText(image, font, L"Pen\u00EDze", 578, 17, green, 61, true);
@@ -2445,7 +2651,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
         OriginalDrawSpellText(image, font, wxString::Format("%d", m_turn), 578, 91, text, 61, true);
 
-        // End-turn panel.
+        // Idle lower-right turn label.  The common post-pass below overlays
+        // the native ET_BTN0 sprite as a left-to-right wipe on mouse hover.
         OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
         OriginalDrawSpellText(image, font, wxString::Format("%02d", m_turn), 579, 452, text, 60, true);
 
@@ -2500,10 +2707,37 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
         // Native list scrollbar. The old branch had only the list contents; the
         // original game also has dedicated up/down buttons and a narrow track.
-        std::vector<int> hierarchyFlatUnits;
+        struct HierarchyPoolUnitRow
+        {
+            int playerIndex = -1;
+            uint32_t uid = 0;
+        };
+        int hierarchyTotalRows = 0;
+        for (const auto& u : m_playerUnits)
+            hierarchyTotalRows += std::max(0, u.count);
+        if (static_cast<int>(m_rosterRowUids.size()) != hierarchyTotalRows)
+        {
+            m_rosterRowUids.clear();
+            m_rosterRowUids.reserve(static_cast<size_t>(hierarchyTotalRows));
+            for (int i = 0; i < hierarchyTotalRows; ++i)
+                m_rosterRowUids.push_back(m_nextRosterUid++);
+        }
+
+        std::vector<HierarchyPoolUnitRow> hierarchyFlatUnits;
+        hierarchyFlatUnits.reserve(static_cast<size_t>(hierarchyTotalRows));
+        int hierarchyUidIndex = 0;
         for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+        {
             for (int inst = 0; inst < std::max(0, m_playerUnits[pIdx].count); ++inst)
-                hierarchyFlatUnits.push_back(static_cast<int>(pIdx));
+            {
+                HierarchyPoolUnitRow row;
+                row.playerIndex = static_cast<int>(pIdx);
+                if (hierarchyUidIndex < static_cast<int>(m_rosterRowUids.size()))
+                    row.uid = m_rosterRowUids[static_cast<size_t>(hierarchyUidIndex)];
+                hierarchyFlatUnits.push_back(row);
+                ++hierarchyUidIndex;
+            }
+        }
         constexpr int maxUnitRows = 18;
         const int hierarchyMaxScroll = std::max(0, static_cast<int>(hierarchyFlatUnits.size()) - maxUnitRows);
         m_originalHierarchyUnitScroll = std::clamp(m_originalHierarchyUnitScroll, 0, hierarchyMaxScroll);
@@ -2519,31 +2753,42 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         for (int flat = m_originalHierarchyUnitScroll;
              flat < static_cast<int>(hierarchyFlatUnits.size()) && unitRows < maxUnitRows; ++flat)
         {
-            const int pIdx = hierarchyFlatUnits[static_cast<size_t>(flat)];
+            const auto& poolRow = hierarchyFlatUnits[static_cast<size_t>(flat)];
+            const int pIdx = poolRow.playerIndex;
             if (pIdx < 0 || pIdx >= static_cast<int>(m_playerUnits.size()))
                 continue;
             const int rowY = 27 + unitRows * 14;
+            const bool selectedPoolUnit =
+                m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Unit &&
+                poolRow.uid != 0 && poolRow.uid == m_originalHierarchySelectedUnitUid;
+            if (selectedPoolUnit)
+                OriginalFillRect(image, 421, rowY, 129, 13, wxColour(35, 84, 29));
             OriginalDrawSpellText(image, font, GetUnitDisplayName(m_playerUnits[static_cast<size_t>(pIdx)].unit_id),
-                424, rowY + std::max(0, (14 - unitTextH) / 2), text, 126);
+                424, rowY + std::max(0, (14 - unitTextH) / 2), selectedPoolUnit ? heading : text, 126);
             ++unitRows;
         }
         if (hierarchyFlatUnits.empty())
             OriginalDrawSpellText(image, font, L"-- bez jednotek --", 421, 30, dim, 130, true);
 
-        OriginalDrawSpellText(image, font, L"Velitel\u00E9", 420, 292, heading, 132, true);
+        OriginalDrawSpellText(image, font, L"Velitelé", 420, 292, heading, 132, true);
         int cy = 309;
         int cmdRows = 0;
         for (const auto& commander : m_playerCommanders)
         {
             if (cmdRows >= 8)
                 break;
+            const bool selectedPoolCommander =
+                m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Commander &&
+                commander.uid != 0 && commander.uid == m_originalHierarchySelectedCommanderUid;
+            if (selectedPoolCommander)
+                OriginalFillRect(image, 421, cy, 129, 13, wxColour(35, 84, 29));
             const wxString label = GetRankAbbrev(commander.rank) + " " + wxString::FromUTF8(commander.name);
-            OriginalDrawSpellText(image, font, label, 424, cy, text, 126);
+            OriginalDrawSpellText(image, font, label, 424, cy, selectedPoolCommander ? heading : text, 126);
             cy += 14;
             ++cmdRows;
         }
         if (cmdRows == 0)
-            OriginalDrawSpellText(image, font, L"-- bez velitel\u016F --", 421, 310, dim, 130, true);
+            OriginalDrawSpellText(image, font, L"-- bez velitelů --", 421, 310, dim, 130, true);
 
         // Live hierarchy contents. Coordinates exactly match the openings in
         // HIERARCH.LZ. Empty normal slots remain empty; commander's assignment
@@ -3845,6 +4090,29 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
 
+    // Native end-turn animation, shared by every reconstructed strategic page.
+    // ET_BTN0/1 are 41x36 (not 36x41): the original DOS UI reveals ET_BTN0
+    // from left to right over the idle "Kolo NN" plate, then wipes it back out
+    // when the pointer leaves.  This behavior was measured frame-by-frame from
+    // the original game capture (2026-09-30_20h35_27.mp4).
+    if (image.IsOk() && haveNativeUiPal && m_originalEndTurnReveal > 0)
+    {
+        wxImage et = OriginalLoadRawIndexed(loader, "ET_BTN0.LZ", 41, 36, nativeUiPal);
+        if (et.IsOk())
+        {
+            const int reveal = std::clamp(m_originalEndTurnReveal, 0, 41);
+            if (reveal >= 41)
+            {
+                OriginalBlitImage(image, et, 588, 432);
+            }
+            else if (reveal > 0)
+            {
+                wxImage partial = et.GetSubImage(wxRect(0, 0, reveal, 36));
+                OriginalBlitImage(image, partial, 588, 432);
+            }
+        }
+    }
+
     m_originalStrategicBitmap = image.IsOk() ? wxBitmap(image) : wxBitmap();
     if (!m_originalStrategicBitmap.IsOk())
         m_originalStrategicError = "Original UI: wxImage/wxBitmap creation failed after successful render.";
@@ -3887,13 +4155,24 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         };
         for (size_t i = 0; i < icons.size(); ++i)
         {
+            // STRBAR.QH: native plate is exactly 37x24 at x=590 and a 31px
+            // vertical pitch.  BMPAN__N/A are the real normal/hover states.
+            const int slotX = 590;
+            const int slotY = 131 + static_cast<int>(i) * kOriginalToolbarPitch;
+            if (haveNativeUiPal)
+            {
+                const char* plateName = (m_originalToolbarHoverSlot == static_cast<int>(i))
+                    ? "BMPAN__A.BTN" : "BMPAN__N.BTN";
+                wxImage plateImage = OriginalLoadIcoLike(loader, plateName, nativeUiPal);
+                if (plateImage.IsOk())
+                    dc.DrawBitmap(wxBitmap(plateImage), slotX, slotY, true);
+            }
+
             wxBitmap icon = OriginalDesaturateBitmap(LoadMenuIcon(m_spellData, icons[i]));
             if (!icon.IsOk())
                 continue;
-            const int slotX = 588;
-            const int slotY = kOriginalToolbarY0 + static_cast<int>(i) * kOriginalToolbarPitch;
-            const int x = slotX + (42 - icon.GetWidth()) / 2;
-            const int y = slotY + (25 - icon.GetHeight()) / 2;
+            const int x = slotX + (37 - icon.GetWidth()) / 2;
+            const int y = slotY + (24 - icon.GetHeight()) / 2;
             dc.DrawBitmap(icon, x, y, true);
         }
 
@@ -4084,6 +4363,96 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             return;
         }
 
+        // Clicking the native right-hand pools now selects a concrete unit or
+        // commander first; the next click on the tree places that selection.
+        // This matches the intended two-step workflow much better than opening
+        // a chooser dialog for every single slot.
+        {
+            struct HierarchyPoolUnitRow
+            {
+                int playerIndex = -1;
+                uint32_t uid = 0;
+            };
+            int totalUnitRows = 0;
+            for (const auto& u : m_playerUnits)
+                totalUnitRows += std::max(0, u.count);
+            if (static_cast<int>(m_rosterRowUids.size()) != totalUnitRows)
+            {
+                m_rosterRowUids.clear();
+                m_rosterRowUids.reserve(static_cast<size_t>(totalUnitRows));
+                for (int i = 0; i < totalUnitRows; ++i)
+                    m_rosterRowUids.push_back(m_nextRosterUid++);
+            }
+            std::vector<HierarchyPoolUnitRow> flatUnits;
+            flatUnits.reserve(static_cast<size_t>(totalUnitRows));
+            int uidIndex = 0;
+            for (size_t pIdx = 0; pIdx < m_playerUnits.size(); ++pIdx)
+            {
+                for (int inst = 0; inst < std::max(0, m_playerUnits[pIdx].count); ++inst)
+                {
+                    HierarchyPoolUnitRow row;
+                    row.playerIndex = static_cast<int>(pIdx);
+                    if (uidIndex < static_cast<int>(m_rosterRowUids.size()))
+                        row.uid = m_rosterRowUids[static_cast<size_t>(uidIndex)];
+                    flatUnits.push_back(row);
+                    ++uidIndex;
+                }
+            }
+
+            if (lx >= 420 && lx < 552 && ly >= 27 && ly < 27 + 18 * 14)
+            {
+                const int row = (ly - 27) / 14;
+                const int flat = m_originalHierarchyUnitScroll + row;
+                if (flat >= 0 && flat < static_cast<int>(flatUnits.size()))
+                {
+                    const auto& picked = flatUnits[static_cast<size_t>(flat)];
+                    if (picked.playerIndex >= 0 && picked.playerIndex < static_cast<int>(m_playerUnits.size()))
+                    {
+                        const wxString display = GetUnitDisplayName(
+                            m_playerUnits[static_cast<size_t>(picked.playerIndex)].unit_id);
+                        const bool same =
+                            m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Unit &&
+                            picked.uid != 0 && picked.uid == m_originalHierarchySelectedUnitUid;
+                        if (same)
+                            ClearOriginalHierarchyPoolSelection();
+                        else
+                        {
+                            ClearOriginalHierarchyPoolSelection();
+                            m_originalHierarchyPoolSelectionKind = OriginalHierarchyPoolSelectionKind::Unit;
+                            m_originalHierarchySelectedUnitUid = picked.uid;
+                            m_originalHierarchySelectedUnitDisplay = display;
+                        }
+                        refreshRestored();
+                    }
+                }
+                return;
+            }
+
+            if (lx >= 420 && lx < 552 && ly >= 309 && ly < 309 + 8 * 14)
+            {
+                const int row = (ly - 309) / 14;
+                if (row >= 0 && row < static_cast<int>(m_playerCommanders.size()))
+                {
+                    const auto& commander = m_playerCommanders[static_cast<size_t>(row)];
+                    const bool same =
+                        m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Commander &&
+                        commander.uid != 0 && commander.uid == m_originalHierarchySelectedCommanderUid;
+                    if (same)
+                        ClearOriginalHierarchyPoolSelection();
+                    else
+                    {
+                        ClearOriginalHierarchyPoolSelection();
+                        m_originalHierarchyPoolSelectionKind = OriginalHierarchyPoolSelectionKind::Commander;
+                        m_originalHierarchySelectedCommanderUid = commander.uid;
+                        m_originalHierarchySelectedCommanderRank = commander.rank;
+                        m_originalHierarchySelectedCommanderName = wxString::FromUTF8(commander.name);
+                    }
+                    refreshRestored();
+                }
+                return;
+            }
+        }
+
         // Original "Část" switch at the bottom of the hierarchy tree.
         if (wxRect(323, 439, 72, 28).Contains(lx, ly))
         {
@@ -4092,17 +4461,46 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             return;
         }
 
-        // Directly use the existing hierarchy model and chooser dialogs. This
-        // keeps both Current and Original views editing exactly the same data.
         for (const auto& hs : OriginalHierarchySlotsForPage(m_originalHierarchyPage))
         {
             if (!hs.rect.Contains(lx, ly))
                 continue;
-            if (hs.commander)
-                ChooseCommanderForHierarchySlot(hs.id);
+
+            bool handled = false;
+            if (m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Commander)
+            {
+                if (hs.commander)
+                    handled = AssignCommanderToHierarchySlot(hs.id,
+                        m_originalHierarchySelectedCommanderUid,
+                        m_originalHierarchySelectedCommanderRank,
+                        m_originalHierarchySelectedCommanderName);
+                else
+                    wxMessageBox("A commander is selected in the right-hand pool.\n\n"
+                        "Click a commander slot in the hierarchy tree, or click the same pool row again to deselect it.",
+                        "Hierarchy", wxOK | wxICON_INFORMATION, this);
+            }
+            else if (m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Unit)
+            {
+                if (!hs.commander)
+                    handled = AssignUnitToHierarchySlot(hs.id,
+                        m_originalHierarchySelectedUnitUid,
+                        m_originalHierarchySelectedUnitDisplay);
+                else
+                    wxMessageBox("A unit is selected in the right-hand pool.\n\n"
+                        "Click a unit slot or assignment slot in the hierarchy tree, or click the same pool row again to deselect it.",
+                        "Hierarchy", wxOK | wxICON_INFORMATION, this);
+            }
             else
-                ChooseUnitForHierarchySlot(hs.id);
-            refreshRestored();
+            {
+                if (hs.commander)
+                    ChooseCommanderForHierarchySlot(hs.id);
+                else
+                    ChooseUnitForHierarchySlot(hs.id);
+                handled = true;
+            }
+
+            if (handled)
+                refreshRestored();
             return;
         }
         return;
@@ -4841,7 +5239,7 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             OnLaunch(dummy);
             return;
         }
-        if (lx >= 496 && lx < 496 + kOriginalButtonW)
+        if (lx >= kOriginalCancelX && lx < kOriginalCancelX + kOriginalButtonW)
         {
             m_selectedUnitsForMission.clear();
             m_selectedCommandersForMission.clear();
@@ -5210,6 +5608,142 @@ void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
     m_originalUnitScroll = std::clamp(m_originalUnitScroll - steps * 3, 0, maxScroll);
     m_originalStrategicDirty = true;
     m_originalStrategicPanel->Refresh();
+}
+
+void StrategicLevelFrame::OnOriginalStrategicMouseMove(wxMouseEvent& ev)
+{
+    if (!m_originalStrategicPanel || m_originalStrategicDrawRect.width <= 0 ||
+        m_originalStrategicDrawRect.height <= 0)
+    {
+        ev.Skip();
+        return;
+    }
+
+    const wxPoint p = ev.GetPosition();
+    int newToolbar = -1;
+    int newAction = -1;
+    bool newEndTurn = false;
+    int newTerritory = 0;
+
+    if (m_originalStrategicDrawRect.Contains(p))
+    {
+        const int lx = static_cast<int>(
+            (static_cast<long long>(p.x - m_originalStrategicDrawRect.x) * StrategicOriginalRenderer::kScreenW) /
+            m_originalStrategicDrawRect.width);
+        const int ly = static_cast<int>(
+            (static_cast<long long>(p.y - m_originalStrategicDrawRect.y) * StrategicOriginalRenderer::kScreenH) /
+            m_originalStrategicDrawRect.height);
+
+        // STRBAR.QH uses 37x24 plates with a 31 px vertical pitch.  Keep the
+        // seven-pixel gaps inert just like the original UI.
+        if (lx >= 590 && lx < 627 && ly >= 131)
+        {
+            const int slot = (ly - 131) / kOriginalToolbarPitch;
+            const int inSlotY = (ly - 131) % kOriginalToolbarPitch;
+            if (slot >= 0 && slot < kOriginalToolbarCount && inSlotY < 24)
+                newToolbar = slot;
+        }
+
+        newEndTurn = wxRect(587, 431, 47, 44).Contains(lx, ly);
+
+        if (m_originalStrategicScreen == OriginalStrategicScreen::Map)
+        {
+            if (wxRect(kOriginalAttackX, kOriginalAttackY, kOriginalButtonW, kOriginalButtonH).Contains(lx, ly))
+                newAction = 0;
+            else if (wxRect(kOriginalCancelX, kOriginalAttackY, kOriginalButtonW, kOriginalButtonH).Contains(lx, ly))
+                newAction = 1;
+
+            const int mx = lx - StrategicOriginalRenderer::kMapX;
+            const int my = ly - StrategicOriginalRenderer::kMapY;
+            if (m_hasClk && mx >= 0 && my >= 0 && mx < m_clkW && my < m_clkH &&
+                m_clkValues.size() >= static_cast<size_t>(m_clkW) * m_clkH)
+            {
+                const std::uint8_t raw = m_clkValues[static_cast<size_t>(my) * m_clkW + mx];
+                int tid = raw >= 128 ? static_cast<int>(raw) - 128 : static_cast<int>(raw);
+                if (tid > 0)
+                {
+                    const bool visible = !m_gameModeEnabled ||
+                        (tid < static_cast<int>(m_visibleTerritory.size()) && m_visibleTerritory[tid] != 0);
+                    const bool owned = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid)
+                        != m_ownedTerritories.end();
+                    // The native animated hatch belongs only to revealed enemy
+                    // territory; owned and fogged regions stay still.
+                    if (visible && !owned)
+                        newTerritory = tid;
+                }
+            }
+        }
+    }
+
+    if (newToolbar != m_originalToolbarHoverSlot ||
+        newAction != m_originalActionHover ||
+        newEndTurn != m_originalEndTurnHover ||
+        newTerritory != m_hoverTerritory)
+    {
+        m_originalToolbarHoverSlot = newToolbar;
+        m_originalActionHover = newAction;
+        m_originalEndTurnHover = newEndTurn;
+        m_hoverTerritory = newTerritory;
+        m_originalStrategicDirty = true;
+        m_originalStrategicPanel->Refresh(false);
+    }
+
+    ev.Skip();
+}
+
+void StrategicLevelFrame::OnOriginalStrategicMouseLeave(wxMouseEvent& ev)
+{
+    const bool changed = m_originalToolbarHoverSlot != -1 || m_originalActionHover != -1 ||
+        m_originalEndTurnHover || m_hoverTerritory != 0;
+    m_originalToolbarHoverSlot = -1;
+    m_originalActionHover = -1;
+    m_originalEndTurnHover = false;
+    m_hoverTerritory = 0;
+    if (changed && m_originalStrategicPanel)
+    {
+        m_originalStrategicDirty = true;
+        m_originalStrategicPanel->Refresh(false);
+    }
+    ev.Skip();
+}
+
+void StrategicLevelFrame::OnOriginalStrategicAnimTimer(wxTimerEvent&)
+{
+    if (!m_originalStrategicUi || !m_originalStrategicPanel)
+        return;
+
+    bool repaint = false;
+
+    // Original DOS end-turn hover is a horizontal wipe, not an alternating
+    // two-frame blink.  At 60 ms and 4 px/tick the 41 px sprite takes about
+    // 0.66 s to open/close, matching the supplied original-game video.
+    const int endTurnTarget = m_originalEndTurnHover ? 41 : 0;
+    if (m_originalEndTurnReveal != endTurnTarget)
+    {
+        if (m_originalEndTurnReveal < endTurnTarget)
+            m_originalEndTurnReveal = std::min(endTurnTarget, m_originalEndTurnReveal + 4);
+        else
+            m_originalEndTurnReveal = std::max(endTurnTarget, m_originalEndTurnReveal - 4);
+        repaint = true;
+    }
+
+    // Keep the already-approved territory hatch at its Stage 6.8 ~120 ms
+    // cadence even though the common animation timer now runs at 60 ms.
+    if (++m_originalStrategicAnimSubTick >= 2)
+    {
+        m_originalStrategicAnimSubTick = 0;
+        if (m_originalStrategicScreen == OriginalStrategicScreen::Map && m_hoverTerritory > 0)
+        {
+            m_originalStrategicAnimPhase = (m_originalStrategicAnimPhase + 1) % 14;
+            repaint = true;
+        }
+    }
+
+    if (!repaint)
+        return;
+
+    m_originalStrategicDirty = true;
+    m_originalStrategicPanel->Refresh(false);
 }
 
 static std::string LevelKeyFromSourcePath(const std::string& src)
@@ -6864,6 +7398,8 @@ void StrategicLevelFrame::BuildUI()
     m_originalStrategicPanel->Bind(wxEVT_LEFT_DOWN, &StrategicLevelFrame::OnOriginalStrategicLeftDown, this);
     m_originalStrategicPanel->Bind(wxEVT_RIGHT_DOWN, &StrategicLevelFrame::OnOriginalStrategicRightDown, this);
     m_originalStrategicPanel->Bind(wxEVT_MOUSEWHEEL, &StrategicLevelFrame::OnOriginalStrategicMouseWheel, this);
+    m_originalStrategicPanel->Bind(wxEVT_MOTION, &StrategicLevelFrame::OnOriginalStrategicMouseMove, this);
+    m_originalStrategicPanel->Bind(wxEVT_LEAVE_WINDOW, &StrategicLevelFrame::OnOriginalStrategicMouseLeave, this);
     m_originalStrategicPanel->Bind(wxEVT_SIZE, [this](wxSizeEvent& ev) {
         ev.Skip();
         if (m_originalStrategicPanel) m_originalStrategicPanel->Refresh();
@@ -9388,103 +9924,95 @@ void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wx
     if (it == m_hierarchySlotIndex.end())
         return;
 
-    HierarchySlot& slot = m_hierarchySlots[it->second];
+    const HierarchySlot& slot = m_hierarchySlots[it->second];
     HierarchyDragData parsed = ParseHierarchyDragData(data);
     if (!parsed.valid)
         return;
     if (parsed.type != slot.type)
         return;
 
-    // Rank gating for commander slots:
-    // - battalion: any commander
-    // - regiment: rank >= Major (3)
-    // - brigade:  rank >= Major General (6)
+    bool applied = false;
     if (slot.type == "commander")
     {
-        // Resolve commander UID (required to ensure a commander cannot occupy multiple slots).
         uint32_t cmdUid = parsed.commander_uid;
-        if (cmdUid == 0)
+        int rank = parsed.rank;
+        wxString name = parsed.name;
+
+        if ((cmdUid == 0 || rank < 0 || name.empty()) && parsed.fromSlot)
         {
-            // Backward compatibility payloads don't carry UID. Best-effort lookup by name + rank.
-            const std::string name = parsed.name.ToStdString();
+            auto its = m_hierarchySlotIndex.find(parsed.slotId);
+            if (its != m_hierarchySlotIndex.end())
+            {
+                const HierarchySlot& src = m_hierarchySlots[its->second];
+                if (src.type == "commander")
+                {
+                    if (cmdUid == 0)
+                        cmdUid = src.commander_uid;
+                    if (rank < 0)
+                        rank = src.rank;
+                    if (name.empty())
+                        name = wxString::FromUTF8(src.commander_name);
+                }
+            }
+        }
+
+        if (cmdUid == 0 || rank < 0 || name.empty())
+        {
+            const std::string needle = name.ToStdString();
             for (const auto& c : m_playerCommanders)
             {
-                if (c.name == name && (parsed.rank < 0 || c.rank == parsed.rank))
+                if ((!needle.empty() && c.name == needle) && (rank < 0 || c.rank == rank))
                 {
                     cmdUid = c.uid;
+                    if (rank < 0)
+                        rank = c.rank;
+                    if (name.empty())
+                        name = wxString::FromUTF8(c.name);
                     break;
                 }
             }
         }
 
-        int required = 0;
-        if (slotId.find("regiment_") != std::string::npos)
-            required = 3;
-        else if (slotId.find("brigade_") != std::string::npos)
-            required = 6;
-
-        // If we didn't receive rank, attempt a best-effort lookup by name.
-        int rank = parsed.rank;
-        if (rank < 0)
-        {
-            const std::string name = parsed.name.ToStdString();
-            for (const auto& c : m_playerCommanders)
-            {
-                if (c.name == name)
-                {
-                    rank = c.rank;
-                    break;
-                }
-            }
-        }
-
-        if (rank < required)
-        {
-            wxMessageBox(
-                wxString::Format("This commander needs at least %s for this slot.",
-                    required == 6 ? "MajGen." : required == 3 ? "Maj." : "any rank"),
-                "Hierarchy",
-                wxOK | wxICON_INFORMATION,
-                this);
-            return;
-        }
-
-        // Enforce uniqueness: move the commander if they're already placed elsewhere.
-        if (cmdUid != 0)
-        {
-            for (auto& s : m_hierarchySlots)
-            {
-                if (s.type == "commander" && s.commander_uid == cmdUid && s.id != slotId)
-                {
-                    ClearHierarchySlot(s.id);
-                    break;
-                }
-            }
-        }
-
-        slot.rank = rank;
-        slot.commander_uid = cmdUid;
-        wxString baseName = parsed.name;
-        const wxString abbr = GetRankAbbrev(rank);
-        if (baseName.StartsWith(abbr + " "))
-            baseName = baseName.Mid(abbr.length() + 1);
-        slot.commander_name = baseName.ToUTF8().data();
-        // Switching commander resets its assigned unit.
-        slot.assigned_unit_uid = 0;
-        slot.assigned_unit_display.clear();
-        slot.label->SetLabel(wxString::Format("%s %s", abbr, baseName));
-        // Ensure consistent formatting (and clear any stale "assigned" marker).
-        UpdateCommanderHierarchyLabel(slotId);
+        applied = AssignCommanderToHierarchySlot(slotId, cmdUid, rank, name);
     }
     else
     {
-        // unit slot: just store the chosen unit name
-        slot.label->SetLabel(parsed.name);
+        uint32_t uid = parsed.commander_uid;
+        wxString display = parsed.name;
+
+        if (parsed.fromSlot)
+        {
+            auto its = m_hierarchySlotIndex.find(parsed.slotId);
+            if (its != m_hierarchySlotIndex.end())
+            {
+                const HierarchySlot& src = m_hierarchySlots[its->second];
+                if (src.type == "unit")
+                {
+                    uid = src.unit_uid;
+                    if (display.empty())
+                        display = src.unit_display;
+                }
+            }
+        }
+
+        if ((uid == 0 || display.empty()) && !display.empty())
+        {
+            const auto items = GetRosterPickItems();
+            for (const auto& rosterItem : items)
+            {
+                if (rosterItem.display == display || rosterItem.label == display)
+                {
+                    uid = rosterItem.uid;
+                    display = rosterItem.display;
+                    break;
+                }
+            }
+        }
+
+        applied = AssignUnitToHierarchySlot(slotId, uid, display);
     }
 
-    slot.label->GetParent()->Layout();
-
-    if (parsed.fromSlot && parsed.slotId != slotId)
+    if (applied && parsed.fromSlot && parsed.slotId != slotId)
         ClearHierarchySlot(parsed.slotId);
 }
 
@@ -9547,6 +10075,263 @@ void StrategicLevelFrame::ClearHierarchySlot(const std::string& slotId)
     slot.label->GetParent()->Layout();
 }
 
+void StrategicLevelFrame::ClearOriginalHierarchyPoolSelection()
+{
+    m_originalHierarchyPoolSelectionKind = OriginalHierarchyPoolSelectionKind::None;
+    m_originalHierarchySelectedUnitUid = 0;
+    m_originalHierarchySelectedUnitDisplay.clear();
+    m_originalHierarchySelectedCommanderUid = 0;
+    m_originalHierarchySelectedCommanderRank = -1;
+    m_originalHierarchySelectedCommanderName.clear();
+}
+
+bool StrategicLevelFrame::AssignCommanderToHierarchySlot(const std::string& commanderSlotId,
+    uint32_t commanderUid,
+    int rank,
+    const wxString& commanderName)
+{
+    auto it = m_hierarchySlotIndex.find(commanderSlotId);
+    if (it == m_hierarchySlotIndex.end())
+        return false;
+
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    if (slot.type != "commander" || commanderUid == 0 || rank < 0 || commanderName.empty())
+        return false;
+
+    int requiredRank = 0;
+    if (commanderSlotId.rfind("regiment_", 0) == 0)
+        requiredRank = 3;
+    else if (commanderSlotId.rfind("brigade_", 0) == 0)
+        requiredRank = 6;
+
+    if (rank < requiredRank)
+    {
+        wxMessageBox(
+            wxString::Format("This commander needs at least %s for this slot.",
+                requiredRank == 6 ? "MajGen." : requiredRank == 3 ? "Maj." : "any rank"),
+            "Hierarchy", wxOK | wxICON_INFORMATION, this);
+        return false;
+    }
+
+    for (auto& other : m_hierarchySlots)
+    {
+        if (other.id == commanderSlotId || other.type != "commander")
+            continue;
+        if (other.commander_uid == commanderUid)
+        {
+            ClearHierarchySlot(other.id);
+            break;
+        }
+    }
+
+    slot.rank = rank;
+    slot.commander_uid = commanderUid;
+    wxString baseName = commanderName;
+    const wxString abbr = GetRankAbbrev(rank);
+    if (baseName.StartsWith(abbr + " "))
+        baseName = baseName.Mid(abbr.length() + 1);
+    slot.commander_name = baseName.ToUTF8().data();
+    slot.assigned_unit_uid = 0;
+    slot.assigned_unit_display.clear();
+    UpdateCommanderHierarchyLabel(commanderSlotId);
+    return true;
+}
+
+bool StrategicLevelFrame::AssignUnitToHierarchySlot(const std::string& unitSlotId,
+    uint32_t unitUid,
+    const wxString& unitDisplay)
+{
+    auto it = m_hierarchySlotIndex.find(unitSlotId);
+    if (it == m_hierarchySlotIndex.end())
+        return false;
+
+    HierarchySlot& slot = m_hierarchySlots[it->second];
+    if (slot.type != "unit" || unitUid == 0 || unitDisplay.empty())
+        return false;
+
+    auto endsWithLocal = [](const std::string& s, const std::string& suf) {
+        return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    const bool isBattalionAssign = endsWithLocal(unitSlotId, "_commander_unit");
+    const bool isRegimentAssign = (unitSlotId.rfind("regiment_", 0) == 0) && endsWithLocal(unitSlotId, "_unit");
+    const bool isBrigadeAssign = (unitSlotId.rfind("brigade_", 0) == 0) && endsWithLocal(unitSlotId, "_unit");
+
+    if (isBattalionAssign || isRegimentAssign || isBrigadeAssign)
+    {
+        const std::string commanderId = GetCommanderSlotForUnitSlot(unitSlotId);
+        auto itc = m_hierarchySlotIndex.find(commanderId);
+        if (itc == m_hierarchySlotIndex.end())
+            return false;
+        HierarchySlot& cslot = m_hierarchySlots[itc->second];
+        if (cslot.type != "commander" || !cslot.label)
+            return false;
+        if (cslot.label->GetLabel() == cslot.placeholder)
+        {
+            wxMessageBox(
+                "Assign a commander first, then choose which of their units they are part of.",
+                "Hierarchy", wxOK | wxICON_INFORMATION, this);
+            return false;
+        }
+
+        std::vector<std::string> candidateSlotIds;
+        auto parseNumberBetween = [](const std::string& s, const std::string& pre, const std::string& suf, int& out) {
+            if (s.rfind(pre, 0) != 0)
+                return false;
+            const size_t p = s.find(suf, pre.size());
+            if (p == std::string::npos)
+                return false;
+            const std::string num = s.substr(pre.size(), p - pre.size());
+            if (num.empty())
+                return false;
+            try { out = std::stoi(num); return true; }
+            catch (...) { return false; }
+        };
+
+        if (isBattalionAssign)
+        {
+            int bIndex = 0;
+            if (parseNumberBetween(unitSlotId, "battalion_", "_commander_unit", bIndex))
+                for (int u = 1; u <= 4; ++u)
+                    candidateSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
+        }
+        else if (isRegimentAssign)
+        {
+            int rIndex = 0;
+            if (parseNumberBetween(unitSlotId, "regiment_", "_unit", rIndex))
+            {
+                const int brigadeIndex = (rIndex - 1) / 2 + 1;
+                const int rLocal = (rIndex - 1) % 2;
+                const int battalionBase = (brigadeIndex - 1) * 4;
+                const int b0 = battalionBase + rLocal * 2 + 1;
+                const int b1 = battalionBase + rLocal * 2 + 2;
+                for (int u = 1; u <= 4; ++u)
+                {
+                    candidateSlotIds.push_back("battalion_" + std::to_string(b0) + "_unit_" + std::to_string(u));
+                    candidateSlotIds.push_back("battalion_" + std::to_string(b1) + "_unit_" + std::to_string(u));
+                }
+            }
+        }
+        else if (isBrigadeAssign)
+        {
+            int brigIndex = 0;
+            if (parseNumberBetween(unitSlotId, "brigade_", "_unit", brigIndex))
+            {
+                const int battalionBase = (brigIndex - 1) * 4;
+                for (int b = 1; b <= 4; ++b)
+                {
+                    const int bIndex = battalionBase + b;
+                    for (int u = 1; u <= 4; ++u)
+                        candidateSlotIds.push_back("battalion_" + std::to_string(bIndex) + "_unit_" + std::to_string(u));
+                }
+            }
+        }
+
+        bool found = false;
+        for (const auto& sid : candidateSlotIds)
+        {
+            auto itu = m_hierarchySlotIndex.find(sid);
+            if (itu == m_hierarchySlotIndex.end())
+                continue;
+            const HierarchySlot& us = m_hierarchySlots[itu->second];
+            if (us.type == "unit" && us.unit_uid == unitUid)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            wxMessageBox(
+                "The chosen unit is not present in this commander's subtree.\n\n"
+                "Pick one of the units already placed directly under this commander.",
+                "Hierarchy", wxOK | wxICON_INFORMATION, this);
+            return false;
+        }
+
+        slot.unit_uid = unitUid;
+        slot.unit_display = unitDisplay;
+        slot.label->SetLabel(unitDisplay);
+        slot.label->GetParent()->Layout();
+
+        cslot.assigned_unit_uid = unitUid;
+        cslot.assigned_unit_display = unitDisplay;
+        UpdateCommanderHierarchyLabel(commanderId);
+        return true;
+    }
+
+    const std::string commanderId = GetCommanderSlotForUnitSlot(unitSlotId);
+    bool commanderPresent = true;
+    if (!commanderId.empty())
+    {
+        auto itc = m_hierarchySlotIndex.find(commanderId);
+        if (itc != m_hierarchySlotIndex.end())
+        {
+            const HierarchySlot& cslot = m_hierarchySlots[itc->second];
+            if (cslot.label && cslot.label->GetLabel() == cslot.placeholder)
+                commanderPresent = false;
+        }
+    }
+    if (!commanderPresent)
+    {
+        wxMessageBox(
+            "Assign a commander first, then choose a unit for this commander.",
+            "Hierarchy", wxOK | wxICON_INFORMATION, this);
+        return false;
+    }
+
+    for (const auto& other : m_hierarchySlots)
+    {
+        if (other.id == unitSlotId || other.type != "unit")
+            continue;
+        if (other.unit_uid != 0 && other.unit_uid == unitUid)
+        {
+            wxMessageBox(
+                "This exact unit instance is already assigned elsewhere in the hierarchy.\n\n"
+                "Pick a different unit (note the [#id] in the list).",
+                "Hierarchy", wxOK | wxICON_INFORMATION, this);
+            return false;
+        }
+    }
+
+    const uint32_t oldUid = slot.unit_uid;
+    slot.unit_uid = unitUid;
+    slot.unit_display = unitDisplay;
+    slot.label->SetLabel(unitDisplay);
+    slot.label->GetParent()->Layout();
+
+    if (oldUid != 0 && oldUid != unitUid)
+    {
+        auto itc = m_hierarchySlotIndex.find(commanderId);
+        if (itc != m_hierarchySlotIndex.end())
+        {
+            HierarchySlot& cs = m_hierarchySlots[itc->second];
+            if (cs.type == "commander" && cs.assigned_unit_uid == oldUid)
+            {
+                cs.assigned_unit_uid = 0;
+                cs.assigned_unit_display.clear();
+                UpdateCommanderHierarchyLabel(commanderId);
+            }
+        }
+    }
+
+    TryAssignCommanderToUnitSlot(unitSlotId);
+    return true;
+}
+
+bool StrategicLevelFrame::ApplyOriginalHierarchyPoolSelectionToSlot(const std::string& slotId)
+{
+    if (m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Commander)
+        return AssignCommanderToHierarchySlot(slotId,
+            m_originalHierarchySelectedCommanderUid,
+            m_originalHierarchySelectedCommanderRank,
+            m_originalHierarchySelectedCommanderName);
+    if (m_originalHierarchyPoolSelectionKind == OriginalHierarchyPoolSelectionKind::Unit)
+        return AssignUnitToHierarchySlot(slotId,
+            m_originalHierarchySelectedUnitUid,
+            m_originalHierarchySelectedUnitDisplay);
+    return false;
+}
+
 void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWindow* source)
 {
     auto it = m_hierarchySlotIndex.find(slotId);
@@ -9560,7 +10345,9 @@ void StrategicLevelFrame::BeginHierarchySlotDrag(const std::string& slotId, wxWi
         ? wxString::Format("slot:%s:%s:%u:%d:%s", slot.id.c_str(), slot.type.c_str(),
             (unsigned)slot.commander_uid, slot.rank,
             slot.commander_name.empty() ? slot.label->GetLabel() : wxString::FromUTF8(slot.commander_name))
-        : wxString::Format("slot:%s:%s:%s", slot.id.c_str(), slot.type.c_str(), slot.label->GetLabel()));
+        : wxString::Format("slot:%s:%s:%u:%s", slot.id.c_str(), slot.type.c_str(),
+            (unsigned)slot.unit_uid,
+            slot.unit_display.empty() ? slot.label->GetLabel() : slot.unit_display));
     wxDropSource dropSource(dataObject, source);
     dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
@@ -9693,26 +10480,10 @@ void StrategicLevelFrame::ChooseCommanderForHierarchySlot(const std::string& com
         return;
 
     const CommanderRec& commander = *commanders[index];
-
-    // A commander can only occupy one hierarchy slot. Move them from the old
-    // slot instead of duplicating the same instance.
-    for (auto& other : m_hierarchySlots)
-    {
-        if (other.id == commanderSlotId || other.type != "commander")
-            continue;
-        if (other.commander_uid == commander.uid && commander.uid != 0)
-        {
-            ClearHierarchySlot(other.id);
-            break;
-        }
-    }
-
-    slot.rank = commander.rank;
-    slot.commander_uid = commander.uid;
-    slot.commander_name = commander.name;
-    slot.assigned_unit_uid = 0;
-    slot.assigned_unit_display.clear();
-    UpdateCommanderHierarchyLabel(commanderSlotId);
+    AssignCommanderToHierarchySlot(commanderSlotId,
+        commander.uid,
+        commander.rank,
+        wxString::FromUTF8(commander.name));
 }
 
 void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlotId)
@@ -9837,14 +10608,7 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
         }
     }
 
-    // Set this slot (store uid, show only display name)
-    slot.unit_uid = uid;
-    slot.unit_display = display;
-    slot.label->SetLabel(display);
-    slot.label->GetParent()->Layout();
-
-    // Optional convenience: if a commander exists above, set this as their assigned unit immediately.
-    TryAssignCommanderToUnitSlot(unitSlotId);
+    AssignUnitToHierarchySlot(unitSlotId, uid, display);
 }
 
 void StrategicLevelFrame::ChooseAssignedUnitForCommanderAssignmentSlot(const std::string& assignmentSlotId)
@@ -10110,7 +10874,8 @@ void StrategicLevelFrame::OnRosterBeginDrag(wxListEvent& event)
     wxString name = m_roster->GetItemText(item);
     if (name.empty())
         return;
-    wxTextDataObject dataObject("unit:" + name);
+    const uint32_t uid = static_cast<uint32_t>(m_roster->GetItemData(item));
+    wxTextDataObject dataObject(wxString::Format("unit:%u:%s", (unsigned)uid, name));
     wxDropSource dropSource(dataObject, m_roster);
     dropSource.DoDragDrop(wxDrag_CopyOnly);
 }
@@ -10230,6 +10995,196 @@ std::vector<uint32_t> StrategicLevelFrame::GetUnitsUnderCommander(uint32_t comma
     return result;
 }
 
+StrategicLevelFrame::HierarchyBattleMeta StrategicLevelFrame::GetHierarchyBattleMeta(
+    uint32_t unit_uid,
+    const std::unordered_set<uint32_t>& participating_units) const
+{
+    HierarchyBattleMeta meta;
+    if (unit_uid == 0 || participating_units.empty())
+        return meta;
+
+    auto parseNumberBetween = [](const std::string& s, const std::string& pre,
+        const std::string& marker) -> int
+    {
+        if (s.rfind(pre, 0) != 0)
+            return -1;
+        const size_t p = s.find(marker, pre.size());
+        if (p == std::string::npos)
+            return -1;
+        try { return std::stoi(s.substr(pre.size(), p - pre.size())); }
+        catch (...) { return -1; }
+    };
+
+    // Every permanent company occupies one of battalion_X_unit_N.  The
+    // one-digit number shown beside the tactical mini status bar is therefore
+    // the battalion/formation number (1..8), exactly matching the original HUD
+    // capacity.
+    int battalion = -1;
+    for (const auto& slot : m_hierarchySlots)
+    {
+        if (slot.type != "unit" || slot.unit_uid != unit_uid)
+            continue;
+        if (slot.id.rfind("battalion_", 0) != 0 || slot.id.find("_unit_") == std::string::npos)
+            continue;
+        battalion = parseNumberBetween(slot.id, "battalion_", "_unit_");
+        if (battalion > 0)
+            break;
+    }
+    if (battalion <= 0)
+        return meta;
+
+    const int regiment = (battalion - 1) / 2 + 1;
+    const int brigade = (battalion - 1) / 4 + 1;
+
+    auto appendBattalionUnits = [&](int b, std::vector<uint32_t>& out)
+    {
+        for (int u = 1; u <= 4; ++u)
+        {
+            const std::string id = "battalion_" + std::to_string(b) + "_unit_" + std::to_string(u);
+            auto it = m_hierarchySlotIndex.find(id);
+            if (it == m_hierarchySlotIndex.end())
+                continue;
+            const HierarchySlot& s = m_hierarchySlots[it->second];
+            if (s.unit_uid != 0)
+                out.push_back(s.unit_uid);
+        }
+    };
+
+    auto commanderHostReady = [&](const std::string& commanderId,
+        const std::vector<uint32_t>& units,
+        uint32_t& host_uid) -> bool
+    {
+        auto itc = m_hierarchySlotIndex.find(commanderId);
+        if (itc == m_hierarchySlotIndex.end())
+            return false;
+        const HierarchySlot& commander = m_hierarchySlots[itc->second];
+        if (commander.commander_uid == 0 || commander.assigned_unit_uid == 0)
+            return false;
+
+        host_uid = commander.assigned_unit_uid;
+        bool hostInScope = false;
+        for (uint32_t uid : units)
+            if (uid != 0 && uid == host_uid) { hostInScope = true; break; }
+        return hostInScope && participating_units.count(host_uid) != 0;
+    };
+
+    auto battalionActive = [&](int b, uint32_t& host_uid) -> bool
+    {
+        std::vector<uint32_t> units;
+        appendBattalionUnits(b, units);
+        if (!commanderHostReady("battalion_" + std::to_string(b) + "_commander", units, host_uid))
+            return false;
+
+        std::unordered_set<uint32_t> present;
+        for (uint32_t uid : units)
+            if (uid != 0 && participating_units.count(uid) != 0)
+                present.insert(uid);
+        // Manual: an active battalion (prapor) consists of at least 3 companies.
+        return present.size() >= 3;
+    };
+
+    auto regimentActive = [&](int r, uint32_t& host_uid) -> bool
+    {
+        const int brigadeIndex = (r - 1) / 2 + 1;
+        const int local = (r - 1) % 2;
+        const int b0 = (brigadeIndex - 1) * 4 + local * 2 + 1;
+        const int b1 = b0 + 1;
+
+        uint32_t b0Host = 0, b1Host = 0;
+        if (!battalionActive(b0, b0Host) || !battalionActive(b1, b1Host))
+            return false;
+
+        std::vector<uint32_t> units;
+        appendBattalionUnits(b0, units);
+        appendBattalionUnits(b1, units);
+        // A regiment is the next level made from its two subordinate battalions.
+        return commanderHostReady("regiment_" + std::to_string(r) + "_commander", units, host_uid);
+    };
+
+    auto brigadeActive = [&](int br, uint32_t& host_uid) -> bool
+    {
+        const int r0 = (br - 1) * 2 + 1;
+        const int r1 = r0 + 1;
+        uint32_t r0Host = 0, r1Host = 0;
+        if (!regimentActive(r0, r0Host) || !regimentActive(r1, r1Host))
+            return false;
+
+        std::vector<uint32_t> units;
+        const int base = (br - 1) * 4 + 1;
+        for (int b = 0; b < 4; ++b)
+            appendBattalionUnits(base + b, units);
+        return commanderHostReady("brigade_" + std::to_string(br) + "_commander", units, host_uid);
+    };
+
+    uint32_t battalionHost = 0, regimentHost = 0, brigadeHost = 0;
+    const bool battalionIsActive = battalionActive(battalion, battalionHost);
+    const bool regimentIsActive = regimentActive(regiment, regimentHost);
+    const bool brigadeIsActive = brigadeActive(brigade, brigadeHost);
+
+    if (battalionIsActive)
+    {
+        meta.formation_id = battalion;
+        meta.formation_level = 1;
+        meta.attack_bonus = 1;
+        meta.defence_bonus = 1;
+    }
+    if (regimentIsActive)
+    {
+        meta.formation_id = battalion;
+        meta.formation_level = 2;
+        meta.attack_bonus = 2;
+        meta.defence_bonus = 1;
+    }
+    if (brigadeIsActive)
+    {
+        meta.formation_id = battalion;
+        meta.formation_level = 3;
+        meta.attack_bonus = 4;
+        meta.defence_bonus = 3;
+    }
+
+    meta.carries_commander =
+        (battalionIsActive && battalionHost == unit_uid) ||
+        (regimentIsActive && regimentHost == unit_uid) ||
+        (brigadeIsActive && brigadeHost == unit_uid);
+    return meta;
+}
+
+bool StrategicLevelFrame::IsCommanderFormationActive(uint32_t commander_uid) const
+{
+    if (commander_uid == 0)
+        return false;
+
+    const HierarchySlot* commanderSlot = nullptr;
+    for (const auto& slot : m_hierarchySlots)
+    {
+        if (slot.type == "commander" && slot.commander_uid == commander_uid)
+        {
+            commanderSlot = &slot;
+            break;
+        }
+    }
+    if (!commanderSlot || commanderSlot->assigned_unit_uid == 0)
+        return false;
+
+    std::unordered_set<uint32_t> participating;
+    for (uint32_t uid : GetUnitsUnderCommander(commander_uid))
+        if (uid != 0)
+            participating.insert(uid);
+    if (participating.empty())
+        return false;
+
+    const HierarchyBattleMeta meta = GetHierarchyBattleMeta(
+        commanderSlot->assigned_unit_uid, participating);
+
+    int requiredLevel = 1;
+    if (commanderSlot->id.rfind("regiment_", 0) == 0)
+        requiredLevel = 2;
+    else if (commanderSlot->id.rfind("brigade_", 0) == 0)
+        requiredLevel = 3;
+    return meta.formation_level >= requiredLevel;
+}
+
 void StrategicLevelFrame::OnCommanderSelectForMission(wxListEvent& ev)
 {
     const long item = ev.GetIndex();
@@ -10243,14 +11198,16 @@ void StrategicLevelFrame::OnCommanderSelectForMission(wxListEvent& ev)
     // Toggle commander selection
     const bool wasSelected = (m_selectedCommandersForMission.count(cmdUid) > 0);
 
-    // Get all units under this commander
+    // Get all units under this commander. The original strategic map treats
+    // the commander shortcut as an *active formation* selector: the formation
+    // needs at least three companies and the commander must sit in one of them.
     std::vector<uint32_t> units = GetUnitsUnderCommander(cmdUid);
 
-    if (units.empty() && !wasSelected)
+    if (!wasSelected && !IsCommanderFormationActive(cmdUid))
     {
-        wxMessageBox("This commander has no units assigned in the hierarchy.\n\n"
-            "Go to Hierarchy page and assign units under this commander first.",
-            "Select Units", wxOK | wxICON_INFORMATION, this);
+        wxMessageBox("This formation is not active yet.\n\n"
+            "It needs at least three units and the commander must be assigned to one of them in Hierarchy.",
+            "Select Formation", wxOK | wxICON_INFORMATION, this);
         return;
     }
 
@@ -10376,6 +11333,14 @@ std::vector<LevelData::PlayerUnitAdd> StrategicLevelFrame::GetSelectedUnitsForLa
     if (m_selectedUnitsForMission.empty())
         return result;
 
+    // Only units that will really enter the battle count towards formation
+    // activation. A company on cooldown can remain highlighted from an older
+    // selection, but it must not keep a formation bonus alive off-map.
+    std::unordered_set<uint32_t> participatingUnits;
+    for (uint32_t uid : m_selectedUnitsForMission)
+        if (uid != 0 && !IsRosterUidOnCooldown(uid))
+            participatingUnits.insert(uid);
+
     // Map roster row UID -> playerUnits index
     // We need to find which m_playerUnits entries correspond to selected UIDs
     int uidIndex = 0;
@@ -10395,12 +11360,20 @@ std::vector<LevelData::PlayerUnitAdd> StrategicLevelFrame::GetSelectedUnitsForLa
                         ++uidIndex;
                         continue;
                     }
-                    // Add this unit instance to the result
+                    // Add this concrete unit instance to the result and carry
+                    // the active hierarchy metadata into the tactical map.
                     LevelData::PlayerUnitAdd add;
                     add.unit_id = u.unit_id;
                     add.count = 1;
                     add.health = u.health;
                     add.extra = u.extra;
+                    add.strategic_uid = uid;
+                    const HierarchyBattleMeta formation = GetHierarchyBattleMeta(uid, participatingUnits);
+                    add.formation_id = formation.formation_id;
+                    add.formation_level = formation.formation_level;
+                    add.formation_attack_bonus = formation.attack_bonus;
+                    add.formation_defence_bonus = formation.defence_bonus;
+                    add.carries_commander = formation.carries_commander;
                     result.push_back(add);
                 }
             }

@@ -125,9 +125,19 @@ struct LevelData {
         int unit_id = 0;   // AddUnitToPlayer(0,1,100,-)
         int count = 0;
         int health = 0;
-        std::string extra; // "-" nebo nìco dalšího
-    };
-    std::vector<PlayerUnitAdd> start_units;
+        std::string extra; // campaign-specific extra field
+
+        // Transient strategic -> tactical metadata. These fields are zero for
+        // units created directly by a map DEF, but when a permanent campaign
+        // unit is sent from the strategic screen they preserve its concrete
+        // roster identity and active hierarchy/formation state.
+        uint32_t strategic_uid = 0;
+        int formation_id = 0;             // displayed formation number (battalion 1..8)
+        int formation_level = 0;          // 0=none, 1=battalion, 2=regiment, 3=brigade
+        int formation_attack_bonus = 0;   // original FORMACIE.DEF bonus
+        int formation_defence_bonus = 0;  // original FORMACIE.DEF bonus
+        bool carries_commander = false;   // green commander mark in tactical HUD
+    };    std::vector<PlayerUnitAdd> start_units;
 
     std::vector<LevelTerritory> territories;
     std::vector<LevelMission> missions;
