@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "timestamp": "2026-10-01 18:12:50",
+  "timestamp": "2026-10-01 22:03:24",
   "level_def": "Z:\\Games\\Spellcross\\Spellcross - pokusy\\SPELCROS\\DATA\\COMMON\\LEVEL_02.DEF",
   "turn": 1,
-  "money": 70,
+  "money": 0,
   "research": 0,
-  "selected_territory": -1,
+  "selected_territory": 4,
   "game_mode": true,
-  "owned_territories": [1, 4],
+  "owned_territories": [1],
   "research_state": {
-    "active_id": -1,
-    "active_index": -1,
+    "active_id": 104,
+    "active_index": 0,
     "alloc_per_turn": 0,
     "progress": {},
     "completed": []
@@ -30,12 +30,12 @@
     "activated_events": {},
     "counter_attacks": []
   },
-  "player": {"name": "John Alexander", "rank": 2, "experience": 30, "actions": 1},
+  "player": {"name": "John Alexander", "rank": 2, "experience": 0, "actions": 0},
   "territories": [
     {"id": 1, "mission": "m02_01", "launches": 0},
     {"id": 2, "mission": "m02_02", "launches": 0},
     {"id": 3, "mission": "m02_03", "launches": 0},
-    {"id": 4, "mission": "m02_04", "launches": 0},
+    {"id": 4, "mission": "m02_04", "launches": 1},
     {"id": 5, "mission": "m02_05", "launches": 0},
     {"id": 6, "mission": "m02_06", "launches": 0}
   ],
@@ -47,10 +47,10 @@
   "units": [
     {"unit_id": 0, "count": 1, "health": 100, "uid": 6, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
     {"unit_id": 0, "count": 1, "health": 100, "uid": 7, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
-    {"unit_id": 2, "count": 1, "health": 100, "uid": 8, "cooldown": 1, "experience": 82, "level": 1, "temporary": false},
-    {"unit_id": 3, "count": 1, "health": 100, "uid": 9, "cooldown": 1, "experience": 213, "level": 1, "temporary": false},
-    {"unit_id": 3, "count": 1, "health": 100, "uid": 10, "cooldown": 1, "experience": 172, "level": 1, "temporary": false},
-    {"unit_id": 29, "count": 1, "health": 100, "uid": 11, "cooldown": 1, "experience": 63, "level": 1, "temporary": false},
+    {"unit_id": 2, "count": 1, "health": 100, "uid": 8, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
+    {"unit_id": 3, "count": 1, "health": 100, "uid": 9, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
+    {"unit_id": 3, "count": 1, "health": 100, "uid": 10, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
+    {"unit_id": 29, "count": 1, "health": 100, "uid": 11, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
     {"unit_id": 3, "count": 1, "health": 100, "uid": 12, "cooldown": 0, "experience": 0, "level": 1, "temporary": false}
   ]
 }

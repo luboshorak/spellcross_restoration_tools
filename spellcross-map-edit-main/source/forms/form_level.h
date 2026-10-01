@@ -165,6 +165,9 @@ public:
 
 
     void LoadStrategicState();
+    // Load an exact strategic JSON save selected outside the Strategic Level window.
+    // This applies the save to the already-correct LevelData and does not change the save format.
+    bool LoadStrategicStateFromPath(const std::filesystem::path& path);
     void SaveStrategicState() const;
     void LoadPlayerStateFromPreviousLevel();
 
@@ -619,32 +622,32 @@ public:
     wxFont m_fontText;
     wxFont m_fontHeading;
 
-    // stats page widgets (TTF-rendered bitmaps)
+    // stats page widgets (native wxStaticText controls)
     wxPanel* m_statsPanel = nullptr;
 
-    wxStaticBitmap* m_lblAllLightA = nullptr;
-    wxStaticBitmap* m_lblAllLightE = nullptr;
-    wxStaticBitmap* m_lblAllHeavyA = nullptr;
-    wxStaticBitmap* m_lblAllHeavyE = nullptr;
-    wxStaticBitmap* m_lblAllAirA = nullptr;
-    wxStaticBitmap* m_lblAllAirE = nullptr;
-    wxStaticBitmap* m_lblAllCmdA = nullptr;
-    wxStaticBitmap* m_lblAllCmdE = nullptr;
+    wxStaticText* m_lblAllLightA = nullptr;
+    wxStaticText* m_lblAllLightE = nullptr;
+    wxStaticText* m_lblAllHeavyA = nullptr;
+    wxStaticText* m_lblAllHeavyE = nullptr;
+    wxStaticText* m_lblAllAirA = nullptr;
+    wxStaticText* m_lblAllAirE = nullptr;
+    wxStaticText* m_lblAllCmdA = nullptr;
+    wxStaticText* m_lblAllCmdE = nullptr;
 
-    wxStaticBitmap* m_lblLvlLightA = nullptr;
-    wxStaticBitmap* m_lblLvlLightE = nullptr;
-    wxStaticBitmap* m_lblLvlHeavyA = nullptr;
-    wxStaticBitmap* m_lblLvlHeavyE = nullptr;
-    wxStaticBitmap* m_lblLvlAirA = nullptr;
-    wxStaticBitmap* m_lblLvlAirE = nullptr;
-    wxStaticBitmap* m_lblLvlCmdA = nullptr;
-    wxStaticBitmap* m_lblLvlCmdE = nullptr;
+    wxStaticText* m_lblLvlLightA = nullptr;
+    wxStaticText* m_lblLvlLightE = nullptr;
+    wxStaticText* m_lblLvlHeavyA = nullptr;
+    wxStaticText* m_lblLvlHeavyE = nullptr;
+    wxStaticText* m_lblLvlAirA = nullptr;
+    wxStaticText* m_lblLvlAirE = nullptr;
+    wxStaticText* m_lblLvlCmdA = nullptr;
+    wxStaticText* m_lblLvlCmdE = nullptr;
 
-    wxStaticBitmap* m_lblPlayerName = nullptr;
-    wxStaticBitmap* m_lblPlayerRank = nullptr;
-    wxStaticBitmap* m_lblPlayerExp = nullptr;
-    wxStaticBitmap* m_lblPlayerMaxUnits = nullptr;
-    wxStaticBitmap* m_lblPlayerMaxCmds = nullptr;
+    wxStaticText* m_lblPlayerName = nullptr;
+    wxStaticText* m_lblPlayerRank = nullptr;
+    wxStaticText* m_lblPlayerExp = nullptr;
+    wxStaticText* m_lblPlayerMaxUnits = nullptr;
+    wxStaticText* m_lblPlayerMaxCmds = nullptr;
 
     // widgets
     wxStaticText* m_lblMoneyCaption = nullptr;

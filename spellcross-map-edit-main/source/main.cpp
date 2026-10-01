@@ -324,6 +324,194 @@ namespace
 
 } // namespace
 
+static std::string ReadStrategicSaveJsonString(const std::filesystem::path& path, const char* key)
+{
+    if (!key || !*key)
+        return {};
+
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return {};
+    const std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t pos = data.find(needle);
+    if (pos == std::string::npos)
+        return {};
+    pos = data.find(':', pos + needle.size());
+    if (pos == std::string::npos)
+        return {};
+    ++pos;
+    while (pos < data.size() && std::isspace(static_cast<unsigned char>(data[pos])))
+        ++pos;
+    if (pos >= data.size() || data[pos] != '"')
+        return {};
+    ++pos;
+
+    std::string out;
+    bool esc = false;
+    for (; pos < data.size(); ++pos)
+    {
+        const char c = data[pos];
+        if (esc)
+        {
+            switch (c)
+            {
+            case 'n': out.push_back('\n'); break;
+            case 'r': out.push_back('\r'); break;
+            case 't': out.push_back('\t'); break;
+            case '\\': out.push_back('\\'); break;
+            case '"': out.push_back('"'); break;
+            default: out.push_back(c); break;
+            }
+            esc = false;
+        }
+        else if (c == '\\')
+        {
+            esc = true;
+        }
+        else if (c == '"')
+        {
+            break;
+        }
+        else
+        {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+static std::filesystem::path ResolveStrategicLevelDefForSave(
+    const std::filesystem::path& savePath, const SpellData* spellData)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const std::string savedDef = ReadStrategicSaveJsonString(savePath, "level_def");
+    if (!savedDef.empty())
+    {
+        const fs::path exact(savedDef);
+        if (fs::exists(exact, ec) && fs::is_regular_file(exact, ec))
+            return exact;
+        ec.clear();
+
+        const std::string filename = exact.filename().string();
+        if (!filename.empty())
+        {
+            const fs::path root = spellData ? fs::path(spellData->spell_data_root) : fs::path();
+            const fs::path found = FindSpellDataFile(root, filename);
+            if (!found.empty())
+                return found;
+        }
+    }
+
+    // Current strategic slots live in save/strategic/level_XX/slot_YY.json.
+    // Older saves may not carry level_def, so the stable directory name itself
+    // is enough to recover LEVEL_XX.DEF from the configured Spellcross data.
+    std::string levelKey = to_lower(savePath.parent_path().filename().string());
+    if (levelKey.rfind("level_", 0) == 0 || levelKey.rfind("level-", 0) == 0)
+    {
+        std::replace(levelKey.begin(), levelKey.end(), '-', '_');
+        std::string candidate = levelKey + ".def";
+        const fs::path root = spellData ? fs::path(spellData->spell_data_root) : fs::path();
+        const fs::path found = FindSpellDataFile(root, candidate);
+        if (!found.empty())
+            return found;
+    }
+
+    // Compatibility with the old development layout where JSON and LEVEL DEF
+    // were kept next to each other.
+    const fs::path dir = savePath.parent_path();
+    if (!dir.empty() && fs::exists(dir, ec) && fs::is_directory(dir, ec))
+    {
+        std::vector<fs::path> defs;
+        for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
+        {
+            if (ec) { ec.clear(); break; }
+            if (!de.is_regular_file(ec) || ec) { ec.clear(); continue; }
+            if (to_lower(de.path().extension().string()) == ".def")
+                defs.push_back(de.path());
+        }
+        if (!defs.empty())
+        {
+            std::sort(defs.begin(), defs.end());
+            auto it = std::find_if(defs.begin(), defs.end(), [](const fs::path& pp)
+            {
+                return to_lower(pp.filename().string()).find("level") != std::string::npos;
+            });
+            return it != defs.end() ? *it : defs.front();
+        }
+    }
+
+    return {};
+}
+
+static bool OpenStrategicSaveFromPath(MainFrame* main, const std::filesystem::path& savePath)
+{
+    if (!main)
+        return false;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists(savePath, ec) || !fs::is_regular_file(savePath, ec))
+    {
+        wxMessageBox("The selected strategic save does not exist.", "Load game",
+            wxOK | wxICON_ERROR, main);
+        return false;
+    }
+
+    const fs::path defPath = ResolveStrategicLevelDefForSave(savePath, main->spell_data);
+    if (defPath.empty())
+    {
+        wxMessageBox(
+            "The strategic save was found, but its LEVEL_XX.DEF could not be located.\n\n"
+            "The loader checked the level_def stored in the save, the configured Spellcross data, "
+            "the save/strategic/level_XX directory name and the save folder itself.",
+            "Load strategic game", wxOK | wxICON_ERROR, main);
+        return false;
+    }
+
+    LevelData lvl;
+    std::string err;
+    LevelLoader loader;
+    if (!loader.LoadLevelDef(defPath.string(), lvl, &err))
+    {
+        wxMessageBox("Failed to load strategic LEVEL DEF:\n" + err,
+            "Load strategic game", wxOK | wxICON_ERROR, main);
+        return false;
+    }
+
+    // skipAutosave=true is essential: the explicitly selected JSON is the
+    // authoritative state. Do not let the constructor silently substitute the
+    // level autosave before we apply it.
+    auto* win = new StrategicLevelFrame(main, lvl, /*skipAutosave=*/true);
+    if (!win->LoadStrategicStateFromPath(savePath))
+    {
+        win->Destroy();
+        wxMessageBox(
+            "The selected file is not a valid strategic save for the resolved LEVEL DEF.",
+            "Load strategic game", wxOK | wxICON_ERROR, main);
+        return false;
+    }
+
+    win->TryLoadBackground();
+    win->CheckTimeouts();
+    win->RefreshUI();
+    win->SetOriginalStrategicUi(true);
+
+    StrategicLevelFrame* old = main->m_strategicLevel;
+    main->m_strategicLevel = win;
+    if (old && old != win)
+        old->Destroy();
+
+    win->Show();
+    win->Raise();
+    return true;
+}
+
+
+static wxString BuildSpellcrossWindowTitle(SpellMap* map);
+
 bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units)
 {
     if (!spell_map || !spell_data)
@@ -336,6 +524,7 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
         return false;
     }
 
+    SetTitle(BuildSpellcrossWindowTitle(spell_map));
     spell_map->SetGamma(1.30);
 
     wxCommandEvent dummy;
@@ -429,9 +618,15 @@ void MainFrame::SetGameModeUI(bool enable_game_mode)
 
     if(enable_game_mode)
     {
-        // switch to game mode
+        // switch to game mode. The ribbon is an editor-only control; hiding
+        // just its panels leaves an empty blue ribbon strip below the menu.
+        // Hide the whole control so the tactical map starts directly under
+        // the menu bar.
         if(ribbonBar)
-            ribbonBar->HidePanels();
+        {
+            ribbonBar->Hide();
+            if (sizer) sizer->Layout();
+        }
 
         if(menuView)
         {
@@ -472,6 +667,9 @@ void MainFrame::SetGameModeUI(bool enable_game_mode)
         // Restore status bar when leaving game mode
         if (GetStatusBar() && !GetStatusBar()->IsShown())
             GetStatusBar()->Show();
+
+        // Recreate the editor ribbon when returning to editor mode.
+        LoadToolsetRibbon();
     }
 
     UpdateMenuForGameMode();
@@ -662,12 +860,32 @@ int MyApp::OnExit()
     return(0);
 }
 
+// Main tactical/game window title. Keep the application identity clean and,
+// when a map is loaded, show the current mission/map name instead of the old
+// editor-era title.
+static wxString BuildSpellcrossWindowTitle(SpellMap* map)
+{
+    wxString title = "Spellcross";
+    if (!map || !map->IsLoaded())
+        return title;
+
+    const std::filesystem::path topPath = map->GetTopPath();
+    if (topPath.empty())
+        return title;
+
+    const std::wstring stem = topPath.stem().wstring();
+    if (!stem.empty())
+        title += " - " + wxString(stem.c_str());
+    return title;
+}
+
 // Main panel init
-MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY, "Spellcross Map Editor", wxDefaultPosition, wxSize(1600,1000))
+MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY, "Spellcross", wxDefaultPosition, wxSize(1600,1000))
 {
     // store local reference to initial map and data
     spell_map = map;
     spell_data = spelldata;
+    SetTitle(BuildSpellcrossWindowTitle(spell_map));
 
     // subforms
     form_gamma = NULL;
@@ -701,7 +919,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     menuFile->Append(ID_OpenLevelDef, "Open &Level DEF...\tCtrl-L", "Open strategic level definition (.DEF).");
 
     // Strategic campaign loading (opens Strategic Level from saved state)
-    wxMenuItem* miLoadStrategic = menuFile->Append(wxID_ANY, "&Load Level...	Ctrl+Alt+L", "Load saved Strategic Level (strategic_state.json) and open its Level DEF.");
+    wxMenuItem* miLoadStrategic = menuFile->Append(wxID_ANY, "Load &strategic game...	Ctrl+Alt+L", "Load a strategic campaign JSON save (autosave or slot).");
     menuFile->Append(wxID_EXIT);
 
     // Game menu
@@ -888,79 +1106,29 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     Bind(wxEVT_MENU,&MainFrame::OnOpenMainMenu,this,ID_MainMenu);
 	Bind(wxEVT_MENU, &MainFrame::OnOpenLevelDef, this, ID_OpenLevelDef);
 
-// Load saved Strategic Level (strategic_state.json) and open the corresponding Level DEF.
+// Load an exact strategic JSON save. The save itself identifies LEVEL_XX.DEF;
+// it no longer needs to be copied next to the DEF file.
 Bind(wxEVT_MENU, [this](wxCommandEvent&)
 {
-    wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
+    namespace fs = std::filesystem;
+    fs::path startDir = fs::current_path() / "save" / "strategic";
+    std::error_code ec;
+    if (!fs::exists(startDir, ec))
+        startDir = fs::current_path() / "temp";
+
     wxFileDialog dlg(
         this,
-        "Load Strategic Level (saved state)",
-        temp_dir,
-        "strategic_state.json",
-        "Strategic State (strategic_state.json)|strategic_state.json|JSON files (*.json)|*.json|All files|*.*",
+        "Load strategic game",
+        wxString::FromUTF8(startDir.string()),
+        "",
+        "Strategic saves (*.json)|*.json|All files|*.*",
         wxFD_OPEN | wxFD_FILE_MUST_EXIST
     );
 
     if (dlg.ShowModal() != wxID_OK)
         return;
 
-    namespace fs = std::filesystem;
-    std::error_code ec;
-
-    fs::path statePath = fs::path(dlg.GetPath().ToStdWstring());
-    fs::path dir = statePath.has_parent_path() ? statePath.parent_path() : fs::current_path(ec);
-
-    // Find candidate DEF files in the same directory.
-    std::vector<fs::path> defs;
-    for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
-    {
-        if (ec)
-        {
-            ec.clear();
-            break;
-        }
-        if (!de.is_regular_file(ec) || ec)
-        {
-            ec.clear();
-            continue;
-        }
-
-        auto ext = to_lower(de.path().extension().string());
-        if (ext == ".def")
-            defs.push_back(de.path());
-    }
-
-    if (defs.empty())
-    {
-        wxMessageBox("No Level DEF (*.def) found next to the selected strategic_state.json."
-                     "Put the save next to the corresponding Level DEF, or use File -> Open Level DEF...",
-                     "Load Level", wxOK | wxICON_WARNING, this);
-        return;
-    }
-
-    // Prefer filenames containing "level" (case-insensitive), else alphabetical.
-    std::sort(defs.begin(), defs.end());
-    auto itPref = std::find_if(defs.begin(), defs.end(), [](const fs::path& p)
-    {
-        const std::string fn = to_lower(p.filename().string());
-        return fn.find("level") != std::string::npos;
-    });
-    fs::path defPath = (itPref != defs.end()) ? *itPref : defs.front();
-
-    LevelData lvl;
-    std::string err;
-    LevelLoader loader;
-    if (!loader.LoadLevelDef(defPath.string(), lvl, &err))
-    {
-        wxMessageBox("Failed to load level DEF:" + err, "Load Level", wxOK | wxICON_ERROR, this);
-        return;
-    }
-
-    // Open Strategic Level (it will load strategic_state.json from lvl.source_path folder).
-    auto* win = new StrategicLevelFrame(this, lvl);
-    m_strategicLevel = win;  // Store reference for mission results
-    win->Show();
-    win->Raise();
+    (void)OpenStrategicSaveFromPath(this, fs::path(dlg.GetPath().ToStdWstring()));
 }, miLoadStrategic->GetId());
 
     Bind(wxEVT_MENU,&MainFrame::OnAbout, this, wxID_ABOUT);
@@ -1507,13 +1675,18 @@ void MainFrame::SyncUiAfterTacticalLoad()
     if (!spell_map || !spell_map->isGameMode())
         return;
 
+    SetTitle(BuildSpellcrossWindowTitle(spell_map));
+
     if (GetMenuBar())
     {
         if (auto* item = GetMenuBar()->FindItem(ID_mmGameMode))
             item->Check(true);
     }
     if (ribbonBar)
-        ribbonBar->HidePanels();
+    {
+        ribbonBar->Hide();
+        if (sizer) sizer->Layout();
+    }
 
     if (menuView)
     {
@@ -1753,12 +1926,16 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
             }
             case FormMainMenuAction::LoadGame:
             {
-                // extended dialog: scsave + strategic level json
-                wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
+                // Tactical .scsave and strategic campaign .json use one entry point.
+                namespace fs = std::filesystem;
+                fs::path loadStart = fs::current_path() / "save" / "strategic";
+                std::error_code loadEc;
+                if (!fs::exists(loadStart, loadEc))
+                    loadStart = fs::current_path() / "temp";
                 wxFileDialog dlg(
                     this,
                     "Load game",
-                    temp_dir,
+                    wxString::FromUTF8(loadStart.string()),
                     "",
                     "All saves (*.scsave;*.json)|*.scsave;*.json|Spellcross save (*.scsave)|*.scsave|Strategic state (*.json)|*.json",
                     wxFD_OPEN | wxFD_FILE_MUST_EXIST
@@ -1771,42 +1948,9 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
 
                 if (ext_lower == ".json")
                 {
-                    // strategic level save
-                    namespace fs = std::filesystem;
-                    fs::path dir = fs::path(load_path).parent_path();
-                    std::vector<fs::path> defs;
-                    std::error_code ec;
-                    for (const auto& de : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec))
-                    {
-                        if (ec) { ec.clear(); break; }
-                        if (!de.is_regular_file(ec) || ec) { ec.clear(); continue; }
-                        if (to_lower(de.path().extension().string()) == ".def")
-                            defs.push_back(de.path());
-                    }
-                    if (defs.empty())
-                    {
-                        wxMessageBox("No Level DEF found next to the selected JSON.", "Load", wxOK | wxICON_WARNING, this);
-                        break;
-                    }
-                    std::sort(defs.begin(), defs.end());
-                    auto itPref = std::find_if(defs.begin(), defs.end(), [](const fs::path& p)
-                    {
-                        return to_lower(p.filename().string()).find("level") != std::string::npos;
-                    });
-                    fs::path defPath = (itPref != defs.end()) ? *itPref : defs.front();
-
-                    LevelData lvl;
-                    std::string err;
-                    LevelLoader loader;
-                    if (!loader.LoadLevelDef(defPath.string(), lvl, &err))
-                    {
-                        wxMessageBox("Failed to load level DEF:\n" + err, "Load", wxOK | wxICON_ERROR, this);
-                        break;
-                    }
-                    auto* win = new StrategicLevelFrame(this, lvl);
-                    m_strategicLevel = win;
-                    win->Show();
-                    win->Raise();
+                    // Strategic campaign save. Load the exact selected JSON and
+                    // resolve LEVEL_XX.DEF from the metadata/stable save folder.
+                    (void)OpenStrategicSaveFromPath(this, std::filesystem::path(load_path));
                 }
                 else
                 {
@@ -2589,6 +2733,8 @@ void MainFrame::OnOpenMap(wxCommandEvent& event)
     // load new one
     if(spell_map->Load(path, spell_data))
         wxMessageBox(string_format("Loading Spellcross map file failed with error:\n%s",spell_map->GetLastError().c_str()),"Error",wxICON_ERROR);
+    else
+        SetTitle(BuildSpellcrossWindowTitle(spell_map));
     // reset layers visibility
     spell_map->SetGamma(1.30);
     OnViewLayer(event);
@@ -2675,6 +2821,7 @@ void MainFrame::OnNewMap(wxCommandEvent& event)
 {
     // create some map (###todo: set parameters by some menu)
     spell_map->Create(spell_data, "T11", 20,50);
+    SetTitle(BuildSpellcrossWindowTitle(spell_map));
     // reset layers visibility
     spell_map->SetGamma(1.30);
     OnViewLayer(event);
@@ -4281,6 +4428,12 @@ void MainFrame::LoadToolsetRibbon(Terrain *terr)
     // update ribbon with new stuff
     ribbonBar->Realize();
     sizer->Insert(0,ribbonBar, 0, wxALL | wxEXPAND, 2);
+
+    // Ribbon belongs to the editor toolset only. Tactical game mode must not
+    // reserve a blank ribbon row under the menu.
+    if (spell_map && spell_map->isGameMode())
+        ribbonBar->Hide();
+
     sizer->Layout();
 }
 
