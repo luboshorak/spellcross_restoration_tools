@@ -652,7 +652,7 @@ bool StrategicOriginalRenderer::RenderResources(const AssetLoader& load,
 
     std::vector<std::uint8_t> canvas = bigMap;
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmf, kScreenSpecificW, kScreenH);
-    BlitOpaque(canvas, kScreenW, kScreenH, 3, 8, factory, 569, 464);
+    BlitOpaque(canvas, kScreenW, kScreenH, 6, 8, factory, 569, 464);
 
     out.width = kScreenW;
     out.height = kScreenH;
@@ -684,7 +684,25 @@ bool StrategicOriginalRenderer::RenderStats(const AssetLoader& load,
 
     std::vector<std::uint8_t> canvas = bigMap;
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vms, kScreenSpecificW, kScreenH);
-    BlitOpaque(canvas, kScreenW, kScreenH, 3, 8, stats, 569, 464);
+
+    // STATS.LZ uses palette indices 128..191 as a dynamic-text placeholder
+    // mask. They are not final visible pixels.  Leaving them opaque maps them
+    // through STRATEGY.PAL and produces the pink speckling seen in the broken
+    // restoration. The original screen leaves the underlying VMS_FULL panel
+    // visible in those pixels and draws localized/live text over it later.
+    for(int y = 0; y < 464; ++y)
+    {
+        for(int x = 0; x < 569; ++x)
+        {
+            const std::uint8_t px = stats[static_cast<std::size_t>(y) * 569u + x];
+            if(px >= 128 && px < 192)
+                continue;
+            const int dx = 6 + x;
+            const int dy = 8 + y;
+            if(dx >= 0 && dx < kScreenW && dy >= 0 && dy < kScreenH)
+                canvas[static_cast<std::size_t>(dy) * kScreenW + dx] = px;
+        }
+    }
 
     out.width = kScreenW;
     out.height = kScreenH;
@@ -730,7 +748,7 @@ bool StrategicOriginalRenderer::RenderOptions(const AssetLoader& load,
 
     std::vector<std::uint8_t> canvas = bigMap;
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmo, kScreenSpecificW, kScreenH);
-    BlitOpaque(canvas, kScreenW, kScreenH, 3, 8, options, 569, 464);
+    BlitOpaque(canvas, kScreenW, kScreenH, 6, 8, options, 569, 464);
 
     // Native slider travel: black groove x=47..186, 10 px thumb.
     // Keep the whole thumb inside that groove, matching the DOS OPTIONS screen.

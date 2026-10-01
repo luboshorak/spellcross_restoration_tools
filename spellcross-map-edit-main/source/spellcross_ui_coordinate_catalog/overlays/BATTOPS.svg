@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">BATTOPS.QH — 8 rectangles</text>
+<rect x="118" y="24" width="169" height="91" fill="none" stroke="white" stroke-width="1"/>
+<text x="120" y="35" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Set movement style for friendly and enemy units [118,24,169,91]</title>
+<rect x="131" y="126" width="136" height="37" fill="none" stroke="white" stroke-width="1"/>
+<text x="133" y="137" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Slider control for display brightness [131,126,136,37]</title>
+<rect x="131" y="172" width="136" height="37" fill="none" stroke="white" stroke-width="1"/>
+<text x="133" y="183" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Slider control for background music volume [131,172,136,37]</title>
+<rect x="131" y="223" width="136" height="37" fill="none" stroke="white" stroke-width="1"/>
+<text x="133" y="234" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Slider control for sound effects volume [131,223,136,37]</title>
+<rect x="131" y="274" width="145" height="53" fill="none" stroke="white" stroke-width="1"/>
+<text x="133" y="285" fill="white" font-family="monospace" font-size="9">5</text>
+<title>In-battle save/load system. You have limited number of saves on the battlefield map. [131,274,145,53]</title>
+<rect x="285" y="279" width="177" height="85" fill="none" stroke="white" stroke-width="1"/>
+<text x="287" y="290" fill="white" font-family="monospace" font-size="9">6</text>
+<title>Display resolution of the battlefield [285,279,177,85]</title>
+<rect x="298" y="70" width="214" height="203" fill="none" stroke="white" stroke-width="1"/>
+<text x="300" y="81" fill="white" font-family="monospace" font-size="9">7</text>
+<title>A list of all mission objectives. Fulfilled objectives are green [298,70,214,203]</title>
+<rect x="472" y="299" width="52" height="53" fill="none" stroke="white" stroke-width="1"/>
+<text x="474" y="310" fill="white" font-family="monospace" font-size="9">8</text>
+<title>Close options box [472,299,52,53]</title>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRRSR.QH — 8 rectangles</text>
+<rect x="31" y="8" width="228" height="21" fill="none" stroke="white" stroke-width="1"/>
+<text x="33" y="19" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Name of the research in progress [31,8,228,21]</title>
+<rect x="14" y="33" width="262" height="21" fill="none" stroke="white" stroke-width="1"/>
+<text x="16" y="44" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Research progress indicator [14,33,262,21]</title>
+<rect x="19" y="73" width="357" height="130" fill="none" stroke="white" stroke-width="1"/>
+<text x="21" y="84" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Information about the research in progress [19,73,357,130]</title>
+<rect x="31" y="236" width="228" height="21" fill="none" stroke="white" stroke-width="1"/>
+<text x="33" y="247" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Name of the research item highlighted in the scrollbar [31,236,228,21]</title>
+<rect x="19" y="286" width="359" height="130" fill="none" stroke="white" stroke-width="1"/>
+<text x="21" y="297" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Information about research item highlighted in the scrollbar [19,286,359,130]</title>
+<rect x="417" y="12" width="136" height="464" fill="none" stroke="white" stroke-width="1"/>
+<text x="419" y="23" fill="white" font-family="monospace" font-size="9">6</text>
+<title>List of items available to research [417,12,136,464]</title>
+<rect x="305" y="227" width="69" height="28" fill="none" stroke="white" stroke-width="1"/>
+<text x="307" y="238" fill="white" font-family="monospace" font-size="9">7</text>
+<title>Stop research in progress (stopped research items will have green light bulb on its name in the scrollbar) [305,227,69,28]</title>
+<rect x="305" y="438" width="69" height="28" fill="none" stroke="white" stroke-width="1"/>
+<text x="307" y="449" fill="white" font-family="monospace" font-size="9">8</text>
+<title>Start research of a highlighted item (if an item is being researched then you have to first stop that research) [305,438,69,28]</title>
+</svg>

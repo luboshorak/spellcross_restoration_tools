@@ -110,6 +110,7 @@ public:
     void OnLoadGame(wxCommandEvent& ev);
     void SaveStrategicGameToSlot(int slot, bool notify = true);
     void LoadStrategicGameFromSlot(int slot, bool notify = true);
+    bool PromptStrategicSaveSlot(int maxSlots, bool notify = true);
 
     void OnOptionsAudio(wxCommandEvent& ev);
     void OnOptionsScreen(wxCommandEvent& ev);
@@ -811,7 +812,6 @@ public:
     int m_originalResearchBrowseTextScroll = 0;
     int m_originalInfoListScroll = 0;
     int m_originalInfoTextScroll = 0;
-    int m_originalBattleResolution = 2; // 0=640x480, 1=800x600, 2=1024x768
     bool m_originalQuickHelp = true;
 
     // Native strategic-map interaction/animation state. These values are only

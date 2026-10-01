@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">BATTLES.QH — 36 rectangles</text>
+<rect x="1" y="403" width="61" height="50" fill="none" stroke="white" stroke-width="1"/>
+<text x="3" y="414" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Picture of unit [1,403,61,50]</title>
+<rect x="2" y="453" width="57" height="8" fill="none" stroke="white" stroke-width="1"/>
+<text x="4" y="464" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Experience points left to next level [2,453,57,8]</title>
+<rect x="1" y="462" width="60" height="16" fill="none" stroke="white" stroke-width="1"/>
+<text x="3" y="473" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Current experience level [1,462,60,16]</title>
+<rect x="13" y="385" width="17" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="15" y="396" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Unit is frozen [13,385,17,13]</title>
+<rect x="36" y="385" width="17" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="38" y="396" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Unit is paralyzed [36,385,17,13]</title>
+<rect x="579" y="403" width="61" height="50" fill="none" stroke="white" stroke-width="1"/>
+<text x="581" y="414" fill="white" font-family="monospace" font-size="9">6</text>
+<title>Picture of unit [579,403,61,50]</title>
+<rect x="580" y="453" width="57" height="8" fill="none" stroke="white" stroke-width="1"/>
+<text x="582" y="464" fill="white" font-family="monospace" font-size="9">7</text>
+<title>Experience points left to next level [580,453,57,8]</title>
+<rect x="579" y="462" width="60" height="16" fill="none" stroke="white" stroke-width="1"/>
+<text x="581" y="473" fill="white" font-family="monospace" font-size="9">8</text>
+<title>Current experience level [579,462,60,16]</title>
+<rect x="591" y="385" width="17" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="593" y="396" fill="white" font-family="monospace" font-size="9">9</text>
+<title>Unit is frozen [591,385,17,13]</title>
+<rect x="614" y="385" width="17" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="616" y="396" fill="white" font-family="monospace" font-size="9">10</text>
+<title>Unit is paralyzed [614,385,17,13]</title>
+<rect x="71" y="415" width="9" height="51" fill="none" stroke="white" stroke-width="1"/>
+<text x="73" y="426" fill="white" font-family="monospace" font-size="9">11</text>
+<title>Morale of the unit [71,415,9,51]</title>
+<rect x="79" y="404" width="8" height="48" fill="none" stroke="white" stroke-width="1"/>
+<text x="81" y="415" fill="white" font-family="monospace" font-size="9">12</text>
+<title>Action points left [79,404,8,48]</title>
+<rect x="87" y="406" width="5" height="32" fill="none" stroke="white" stroke-width="1"/>
+<text x="89" y="417" fill="white" font-family="monospace" font-size="9">13</text>
+<title>Remaining shots [87,406,5,32]</title>
+<rect x="95" y="408" width="137" height="16" fill="none" stroke="white" stroke-width="1"/>
+<text x="97" y="419" fill="white" font-family="monospace" font-size="9">14</text>
+<title>Unit&#x27;s name [95,408,137,16]</title>
+<rect x="117" y="433" width="114" height="9" fill="none" stroke="white" stroke-width="1"/>
+<text x="119" y="444" fill="white" font-family="monospace" font-size="9">15</text>
+<title>Current status: green = fit to fight yellow = wounded black = dead [117,433,114,9]</title>
+<rect x="161" y="464" width="32" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="163" y="475" fill="white" font-family="monospace" font-size="9">16</text>
+<title>Weapon strength against flying targets [161,464,32,13]</title>
+<rect x="125" y="464" width="32" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="127" y="475" fill="white" font-family="monospace" font-size="9">17</text>
+<title>Weapon strength against heavy targets [125,464,32,13]</title>
+<rect x="99" y="464" width="23" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="101" y="475" fill="white" font-family="monospace" font-size="9">18</text>
+<title>Weapon strength against infantry [99,464,23,13]</title>
+<rect x="201" y="464" width="32" height="13" fill="none" stroke="white" stroke-width="1"/>
+<text x="203" y="475" fill="white" font-family="monospace" font-size="9">19</text>
+<title>Units armour [201,464,32,13]</title>
+<rect x="121" y="443" width="31" height="12" fill="none" stroke="white" stroke-width="1"/>
+<text x="123" y="454" fill="white" font-family="monospace" font-size="9">20</text>
+<title>Total [121,443,31,12]</title>
+<rect x="155" y="443" width="31" height="12" fill="none" stroke="white" stroke-width="1"/>
+<text x="157" y="454" fill="white" font-family="monospace" font-size="9">21</text>
+<title>Fit to fight [155,443,31,12]</title>
+<rect x="195" y="443" width="31" height="12" fill="none" stroke="white" stroke-width="1"/>
+<text x="197" y="454" fill="white" font-family="monospace" font-size="9">22</text>
+<title>Wounded [195,443,31,12]</title>
+<rect x="98" y="437" width="17" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="100" y="448" fill="white" font-family="monospace" font-size="9">23</text>
+<title>Entrenchment [98,437,17,26]</title>
+<rect x="413" y="409" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="415" y="420" fill="white" font-family="monospace" font-size="9">24</text>
+<title>Toggle map on/off. Click by left button to the map to move your view or right button to exit the map [413,409,33,26]</title>
+<rect x="451" y="409" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="453" y="420" fill="white" font-family="monospace" font-size="9">25</text>
+<title>Select between air/ground unit of the right info display panel [451,409,33,26]</title>
+<rect x="487" y="409" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="489" y="420" fill="white" font-family="monospace" font-size="9">26</text>
+<title>Go to any of your units [487,409,33,26]</title>
+<rect x="536" y="409" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="538" y="420" fill="white" font-family="monospace" font-size="9">27</text>
+<title>End your turn and initiate enemy actions [536,409,33,26]</title>
+<rect x="413" y="444" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="415" y="455" fill="white" font-family="monospace" font-size="9">28</text>
+<title>Toggle on/off unit info bar [413,444,33,26]</title>
+<rect x="451" y="444" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="453" y="455" fill="white" font-family="monospace" font-size="9">29</text>
+<title>Information cursor: select the button and click on unit to display detailed info about them [451,444,33,26]</title>
+<rect x="487" y="444" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="489" y="455" fill="white" font-family="monospace" font-size="9">30</text>
+<title>List of all mission objectives, sound and graphics options, load and save game [487,444,33,26]</title>
+<rect x="536" y="444" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="538" y="455" fill="white" font-family="monospace" font-size="9">31</text>
+<title>Retreat. You will lose all units that are not on the starting cross squares [536,444,33,26]</title>
+<rect x="248" y="406" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="250" y="417" fill="white" font-family="monospace" font-size="9">32</text>
+<title>Go to last unit [248,406,33,26]</title>
+<rect x="284" y="406" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="286" y="417" fill="white" font-family="monospace" font-size="9">33</text>
+<title>Left mouse button: next unit, right mouse button: previous unit [284,406,33,26]</title>
+<rect x="319" y="406" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="321" y="417" fill="white" font-family="monospace" font-size="9">34</text>
+<title>Repair/heal unit, available only with all action points [319,406,33,26]</title>
+<rect x="355" y="407" width="33" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="357" y="418" fill="white" font-family="monospace" font-size="9">35</text>
+<title>Activate special action for some of your troops type [355,407,33,26]</title>
+<rect x="243" y="456" width="151" height="19" fill="none" stroke="white" stroke-width="1"/>
+<text x="245" y="467" fill="white" font-family="monospace" font-size="9">36</text>
+<title>Info about square, unit or button under the mouse cursor [243,456,151,19]</title>
+</svg>

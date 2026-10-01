@@ -75,6 +75,49 @@ namespace
     // the Original UI renderer uses it before the Resources-page functions.
     constexpr int kResourcesMetaTerritoryId = 0;
 
+    // Exact strategy OPTIONS rectangles from source/spellcross_ui_coordinate_catalog
+    // (COMMON.FS/STROPT.QH), native 640x480 top-left coordinate space.
+    struct OriginalUiRect { int x, y, w, h; };
+    constexpr OriginalUiRect kOptResolution    {234, 339, 166,  76};
+    constexpr OriginalUiRect kOptQuickHelp     {434, 336,  74,  77};
+    constexpr OriginalUiRect kOptExit          {327, 435, 113,  41};
+    constexpr OriginalUiRect kOptSavedPositions{115,  25, 355, 277};
+    constexpr OriginalUiRect kOptLoadColumn    { 20,  22,  75, 280};
+    constexpr OriginalUiRect kOptSaveColumn    {490,  22,  75, 280};
+    constexpr OriginalUiRect kOptGamma         { 28, 333, 178,  41};
+    constexpr OriginalUiRect kOptMusic         { 28, 380, 178,  41};
+    constexpr OriginalUiRect kOptSound         { 28, 425, 178,  41};
+
+    // OPTIONS.LZ live-overlay geometry.  STROPT.QH gives the authoritative
+    // parent hit regions above; these inner rectangles follow the actual
+    // repeated wells/controls in the original OPTIONS artwork/runtime frame.
+    // Keeping them explicit prevents any more ad-hoc +4/+9/+12 placement.
+    constexpr int kOptSaveSlotCount = 9;
+    constexpr int kOptSaveRowPitch = 31;
+    constexpr int kOptSaveButtonH = 28;               // y=22..49, then +31
+    constexpr OriginalUiRect kOptSavedRow0 {115, 27, 355, 18};
+
+    constexpr OriginalUiRect kOptGammaTitle { 28, 333, 178, 18};
+    constexpr OriginalUiRect kOptMusicTitle { 28, 380, 178, 18};
+    constexpr OriginalUiRect kOptSoundTitle { 28, 425, 178, 18};
+    constexpr OriginalUiRect kOptGammaTrack { 28, 351, 178, 23};
+    constexpr OriginalUiRect kOptMusicTrack { 28, 398, 178, 23};
+    constexpr OriginalUiRect kOptSoundTrack { 28, 443, 178, 23};
+    constexpr int kOptSliderTrackX = 47;
+    constexpr int kOptSliderTrackW = 140;              // x=47..186
+    constexpr int kOptSliderThumbW = 10;
+
+    constexpr OriginalUiRect kOptQuickTitle {434, 339, 74, 18};
+    constexpr OriginalUiRect kOptQuickOn    {434, 357, 74, 18};
+    constexpr OriginalUiRect kOptQuickOff   {434, 375, 74, 18};
+    constexpr int kOptQuickBracketLeft = 436;
+    constexpr int kOptQuickBracketRight = 505;
+    constexpr int kOptQuickBracketTop = 354;
+    constexpr int kOptQuickBracketOnY = 367;
+    constexpr int kOptQuickBracketOffY = 385;
+
+    constexpr OriginalUiRect kOptExitButton {346, 440, 71, 29};
+
     using OriginalUiPalette = std::array<std::array<std::uint8_t, 3>, 256>;
 
     // Build the palette used by the common strategic chrome/buttons.  The DOS
@@ -668,6 +711,45 @@ namespace
             OriginalHLine(image, x + 2, x + w - 3, gy, grid);
         if (font)
             OriginalDrawSpellText(image, font, label, x, y + std::max(0, (h - std::max(1, font->GetHeight())) / 2) - 1, fg, w, true);
+    }
+
+    static void OriginalDrawOptionsButton(wxImage& image, SpellFont* font,
+        const OriginalUiRect& r, const wxString& label, bool enabled)
+    {
+        // Strategic OPTIONS save/load/exit buttons are live overlays; the
+        // surrounding metal/panel is already in OPTIONS.LZ.  Draw the button
+        // inside its measured runtime rectangle instead of treating the whole
+        // STROPT parent region as a text box.
+        const wxColour outer(enabled ? 18 : 18, enabled ? 58 : 38, enabled ? 18 : 18);
+        const wxColour inner(enabled ? 14 : 18, enabled ? 48 : 34, enabled ? 14 : 18);
+        const wxColour hi(enabled ? 44 : 32, enabled ? 92 : 54, enabled ? 38 : 28);
+        const wxColour lo(6, 20, 6);
+        const wxColour grid(enabled ? 22 : 20, enabled ? 70 : 44, enabled ? 22 : 20);
+        const wxColour fg = enabled ? wxColour(0, 242, 0) : wxColour(82, 104, 82);
+
+        OriginalFillRect(image, r.x, r.y, r.w, r.h, outer);
+        OriginalHLine(image, r.x, r.x + r.w - 1, r.y, hi);
+        OriginalVLine(image, r.x, r.y, r.y + r.h - 1, hi);
+        OriginalHLine(image, r.x, r.x + r.w - 1, r.y + r.h - 1, lo);
+        OriginalVLine(image, r.x + r.w - 1, r.y, r.y + r.h - 1, lo);
+
+        const int ix = r.x + 4;
+        const int iy = r.y + 3;
+        const int iw = std::max(1, r.w - 8);
+        const int ih = std::max(1, r.h - 6);
+        OriginalFillRect(image, ix, iy, iw, ih, inner);
+        OriginalHLine(image, ix, ix + iw - 1, iy, grid);
+        OriginalVLine(image, ix, iy, iy + ih - 1, grid);
+        OriginalHLine(image, ix, ix + iw - 1, iy + ih - 1, lo);
+        OriginalVLine(image, ix + iw - 1, iy, iy + ih - 1, lo);
+        for (int gx = ix + 7; gx < ix + iw - 1; gx += 10)
+            OriginalVLine(image, gx, iy + 1, iy + ih - 2, grid);
+        for (int gy = iy + 7; gy < iy + ih - 1; gy += 10)
+            OriginalHLine(image, ix + 1, ix + iw - 2, gy, grid);
+
+        if (font)
+            OriginalDrawSpellText(image, font, label, r.x,
+                OriginalCenteredTextY(font, r.y, r.h), fg, r.w, true);
     }
 
     static bool OriginalDrawUnitPortrait(wxImage& image, SpellGraphicItem* glyph,
@@ -4318,34 +4400,70 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxColour text(218, 222, 211);
         const wxColour green(0, 242, 0);
         const wxColour dim(150, 150, 145);
-        auto value = [&](int v, int x, int y, int w) {
-            OriginalDrawSpellText(image, font, wxString::Format(L"%d", v), x, y, text, w, true);
+
+        // Native geometry comes from the original COMMON.FS/STRSTAT.QH:
+        //   132,38,362,146  Overall Game statistics
+        //   132,193,362,146 Current level statistics
+        //   132,344,256,102 Player information
+        // The internal cell edges below are read from the original STATS.LZ
+        // artwork itself (after composition at 3,8), not estimated from a
+        // screenshot. This keeps all live text inside the exact DOS cells.
+        constexpr int kStatsX0 = 128;
+        constexpr int kStatsLabelX1 = 217;
+        constexpr int kStatsAllianceX1 = 352;
+        constexpr int kStatsX1 = 493;
+
+        auto drawCentered = [&](const wxString& value, int x0, int y0, int x1, int y1,
+                                const wxColour& colour)
+        {
+            OriginalDrawSpellText(image, font, value,
+                x0, OriginalCenteredTextY(font, y0, y1 - y0), colour, x1 - x0, true);
         };
-        OriginalDrawSpellText(image, font, L"Statistika celé hry", 145, 39, text, 325, true);
-        OriginalDrawSpellText(image, font, L"Aliance - ztráty", 217, 62, text, 133, true);
-        OriginalDrawSpellText(image, font, L"Other Side - ztráty", 351, 62, text, 138, true);
+        auto drawValue = [&](int value, int x0, int y0, int x1, int y1)
+        {
+            drawCentered(wxString::Format(L"%d", value), x0, y0, x1, y1, text);
+        };
+
+        // Overall game panel. STRSTAT.QH bounds it at 132,38,362x146; the
+        // decorative title/header/row cells are part of STATS.LZ.
+        drawCentered(L"Statistika celé hry", 149, 33, 472, 56, text);
+        drawCentered(L"Aliance - ztráty", kStatsLabelX1, 56, kStatsAllianceX1, 80, text);
+        drawCentered(L"Other Side - ztráty", kStatsAllianceX1, 56, kStatsX1, 80, text);
+
         const std::array<wxString,4> labels = {L"Lehké j.", L"Těžké j.", L"Vzdušné j.", L"Velitelé"};
-        const std::array<int,4> ay = {m_lossStats.alliance_all.light, m_lossStats.alliance_all.heavy, m_lossStats.alliance_all.air, m_lossStats.alliance_all.commanders};
-        const std::array<int,4> ey = {m_lossStats.enemy_all.light, m_lossStats.enemy_all.heavy, m_lossStats.enemy_all.air, m_lossStats.enemy_all.commanders};
+        const std::array<int,4> ay = {m_lossStats.alliance_all.light, m_lossStats.alliance_all.heavy,
+                                      m_lossStats.alliance_all.air, m_lossStats.alliance_all.commanders};
+        const std::array<int,4> ey = {m_lossStats.enemy_all.light, m_lossStats.enemy_all.heavy,
+                                      m_lossStats.enemy_all.air, m_lossStats.enemy_all.commanders};
+        constexpr std::array<int,5> upperRows = {80, 104, 130, 156, 180};
         for (int r = 0; r < 4; ++r)
         {
-            const int y = 85 + r * 25;
-            OriginalDrawSpellText(image, font, labels[static_cast<size_t>(r)], 138, y, text, 80);
-            value(ay[static_cast<size_t>(r)], 217, y, 133);
-            value(ey[static_cast<size_t>(r)], 351, y, 138);
+            OriginalDrawSpellText(image, font, labels[static_cast<size_t>(r)],
+                kStatsX0 + 7, OriginalCenteredTextY(font, upperRows[r], upperRows[r + 1] - upperRows[r]),
+                text, kStatsLabelX1 - kStatsX0 - 12, false);
+            drawValue(ay[static_cast<size_t>(r)], kStatsLabelX1, upperRows[r], kStatsAllianceX1, upperRows[r + 1]);
+            drawValue(ey[static_cast<size_t>(r)], kStatsAllianceX1, upperRows[r], kStatsX1, upperRows[r + 1]);
         }
-        OriginalDrawSpellText(image, font, L"Statistika aktuálního levelu", 145, 190, text, 325, true);
-        OriginalDrawSpellText(image, font, L"Aliance - ztráty", 217, 213, text, 133, true);
-        OriginalDrawSpellText(image, font, L"Other Side - ztráty", 351, 213, text, 138, true);
-        const std::array<int,4> al = {m_lossStats.alliance_level.light, m_lossStats.alliance_level.heavy, m_lossStats.alliance_level.air, m_lossStats.alliance_level.commanders};
-        const std::array<int,4> el = {m_lossStats.enemy_level.light, m_lossStats.enemy_level.heavy, m_lossStats.enemy_level.air, m_lossStats.enemy_level.commanders};
+
+        // Current-level panel.
+        drawCentered(L"Statistika aktuálního levelu", 149, 188, 472, 211, text);
+        drawCentered(L"Aliance - ztráty", kStatsLabelX1, 211, kStatsAllianceX1, 235, text);
+        drawCentered(L"Other Side - ztráty", kStatsAllianceX1, 211, kStatsX1, 235, text);
+
+        const std::array<int,4> al = {m_lossStats.alliance_level.light, m_lossStats.alliance_level.heavy,
+                                      m_lossStats.alliance_level.air, m_lossStats.alliance_level.commanders};
+        const std::array<int,4> el = {m_lossStats.enemy_level.light, m_lossStats.enemy_level.heavy,
+                                      m_lossStats.enemy_level.air, m_lossStats.enemy_level.commanders};
+        constexpr std::array<int,5> lowerRows = {235, 259, 285, 311, 335};
         for (int r = 0; r < 4; ++r)
         {
-            const int y = 235 + r * 25;
-            OriginalDrawSpellText(image, font, labels[static_cast<size_t>(r)], 138, y, text, 80);
-            value(al[static_cast<size_t>(r)], 217, y, 133);
-            value(el[static_cast<size_t>(r)], 351, y, 138);
+            OriginalDrawSpellText(image, font, labels[static_cast<size_t>(r)],
+                kStatsX0 + 7, OriginalCenteredTextY(font, lowerRows[r], lowerRows[r + 1] - lowerRows[r]),
+                text, kStatsLabelX1 - kStatsX0 - 12, false);
+            drawValue(al[static_cast<size_t>(r)], kStatsLabelX1, lowerRows[r], kStatsAllianceX1, lowerRows[r + 1]);
+            drawValue(el[static_cast<size_t>(r)], kStatsAllianceX1, lowerRows[r], kStatsX1, lowerRows[r + 1]);
         }
+
         auto rankCz = [](int rank) -> wxString {
             switch (rank) {
             case 0: return L"Poručík"; case 1: return L"Nadporučík"; case 2: return L"Kapitán";
@@ -4357,23 +4475,29 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         int maxUnits = 0, maxCommanders = 0;
         if (const CommanderRankRec* rr = FindRankRec(m_player.rank))
         {
-            // HODNOSTI.DEF contains values above the engine's 32-unit roster
-            // ceiling for the two highest ranks; the original UI caps at 32.
             maxUnits = std::clamp(rr->max_units, 0, 32);
             maxCommanders = std::clamp(rr->max_commanders, 0, 14);
         }
         const int nextExp = FindNextRankExp(m_player.rank);
-        OriginalDrawSpellText(image, font, wxString(L"Hráč - ") + wxString::FromUTF8(m_player.name), 142, 361, text, 250);
-        OriginalDrawSpellText(image, font, L"Hodnost:", 157, 382, green, 77);
-        OriginalDrawSpellText(image, font, rankCz(m_player.rank), 220, 382, dim, 175);
-        OriginalDrawSpellText(image, font, L"Zkušenost:", 157, 400, green, 87);
+
+        // Player information: STRSTAT.QH = 132,344,256x102. Keep all five
+        // live lines inside that native rectangle using the original 18px row
+        // cadence and fixed left insets.
+        constexpr int playerX = 132, playerY = 344, playerW = 256;
+        OriginalDrawSpellText(image, font, wxString(L"Hráč - ") + wxString::FromUTF8(m_player.name),
+            playerX + 10, playerY + 15, text, playerW - 20);
+        OriginalDrawSpellText(image, font, L"Hodnost:", playerX + 25, playerY + 36, green, 77);
+        OriginalDrawSpellText(image, font, rankCz(m_player.rank), playerX + 88, playerY + 36, dim, 158);
+        OriginalDrawSpellText(image, font, L"Zkušenost:", playerX + 25, playerY + 54, green, 87);
         OriginalDrawSpellText(image, font,
-            nextExp > m_player.experience ? wxString::Format(L"%d (%d)", m_player.experience, nextExp) : wxString::Format(L"%d (-)", m_player.experience),
-            226, 400, dim, 170);
-        OriginalDrawSpellText(image, font, L"Max. počet stálých jednotek:", 157, 418, green, 205);
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", maxUnits), 354, 418, dim, 35);
-        OriginalDrawSpellText(image, font, L"Max. počet velitelů:", 157, 436, green, 170);
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", maxCommanders), 326, 436, dim, 35);
+            nextExp > m_player.experience ? wxString::Format(L"%d (%d)", m_player.experience, nextExp)
+                                          : wxString::Format(L"%d (-)", m_player.experience),
+            playerX + 94, playerY + 54, dim, 152);
+        OriginalDrawSpellText(image, font, L"Max. počet stálých jednotek:", playerX + 25, playerY + 72, green, 205);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", maxUnits), playerX + 222, playerY + 72, dim, 30);
+        OriginalDrawSpellText(image, font, L"Max. počet velitelů:", playerX + 25, playerY + 90, green, 170);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", maxCommanders), playerX + 194, playerY + 90, dim, 35);
+
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
 
@@ -4385,17 +4509,37 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxColour dim(90, 112, 90);
         const wxColour selected(255, 224, 24);
 
-        // OPTIONS.LZ contains the exact nine slot wells but leaves their
-        // labels/buttons dynamic. Keep the native 31px row pitch.
-        for (int i = 0; i < 9; ++i)
+        // Save/load columns: STROPT.QH defines the exact parent rectangles;
+        // the OPTIONS layout uses nine rows at a 31 px pitch.  The live button
+        // is 28 px high (22..49 inclusive for row 0), while the central save
+        // caption lives in the OPTIONS.LZ well at y=27..44.
+        for (int i = 0; i < kOptSaveSlotCount; ++i)
         {
             const int slot = i + 1;
-            const int y = 22 + i * 31;
+            const OriginalUiRect loadButton {
+                kOptLoadColumn.x,
+                kOptLoadColumn.y + i * kOptSaveRowPitch,
+                kOptLoadColumn.w,
+                kOptSaveButtonH
+            };
+            const OriginalUiRect saveButton {
+                kOptSaveColumn.x,
+                kOptSaveColumn.y + i * kOptSaveRowPitch,
+                kOptSaveColumn.w,
+                kOptSaveButtonH
+            };
+            const OriginalUiRect slotRow {
+                kOptSavedRow0.x,
+                kOptSavedRow0.y + i * kOptSaveRowPitch,
+                kOptSavedRow0.w,
+                kOptSavedRow0.h
+            };
+
             const auto path = GetStrategicSaveSlotPath(m_level, slot);
             std::error_code ec;
             const bool exists = std::filesystem::exists(path, ec);
-            OriginalDrawActionButton(image, font, 20, y, 75, 27, L"Load", exists);
-            OriginalDrawActionButton(image, font, 490, y, 75, 27, L"Save", true);
+            OriginalDrawOptionsButton(image, font, loadButton, L"Load", exists);
+            OriginalDrawOptionsButton(image, font, saveButton, L"Save", true);
 
             wxString slotText = L"-= EMPTY =-";
             if (exists)
@@ -4404,7 +4548,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                 std::string ts;
                 if (PeekStrategicSaveSummary(path, money, rank, xp, ts))
                 {
-                    // ISO local timestamp -> compact DOS-style slot caption.
+                    // ISO local timestamp -> compact original-style caption.
                     // Example: 2026-09-29T21:48:10 -> 29092026 21:48
                     if (ts.size() >= 16 && ts[4] == '-' && ts[7] == '-')
                     {
@@ -4418,56 +4562,54 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                         slotText = wxString::Format(L"SLOT %02d", slot);
                 }
             }
-            OriginalDrawSpellText(image, font, slotText, 115, y + 6,
-                exists ? green : dim, 355, true);
+            OriginalDrawSpellText(image, font, slotText, slotRow.x,
+                OriginalCenteredTextY(font, slotRow.y, slotRow.h),
+                exists ? green : dim, slotRow.w, true);
         }
 
-        OriginalDrawSpellText(image, font, L"Gamma Correction", 28, 337, green, 178, true);
-        OriginalDrawSpellText(image, font, L"Music Volume", 28, 384, green, 178, true);
-        OriginalDrawSpellText(image, font, L"Sound Volume", 28, 429, green, 178, true);
+        // Slider captions are centred in the exact 18 px header bands of the
+        // three STROPT controls.  The +/- button chrome is already present in
+        // OPTIONS.LZ; do not draw a second, shifted pair of glyphs on top.
+        OriginalDrawSpellText(image, font, L"Gamma Correction", kOptGammaTitle.x,
+            OriginalCenteredTextY(font, kOptGammaTitle.y, kOptGammaTitle.h),
+            green, kOptGammaTitle.w, true);
+        OriginalDrawSpellText(image, font, L"Music Volume", kOptMusicTitle.x,
+            OriginalCenteredTextY(font, kOptMusicTitle.y, kOptMusicTitle.h),
+            green, kOptMusicTitle.w, true);
+        OriginalDrawSpellText(image, font, L"Sound Volume", kOptSoundTitle.x,
+            OriginalCenteredTextY(font, kOptSoundTitle.y, kOptSoundTitle.h),
+            green, kOptSoundTitle.w, true);
 
-        // OPTIONS.LZ carries the metal plates but not their live +/- glyphs.
-        // Draw them at native pixels so they stay inside the recessed buttons.
-        const wxColour controlGlyph(174, 178, 168);
-        for (int cy : { 361, 408, 455 })
-        {
-            OriginalHLine(image, 32, 40, cy, controlGlyph);
-            OriginalHLine(image, 189, 197, cy, controlGlyph);
-            OriginalVLine(image, 193, cy - 4, cy + 4, controlGlyph);
-        }
+        // The obsolete tactical-resolution selector is intentionally not
+        // populated.  It has no live text, selection or hit action in the
+        // remake.
 
-        OriginalDrawSpellText(image, font, L"War map resolution", 234, 345, green, 166, true);
-        const std::array<wxString,3> resolutions = { L"640x480", L"800x600", L"1024x768" };
-        for (int i = 0; i < 3; ++i)
-            OriginalDrawSpellText(image, font, resolutions[static_cast<size_t>(i)],
-                250, 363 + i * 15,
-                i == m_originalBattleResolution ? selected : green, 134, true);
+        // Quick Help live overlay inside STROPT.QH #2.  These sub-rectangles
+        // are aligned to the original runtime overlay rather than offsetting
+        // text from the parent rectangle by arbitrary constants.
+        OriginalDrawSpellText(image, font, L"Quick Help", kOptQuickTitle.x,
+            OriginalCenteredTextY(font, kOptQuickTitle.y, kOptQuickTitle.h),
+            green, kOptQuickTitle.w, true);
+        OriginalDrawSpellText(image, font, L"On", kOptQuickOn.x,
+            OriginalCenteredTextY(font, kOptQuickOn.y, kOptQuickOn.h),
+            m_originalQuickHelp ? selected : green, kOptQuickOn.w, true);
+        OriginalDrawSpellText(image, font, L"Off", kOptQuickOff.x,
+            OriginalCenteredTextY(font, kOptQuickOff.y, kOptQuickOff.h),
+            !m_originalQuickHelp ? selected : green, kOptQuickOff.w, true);
 
-        // Native selection brackets visible in the reference OPTIONS screen.
-        const int resolutionY = 366 + std::clamp(m_originalBattleResolution, 0, 2) * 15;
-        OriginalVLine(image, 269, 355, resolutionY, green);
-        OriginalVLine(image, 359, 355, resolutionY, green);
-        OriginalHLine(image, 269, 282, resolutionY, green);
-        OriginalHLine(image, 346, 359, resolutionY, green);
-        OriginalSetPixel(image, 281, resolutionY - 1, green);
-        OriginalSetPixel(image, 281, resolutionY + 1, green);
-        OriginalSetPixel(image, 347, resolutionY - 1, green);
-        OriginalSetPixel(image, 347, resolutionY + 1, green);
+        const int helpY = m_originalQuickHelp ? kOptQuickBracketOnY : kOptQuickBracketOffY;
+        OriginalVLine(image, kOptQuickBracketLeft, kOptQuickBracketTop, helpY, green);
+        OriginalVLine(image, kOptQuickBracketRight, kOptQuickBracketTop, helpY, green);
+        OriginalHLine(image, kOptQuickBracketLeft, kOptQuickBracketLeft + 21, helpY, green);
+        OriginalHLine(image, kOptQuickBracketRight - 21, kOptQuickBracketRight, helpY, green);
+        OriginalSetPixel(image, kOptQuickBracketLeft + 20, helpY - 1, green);
+        OriginalSetPixel(image, kOptQuickBracketLeft + 20, helpY + 1, green);
+        OriginalSetPixel(image, kOptQuickBracketRight - 20, helpY - 1, green);
+        OriginalSetPixel(image, kOptQuickBracketRight - 20, helpY + 1, green);
 
-        OriginalDrawSpellText(image, font, L"Quick Help", 434, 345, green, 74, true);
-        OriginalDrawSpellText(image, font, L"On", 434, 367, m_originalQuickHelp ? selected : green, 74, true);
-        OriginalDrawSpellText(image, font, L"Off", 434, 383, !m_originalQuickHelp ? selected : green, 74, true);
-        const int helpY = m_originalQuickHelp ? 370 : 386;
-        OriginalVLine(image, 434, 356, helpY, green);
-        OriginalVLine(image, 507, 356, helpY, green);
-        OriginalHLine(image, 434, 455, helpY, green);
-        OriginalHLine(image, 486, 507, helpY, green);
-        OriginalSetPixel(image, 454, helpY - 1, green);
-        OriginalSetPixel(image, 454, helpY + 1, green);
-        OriginalSetPixel(image, 487, helpY - 1, green);
-        OriginalSetPixel(image, 487, helpY + 1, green);
-
-        OriginalDrawSpellText(image, font, L"Exit", 327, 447, green, 113, true);
+        // STROPT.QH #3 is the 113x41 active Exit region; the visible live
+        // button inside it is the original 71x29 rectangle at 346,440.
+        OriginalDrawOptionsButton(image, font, kOptExitButton, L"Exit", true);
 
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
@@ -5501,21 +5643,21 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
 
         if (m_originalStrategicScreen == OriginalStrategicScreen::Options)
         {
-            // Nine native save rows (STROPT.QH: load 20,22,75,280;
-            // save 490,22,75,280). Gaps between the 27px buttons remain inert.
-            for (int i = 0; i < 9; ++i)
+            // Nine native save/load rows inside the STROPT.QH columns.
+            // Row 0 is y=22..49 inclusive and rows repeat every 31 px.
+            for (int i = 0; i < kOptSaveSlotCount; ++i)
             {
-                const int y = 22 + i * 31;
-                if (ly < y || ly >= y + 27)
+                const int y = kOptLoadColumn.y + i * kOptSaveRowPitch;
+                if (ly < y || ly >= y + kOptSaveButtonH)
                     continue;
                 const int slot = i + 1;
-                if (lx >= 20 && lx < 95)
+                if (lx >= kOptLoadColumn.x && lx < kOptLoadColumn.x + kOptLoadColumn.w)
                 {
                     LoadStrategicGameFromSlot(slot, false);
                     refreshRestored();
                     return;
                 }
-                if (lx >= 490 && lx < 565)
+                if (lx >= kOptSaveColumn.x && lx < kOptSaveColumn.x + kOptSaveColumn.w)
                 {
                     SaveStrategicGameToSlot(slot, false);
                     refreshRestored();
@@ -5525,16 +5667,25 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
 
             auto sliderPercentFromX = [](int x)
             {
-                return std::clamp(((x - 47) * 100 + 65) / 130, 0, 100);
+                // 140 px groove x=47..186; 10 px thumb travels x=47..177.
+                constexpr int travel = kOptSliderTrackW - kOptSliderThumbW;
+                return std::clamp(((x - kOptSliderTrackX) * 100 + travel / 2) / travel, 0, 100);
             };
-            auto sliderHit = [&](int y0, int current, const std::function<void(int)>& apply) -> bool
+            auto sliderHit = [&](const OriginalUiRect& track, int current,
+                                 const std::function<void(int)>& apply) -> bool
             {
-                if (ly < y0 || ly >= y0 + 41 || lx < 28 || lx >= 206)
+                if (ly < track.y || ly >= track.y + track.h ||
+                    lx < track.x || lx >= track.x + track.w)
                     return false;
+
                 int value = current;
-                if (lx < 47) value = std::max(0, current - 5);
-                else if (lx >= 187) value = std::min(100, current + 5);
-                else value = sliderPercentFromX(lx);
+                if (lx < kOptSliderTrackX)
+                    value = std::max(0, current - 5);
+                else if (lx >= kOptSliderTrackX + kOptSliderTrackW)
+                    value = std::min(100, current + 5);
+                else
+                    value = sliderPercentFromX(lx);
+
                 apply(value);
                 refreshRestored();
                 return true;
@@ -5543,44 +5694,63 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             SpellMap* spellMap = m_main ? m_main->GetSpellMap() : nullptr;
             const int gammaPct = std::clamp(static_cast<int>(std::lround(
                 ((spellMap ? spellMap->GetGamma() : 1.3) - 0.5) * (100.0 / 1.5))), 0, 100);
-            if (sliderHit(333, gammaPct, [&](int p) {
+            if (sliderHit(kOptGammaTrack, gammaPct, [&](int p) {
                 if (spellMap) spellMap->SetGamma(0.5 + p * 0.015);
             })) return;
 
             const int musicPct = (m_spellData && m_spellData->midi)
                 ? std::clamp(static_cast<int>(std::lround(m_spellData->midi->GetVolume() * 100.0)), 0, 100) : 0;
-            if (sliderHit(380, musicPct, [&](int p) {
+            if (sliderHit(kOptMusicTrack, musicPct, [&](int p) {
                 if (m_spellData && m_spellData->midi) m_spellData->midi->SetVolume(p / 100.0);
             })) return;
 
             const int soundPct = (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
                 ? std::clamp(static_cast<int>(std::lround(m_spellData->sounds->channels->GetVolume() * 100.0)), 0, 100) : 0;
-            if (sliderHit(425, soundPct, [&](int p) {
+            if (sliderHit(kOptSoundTrack, soundPct, [&](int p) {
                 if (m_spellData && m_spellData->sounds && m_spellData->sounds->channels)
                     m_spellData->sounds->channels->SetVolume(p / 100.0);
             })) return;
 
-            if (wxRect(234, 339, 166, 76).Contains(lx, ly))
+            // STROPT.QH #1 intentionally has no action in the remake:
+            // tactical resolution switching is not supported. Consume clicks
+            // inside the original rectangle so it remains a deliberately empty
+            // panel rather than accidentally falling through to another action.
+            if (wxRect(kOptResolution.x, kOptResolution.y, kOptResolution.w, kOptResolution.h).Contains(lx, ly))
+                return;
+
+            if (wxRect(kOptQuickHelp.x, kOptQuickHelp.y, kOptQuickHelp.w, kOptQuickHelp.h).Contains(lx, ly))
             {
-                if (ly >= 358 && ly < 375) m_originalBattleResolution = 0;
-                else if (ly >= 375 && ly < 390) m_originalBattleResolution = 1;
-                else if (ly >= 390) m_originalBattleResolution = 2;
+                if (wxRect(kOptQuickOn.x, kOptQuickOn.y, kOptQuickOn.w, kOptQuickOn.h).Contains(lx, ly))
+                    m_originalQuickHelp = true;
+                else if (wxRect(kOptQuickOff.x, kOptQuickOff.y, kOptQuickOff.w, kOptQuickOff.h).Contains(lx, ly))
+                    m_originalQuickHelp = false;
+                else
+                    return;
                 refreshRestored();
                 return;
             }
 
-            if (wxRect(434, 336, 74, 77).Contains(lx, ly))
+            // STROPT.QH #3: native Exit/Konec rectangle = 327,435,113x41.
+            // In the remake this exits the whole application, not merely the
+            // strategic window. Offer an explicit save first; Cancel at either
+            // dialog keeps the game running.
+            if (wxRect(kOptExit.x, kOptExit.y, kOptExit.w, kOptExit.h).Contains(lx, ly))
             {
-                if (ly >= 360 && ly < 382) m_originalQuickHelp = true;
-                else if (ly >= 382) m_originalQuickHelp = false;
-                refreshRestored();
-                return;
-            }
+                wxMessageDialog quitDlg(
+                    this,
+                    "Save the game before exiting?",
+                    "Exit Spellcross",
+                    wxYES_NO | wxCANCEL | wxICON_QUESTION);
+                const int answer = quitDlg.ShowModal();
+                if (answer == wxID_CANCEL)
+                    return;
+                if (answer == wxID_YES && !PromptStrategicSaveSlot(9, false))
+                    return;
 
-            if (wxRect(327, 435, 113, 41).Contains(lx, ly))
-            {
-                SaveStrategicState();
-                Close(true);
+                if (m_main)
+                    m_main->Close(true);
+                else
+                    Close(true);
                 return;
             }
             return;
@@ -6476,12 +6646,14 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
 }
 
-void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
+bool StrategicLevelFrame::PromptStrategicSaveSlot(int maxSlots, bool notify)
 {
-    wxArrayString choices;
-    choices.reserve(10);
+    maxSlots = std::clamp(maxSlots, 1, 10);
 
-    for (int i = 1; i <= 10; ++i)
+    wxArrayString choices;
+    choices.reserve(static_cast<size_t>(maxSlots));
+
+    for (int i = 1; i <= maxSlots; ++i)
     {
         const auto p = GetStrategicSaveSlotPath(m_level, i);
         std::error_code ec;
@@ -6507,45 +6679,15 @@ void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
     wxSingleChoiceDialog dlg(this, "Choose a slot to save:", "Save game", choices);
     dlg.SetSelection(0);
     if (dlg.ShowModal() != wxID_OK)
-        return;
+        return false;
 
-    const int slot = dlg.GetSelection() + 1;
-    const auto path = GetStrategicSaveSlotPath(m_level, slot);
+    SaveStrategicGameToSlot(dlg.GetSelection() + 1, notify);
+    return true;
+}
 
-    // Save full strategic state into slot file (with research + unit state persistence)
-    ResearchPersistSaveView rsv;
-    rsv.activeId = m_researchActiveId;
-    rsv.activeIndex = m_researchActiveIndex;
-    rsv.allocPerTurn = m_researchAllocPerTurn;
-    rsv.progressById = &m_researchProgressById;
-    rsv.completed = &m_researchCompleted;
-    const ResearchPersistSaveView* prevR = g_researchPersistSave;
-    g_researchPersistSave = &rsv;
-
-    UnitStatePersistSaveView usv;
-    usv.states = &m_unitStates;
-    const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
-    g_unitStatePersistSave = &usv;
-
-    MissionFlowPersistSaveView mfsv;
-    mfsv.timeoutTurn = &m_territoryTimeoutTurn;
-    mfsv.triggeredEvents = &m_triggeredLevelEvents;
-    mfsv.activatedEvents = &m_activatedEvents;
-    mfsv.counterAttacks = &m_counterAttacks;
-    const MissionFlowPersistSaveView* prevMF = g_missionFlowPersistSave;
-    g_missionFlowPersistSave = &mfsv;
-
-    SaveStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
-        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
-        /*timestamp*/NowIsoLocal());
-
-    g_missionFlowPersistSave = prevMF;
-    g_unitStatePersistSave = prevU;
-    g_researchPersistSave = prevR;
-
-    wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
+void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
+{
+    (void)PromptStrategicSaveSlot(10, true);
 }
 
 void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
@@ -14692,16 +14834,9 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
     // persist progression before leaving the strategic screen
     SaveStrategicState();
 
-    // Apply the resolution selected on the reconstructed strategic Options screen.
-    // Do not fight a maximized main window; in that case the platform owns its size.
-    if (!m_main->IsMaximized())
-    {
-        static const std::array<wxSize, 3> kBattleClientSizes = {
-            wxSize(640, 480), wxSize(800, 600), wxSize(1024, 768)
-        };
-        const int resolutionIndex = std::clamp(m_originalBattleResolution, 0, 2);
-        m_main->SetClientSize(kBattleClientSizes[static_cast<size_t>(resolutionIndex)]);
-    }
+    // The original game exposed a tactical-resolution selector in STROPT.QH,
+    // but the remake renderer does not implement those legacy modes. Keep the
+    // current application/window size unchanged when entering a battle.
 
     // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
     m_main->SetGameModeUI(true);
@@ -16531,15 +16666,15 @@ static bool BuildStrategicScreenBitmap(SpellData* spellData, const char* resourc
     }
     else if (screenName == "VMF_FULL.LZ")
     {
-        blitLayer("FACTORY.LZ", 569, 464, 3, 8);
+        blitLayer("FACTORY.LZ", 569, 464, 6, 8);
     }
     else if (screenName == "VMS_FULL.LZ")
     {
-        blitLayer("STATS.LZ", 569, 464, 3, 8);
+        blitLayer("STATS.LZ", 569, 464, 6, 8);
     }
     else if (screenName == "VMO_FULL.LZ")
     {
-        blitLayer("OPTIONS.LZ", 569, 464, 3, 8);
+        blitLayer("OPTIONS.LZ", 569, 464, 6, 8);
     }
 
     outBmp = wxBitmap(img);

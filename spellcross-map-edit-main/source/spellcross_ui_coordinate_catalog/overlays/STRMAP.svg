@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRMAP.QH — 5 rectangles</text>
+<rect x="19" y="22" width="377" height="256" fill="none" stroke="white" stroke-width="1"/>
+<text x="21" y="33" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Map displaying all areas in current battle sector. In some areas there are a number of rounds remaining for possible completion of the mission, an area marked by two swords is the final area of the battle sector. [19,22,377,256]</title>
+<rect x="23" y="326" width="370" height="130" fill="none" stroke="white" stroke-width="1"/>
+<text x="25" y="337" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Brief information about the selected area, what you can expect there, and what your task is (if there is any). [23,326,370,130]</title>
+<rect x="418" y="8" width="135" height="420" fill="none" stroke="white" stroke-width="1"/>
+<text x="420" y="19" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Unit selection area for attack. The number of units per attack is limited by your rank. Right mouse click on unit&#x27;s name displays information about it. [418,8,135,420]</title>
+<rect x="422" y="441" width="70" height="27" fill="none" stroke="white" stroke-width="1"/>
+<text x="424" y="452" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Start attack - you need to select a territory and units before the attack [422,441,70,27]</title>
+<rect x="497" y="441" width="70" height="27" fill="none" stroke="white" stroke-width="1"/>
+<text x="499" y="452" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Cancel attack [497,441,70,27]</title>
+</svg>

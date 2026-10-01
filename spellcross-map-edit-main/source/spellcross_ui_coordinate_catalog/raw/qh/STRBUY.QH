@@ -1,0 +1,24 @@
+;/////////////strategic BUYING UNITS//////////////////////
+;
+15,11,302,306
+Core units in your army
+20,329,290,137
+List of all support units
+in the army. Support units
+can not be purchased, they
+are assigned to you by your
+headquarters
+416,7,156,281
+List of units available to 
+purchase. Click right mouse 
+button to display information 
+about the unit, left button 
+to select the unit for purchase.
+347,300,222,130
+Information about unit
+to purchase
+420,438,69,26
+Price and number of turns
+needed to purchase the unit
+496,442,69,26
+Confirm the purchase 

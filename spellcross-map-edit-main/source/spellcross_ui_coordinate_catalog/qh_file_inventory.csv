@@ -1,0 +1,15 @@
+﻿name,records,archive_offset,archive_bytes,scope,screen
+BATTLES.QH,36,84826,2109,tactical,battlefield_hud
+BATTOPS.QH,8,86935,587,tactical,battlefield_options
+STRBAR.QH,11,6564144,473,strategic,strategy_navigation_bar
+STRBUY.QH,6,6564617,578,strategic,unit_requisition
+STRHIER.QH,4,6565195,569,strategic,command_structure
+STRINFO.QH,3,6565764,174,strategic,unit_technology_information
+STRMAP.QH,5,6565938,692,strategic,strategy_map
+STRMAP1.QH,1,6566630,146,strategic,strategy_map_unit_count
+STRMAP2.QH,2,6566776,238,strategic,strategy_map_unit_limit_dialog
+STROPT.QH,9,6567014,665,strategic,strategy_options
+STRRES.QH,6,6567679,479,strategic,resources
+STRRSR.QH,8,6568158,664,strategic,research
+STRSTAT.QH,3,6568822,158,strategic,statistics
+STRUPG.QH,10,6568980,914,strategic,unit_management_upgrade

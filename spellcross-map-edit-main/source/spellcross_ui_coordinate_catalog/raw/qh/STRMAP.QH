@@ -1,0 +1,25 @@
+;//////STRATEGIC MAP///////
+;
+19,22,377,256
+Map displaying all areas in current
+battle sector. In some areas there
+are a number of rounds remaining for
+possible completion of the mission, an 
+area marked by two swords is the final
+area of the battle sector.
+23,326,370,130
+Brief information about the selected area, 
+what you can expect there, and what your
+task is (if there is any).
+418,8,135,420
+Unit selection area for attack. The
+number of units per attack is limited
+by your rank. Right mouse click on
+unit's name displays information
+about it.
+422,441,70,27
+Start attack - you need to 
+select a territory and units 
+before the attack
+497,441,70,27
+Cancel attack

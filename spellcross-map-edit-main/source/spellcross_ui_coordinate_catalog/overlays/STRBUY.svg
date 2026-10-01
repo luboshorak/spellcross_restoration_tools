@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRBUY.QH — 6 rectangles</text>
+<rect x="15" y="11" width="302" height="306" fill="none" stroke="white" stroke-width="1"/>
+<text x="17" y="22" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Core units in your army [15,11,302,306]</title>
+<rect x="20" y="329" width="290" height="137" fill="none" stroke="white" stroke-width="1"/>
+<text x="22" y="340" fill="white" font-family="monospace" font-size="9">2</text>
+<title>List of all support units in the army. Support units can not be purchased, they are assigned to you by your headquarters [20,329,290,137]</title>
+<rect x="416" y="7" width="156" height="281" fill="none" stroke="white" stroke-width="1"/>
+<text x="418" y="18" fill="white" font-family="monospace" font-size="9">3</text>
+<title>List of units available to purchase. Click right mouse button to display information about the unit, left button to select the unit for purchase. [416,7,156,281]</title>
+<rect x="347" y="300" width="222" height="130" fill="none" stroke="white" stroke-width="1"/>
+<text x="349" y="311" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Information about unit to purchase [347,300,222,130]</title>
+<rect x="420" y="438" width="69" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="422" y="449" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Price and number of turns needed to purchase the unit [420,438,69,26]</title>
+<rect x="496" y="442" width="69" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="498" y="453" fill="white" font-family="monospace" font-size="9">6</text>
+<title>Confirm the purchase [496,442,69,26]</title>
+</svg>

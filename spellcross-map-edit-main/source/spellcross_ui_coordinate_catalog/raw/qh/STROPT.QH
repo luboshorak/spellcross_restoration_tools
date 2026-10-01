@@ -1,0 +1,30 @@
+;/////////////strategic OPTIONS screen/////////
+;
+234,339,166,76
+Display resolution of
+the battlefield
+434,336,74,77
+Turn the quick help 
+feature on / off
+327,435,113,41
+Quit the game to the main menu. Your
+position will be saved and you will
+be able to continue by choosing
+"CONTINUE GAME" in the main menu
+115,25,355,277
+Your saved positions
+20,22,75,280
+Load game
+490,22,75,280
+Save game - if you enter position
+without a name then the name will
+be created automatically.
+28,333,178,41
+Slider control for display
+brightness
+28,380,178,41
+Slide control for large
+map music volume
+28,425,178,41
+Slide control for sound
+effects volume

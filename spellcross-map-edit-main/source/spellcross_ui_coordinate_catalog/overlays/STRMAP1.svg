@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRMAP1.QH — 1 rectangles</text>
+<rect x="254" y="25" width="134" height="80" fill="none" stroke="white" stroke-width="1"/>
+<text x="256" y="36" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Number of selected units for the attack and maximum number which is limited by your rank. [254,25,134,80]</title>
+</svg>

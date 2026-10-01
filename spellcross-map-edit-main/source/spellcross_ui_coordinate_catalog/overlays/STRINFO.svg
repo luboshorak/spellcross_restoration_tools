@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRINFO.QH — 3 rectangles</text>
+<rect x="417" y="7" width="136" height="467" fill="none" stroke="white" stroke-width="1"/>
+<text x="419" y="18" fill="white" font-family="monospace" font-size="9">1</text>
+<title>List of known technologies and units [417,7,136,467]</title>
+<rect x="198" y="442" width="69" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="200" y="453" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Display next page [198,442,69,26]</title>
+<rect x="285" y="442" width="69" height="26" fill="none" stroke="white" stroke-width="1"/>
+<text x="287" y="453" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Display previous page [285,442,69,26]</title>
+</svg>

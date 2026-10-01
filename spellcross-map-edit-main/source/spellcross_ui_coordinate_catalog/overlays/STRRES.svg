@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRRES.QH — 6 rectangles</text>
+<rect x="89" y="336" width="401" height="21" fill="none" stroke="white" stroke-width="1"/>
+<text x="91" y="347" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Each areas resources in this turn [89,336,401,21]</title>
+<rect x="167" y="408" width="59" height="38" fill="none" stroke="white" stroke-width="1"/>
+<text x="169" y="419" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Total resources allocated to research this turn [167,408,59,38]</title>
+<rect x="230" y="425" width="111" height="16" fill="none" stroke="white" stroke-width="1"/>
+<text x="232" y="436" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Money/research resource allocation slider [230,425,111,16]</title>
+<rect x="342" y="408" width="59" height="38" fill="none" stroke="white" stroke-width="1"/>
+<text x="344" y="419" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Total resources converted to cash this turn [342,408,59,38]</title>
+<rect x="266" y="381" width="50" height="27" fill="none" stroke="white" stroke-width="1"/>
+<text x="268" y="392" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Total pool of resources to use this turn [266,381,50,27]</title>
+<rect x="101" y="21" width="376" height="256" fill="none" stroke="white" stroke-width="1"/>
+<text x="103" y="32" fill="white" font-family="monospace" font-size="9">6</text>
+<title>Map of all your current lands, indicating the resources you are getting from them and how long these will last [101,21,376,256]</title>
+</svg>

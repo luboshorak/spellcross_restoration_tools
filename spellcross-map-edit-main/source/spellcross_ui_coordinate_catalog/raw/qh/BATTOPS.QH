@@ -1,0 +1,27 @@
+;================Battlefield OPTIONS DIALOG=======================
+;
+118,24,169,91
+Set movement style for
+friendly and enemy units
+131,126,136,37
+Slider control for
+display brightness
+131,172,136,37
+Slider control for
+background music volume
+131,223,136,37
+Slider control for
+sound effects volume
+131,274,145,53
+In-battle save/load system.
+You have limited number of
+saves on the battlefield
+map.
+285,279,177,85
+Display resolution
+of the battlefield
+298,70,214,203
+A list of all mission objectives.
+Fulfilled objectives are green
+472,299,52,53
+Close options box

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRBAR.QH — 11 rectangles</text>
+<rect x="590" y="131" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="142" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Strategic map [590,131,37,24]</title>
+<rect x="590" y="162" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="173" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Command structure [590,162,37,24]</title>
+<rect x="590" y="193" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="204" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Unit management [590,193,37,24]</title>
+<rect x="590" y="224" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="235" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Unit requisition [590,224,37,24]</title>
+<rect x="590" y="255" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="266" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Technological research [590,255,37,24]</title>
+<rect x="590" y="286" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="297" fill="white" font-family="monospace" font-size="9">6</text>
+<title>Unit and technology information [590,286,37,24]</title>
+<rect x="590" y="317" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="328" fill="white" font-family="monospace" font-size="9">7</text>
+<title>Resources map [590,317,37,24]</title>
+<rect x="590" y="347" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="358" fill="white" font-family="monospace" font-size="9">8</text>
+<title>Current performance rating [590,347,37,24]</title>
+<rect x="590" y="379" width="37" height="24" fill="none" stroke="white" stroke-width="1"/>
+<text x="592" y="390" fill="white" font-family="monospace" font-size="9">9</text>
+<title>Options and saving [590,379,37,24]</title>
+<rect x="587" y="431" width="47" height="44" fill="none" stroke="white" stroke-width="1"/>
+<text x="589" y="442" fill="white" font-family="monospace" font-size="9">10</text>
+<title>End current turn [587,431,47,44]</title>
+<rect x="577" y="15" width="62" height="92" fill="none" stroke="white" stroke-width="1"/>
+<text x="579" y="26" fill="white" font-family="monospace" font-size="9">11</text>
+<title>Current status of your resources. [577,15,62,92]</title>
+</svg>

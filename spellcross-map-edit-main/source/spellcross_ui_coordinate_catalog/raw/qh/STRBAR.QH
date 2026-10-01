@@ -1,0 +1,26 @@
+;===================Strategic map BAR========================
+;
+590,131,37,24
+Strategic map
+590,162,37,24
+Command structure
+590,193,37,24
+Unit management
+590,224,37,24
+Unit requisition
+590,255,37,24
+Technological research
+590,286,37,24
+Unit and technology 
+information
+590,317,37,24
+Resources map
+590,347,37,24
+Current performance rating
+590,379,37,24
+Options and saving
+587,431,47,44
+End current turn
+577,15,62,92
+Current status of your
+resources.

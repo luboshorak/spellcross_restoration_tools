@@ -1,0 +1,22 @@
+;/////////////strategic resources screen/////////
+;
+89,336,401,21
+Each areas resources 
+in this turn
+167,408,59,38
+Total resources allocated
+to research this turn
+230,425,111,16
+Money/research resource
+allocation slider
+342,408,59,38
+Total resources converted
+to cash this turn
+266,381,50,27
+Total pool of resources
+to use this turn
+101,21,376,256
+Map of all your current lands,
+indicating the resources you are
+getting from them and how long
+these will last

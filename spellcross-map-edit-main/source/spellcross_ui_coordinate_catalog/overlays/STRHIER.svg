@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRHIER.QH — 4 rectangles</text>
+<rect x="416" y="10" width="137" height="467" fill="none" stroke="white" stroke-width="1"/>
+<text x="418" y="21" fill="white" font-family="monospace" font-size="9">1</text>
+<title>List of all units and Commanders. You can highlight an item with the left mouse button. [416,10,137,467]</title>
+<rect x="324" y="441" width="70" height="28" fill="none" stroke="white" stroke-width="1"/>
+<text x="326" y="452" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Switch to the other part of hierarchy [324,441,70,28]</title>
+<rect x="11" y="23" width="152" height="405" fill="none" stroke="white" stroke-width="1"/>
+<text x="13" y="34" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Units in formations. Click right mouse button to remove unit from a formation. [11,23,152,405]</title>
+<rect x="164" y="48" width="229" height="354" fill="none" stroke="white" stroke-width="1"/>
+<text x="166" y="59" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Commanders hierarchy. When assigning a Commander, click left mouse button on the question mark field below the Commanders&#x27; name and then click left button on one of its units. Click right mouse button to scratch a Commander selection. [164,48,229,354]</title>
+</svg>

@@ -1,0 +1,45 @@
+﻿id,scope,screen,source_archive,source_file,record_index,source_line,section,x,y,width,height,right_exclusive,bottom_exclusive,right_inclusive,bottom_inclusive,description,coordinate_space,origin,units
+battles_001,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,1,4,left info,1,403,61,50,62,453,61,452,Picture of unit,native_640x480_screen_pixels,top_left,px
+battles_002,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,2,6,left info,2,453,57,8,59,461,58,460,Experience points left to next level,native_640x480_screen_pixels,top_left,px
+battles_003,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,3,9,left info,1,462,60,16,61,478,60,477,Current experience level,native_640x480_screen_pixels,top_left,px
+battles_004,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,4,11,left info,13,385,17,13,30,398,29,397,Unit is frozen,native_640x480_screen_pixels,top_left,px
+battles_005,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,5,13,left info,36,385,17,13,53,398,52,397,Unit is paralyzed,native_640x480_screen_pixels,top_left,px
+battles_006,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,6,16,right info,579,403,61,50,640,453,639,452,Picture of unit,native_640x480_screen_pixels,top_left,px
+battles_007,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,7,18,right info,580,453,57,8,637,461,636,460,Experience points left to next level,native_640x480_screen_pixels,top_left,px
+battles_008,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,8,21,right info,579,462,60,16,639,478,638,477,Current experience level,native_640x480_screen_pixels,top_left,px
+battles_009,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,9,23,right info,591,385,17,13,608,398,607,397,Unit is frozen,native_640x480_screen_pixels,top_left,px
+battles_010,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,10,25,right info,614,385,17,13,631,398,630,397,Unit is paralyzed,native_640x480_screen_pixels,top_left,px
+battles_011,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,11,28,unit info,71,415,9,51,80,466,79,465,Morale of the unit,native_640x480_screen_pixels,top_left,px
+battles_012,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,12,30,unit info,79,404,8,48,87,452,86,451,Action points left,native_640x480_screen_pixels,top_left,px
+battles_013,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,13,32,unit info,87,406,5,32,92,438,91,437,Remaining shots,native_640x480_screen_pixels,top_left,px
+battles_014,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,14,34,unit info,95,408,137,16,232,424,231,423,Unit's name,native_640x480_screen_pixels,top_left,px
+battles_015,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,15,36,unit info,117,433,114,9,231,442,230,441,Current status: green = fit to fight yellow = wounded black = dead,native_640x480_screen_pixels,top_left,px
+battles_016,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,16,41,unit info,161,464,32,13,193,477,192,476,Weapon strength against flying targets,native_640x480_screen_pixels,top_left,px
+battles_017,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,17,44,unit info,125,464,32,13,157,477,156,476,Weapon strength against heavy targets,native_640x480_screen_pixels,top_left,px
+battles_018,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,18,47,unit info,99,464,23,13,122,477,121,476,Weapon strength against infantry,native_640x480_screen_pixels,top_left,px
+battles_019,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,19,50,unit info,201,464,32,13,233,477,232,476,Units armour,native_640x480_screen_pixels,top_left,px
+battles_020,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,20,52,unit info,121,443,31,12,152,455,151,454,Total,native_640x480_screen_pixels,top_left,px
+battles_021,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,21,54,unit info,155,443,31,12,186,455,185,454,Fit to fight,native_640x480_screen_pixels,top_left,px
+battles_022,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,22,56,unit info,195,443,31,12,226,455,225,454,Wounded,native_640x480_screen_pixels,top_left,px
+battles_023,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,23,58,unit info,98,437,17,26,115,463,114,462,Entrenchment,native_640x480_screen_pixels,top_left,px
+battles_024,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,24,61,buttons,413,409,33,26,446,435,445,434,Toggle map on/off. Click by left button to the map to move your view or right button to exit the map,native_640x480_screen_pixels,top_left,px
+battles_025,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,25,67,buttons,451,409,33,26,484,435,483,434,Select between air/ground unit of the right info display panel,native_640x480_screen_pixels,top_left,px
+battles_026,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,26,72,buttons,487,409,33,26,520,435,519,434,Go to any of your units,native_640x480_screen_pixels,top_left,px
+battles_027,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,27,74,buttons,536,409,33,26,569,435,568,434,End your turn and initiate enemy actions,native_640x480_screen_pixels,top_left,px
+battles_028,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,28,77,buttons,413,444,33,26,446,470,445,469,Toggle on/off unit info bar,native_640x480_screen_pixels,top_left,px
+battles_029,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,29,80,buttons,451,444,33,26,484,470,483,469,Information cursor: select the button and click on unit to display detailed info about them,native_640x480_screen_pixels,top_left,px
+battles_030,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,30,86,buttons,487,444,33,26,520,470,519,469,"List of all mission objectives, sound and graphics options, load and save game",native_640x480_screen_pixels,top_left,px
+battles_031,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,31,90,buttons,536,444,33,26,569,470,568,469,Retreat. You will lose all units that are not on the starting cross squares,native_640x480_screen_pixels,top_left,px
+battles_032,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,32,94,buttons,248,406,33,26,281,432,280,431,Go to last unit,native_640x480_screen_pixels,top_left,px
+battles_033,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,33,96,buttons,284,406,33,26,317,432,316,431,"Left mouse button: next unit, right mouse button: previous unit",native_640x480_screen_pixels,top_left,px
+battles_034,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,34,101,buttons,319,406,33,26,352,432,351,431,"Repair/heal unit, available only with all action points",native_640x480_screen_pixels,top_left,px
+battles_035,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,35,105,buttons,355,407,33,26,388,433,387,432,Activate special action for some of your troops type,native_640x480_screen_pixels,top_left,px
+battles_036,tactical,battlefield_hud,COMMON.FS,BATTLES.QH,36,108,buttons,243,456,151,19,394,475,393,474,"Info about square, unit or button under the mouse cursor",native_640x480_screen_pixels,top_left,px
+battops_001,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,1,3,Battlefield OPTIONS DIALOG,118,24,169,91,287,115,286,114,Set movement style for friendly and enemy units,native_640x480_screen_pixels,top_left,px
+battops_002,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,2,6,Battlefield OPTIONS DIALOG,131,126,136,37,267,163,266,162,Slider control for display brightness,native_640x480_screen_pixels,top_left,px
+battops_003,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,3,9,Battlefield OPTIONS DIALOG,131,172,136,37,267,209,266,208,Slider control for background music volume,native_640x480_screen_pixels,top_left,px
+battops_004,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,4,12,Battlefield OPTIONS DIALOG,131,223,136,37,267,260,266,259,Slider control for sound effects volume,native_640x480_screen_pixels,top_left,px
+battops_005,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,5,15,Battlefield OPTIONS DIALOG,131,274,145,53,276,327,275,326,In-battle save/load system. You have limited number of saves on the battlefield map.,native_640x480_screen_pixels,top_left,px
+battops_006,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,6,20,Battlefield OPTIONS DIALOG,285,279,177,85,462,364,461,363,Display resolution of the battlefield,native_640x480_screen_pixels,top_left,px
+battops_007,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,7,23,Battlefield OPTIONS DIALOG,298,70,214,203,512,273,511,272,A list of all mission objectives. Fulfilled objectives are green,native_640x480_screen_pixels,top_left,px
+battops_008,tactical,battlefield_options,COMMON.FS,BATTOPS.QH,8,26,Battlefield OPTIONS DIALOG,472,299,52,53,524,352,523,351,Close options box,native_640x480_screen_pixels,top_left,px

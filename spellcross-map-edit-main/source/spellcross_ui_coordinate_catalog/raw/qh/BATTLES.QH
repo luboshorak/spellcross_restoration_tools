@@ -1,0 +1,111 @@
+;=======================Battlefield============================
+;
+;/////////////////left info/////////////
+1,403,61,50
+Picture of unit
+2,453,57,8
+Experience points left
+to next level
+1,462,60,16
+Current experience level
+13,385,17,13
+Unit is frozen
+36,385,17,13
+Unit is paralyzed
+;//////////////////right info///////////////
+579,403,61,50
+Picture of unit
+580,453,57,8
+Experience points left
+to next level
+579,462,60,16
+Current experience level
+591,385,17,13
+Unit is frozen
+614,385,17,13
+Unit is paralyzed
+;/////////////////unit info/////////////////
+71,415,9,51
+Morale of the unit
+79,404,8,48
+Action points left
+87,406,5,32
+Remaining shots
+95,408,137,16
+Unit's name
+117,433,114,9
+Current status:
+ green = fit to fight
+ yellow = wounded
+ black = dead
+161,464,32,13
+Weapon strength against
+flying targets
+125,464,32,13
+Weapon strength against
+heavy targets
+99,464,23,13
+Weapon strength against 
+infantry
+201,464,32,13
+Units armour
+121,443,31,12
+Total
+155,443,31,12
+Fit to fight
+195,443,31,12
+Wounded
+98,437,17,26
+Entrenchment
+;//////////////////buttons
+413,409,33,26
+Toggle map on/off. 
+Click by left button 
+to the map to move your 
+view or right button 
+to exit the map
+451,409,33,26
+Select between 
+air/ground unit
+of the right info
+display panel
+487,409,33,26
+Go to any of your units
+536,409,33,26
+End your turn and 
+initiate enemy actions
+413,444,33,26
+Toggle on/off 
+unit info bar
+451,444,33,26
+Information cursor: 
+ select the button
+ and click on unit
+ to display detailed 
+ info about them
+487,444,33,26
+List of all mission objectives,
+sound and graphics options,
+load and save game
+536,444,33,26
+Retreat. You will lose
+all units that are not
+on the starting cross squares
+248,406,33,26
+Go to last unit
+284,406,33,26
+Left mouse button:
+ next unit,
+right mouse button: 
+ previous unit
+319,406,33,26
+Repair/heal unit,
+available only 
+with all action points
+355,407,33,26
+Activate special action for
+some of your troops type
+243,456,151,19
+Info about square, unit
+or button under the mouse
+cursor

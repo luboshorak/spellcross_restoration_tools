@@ -10,7 +10,7 @@ The screen is composed from original `COMMON.FS` resources:
 
 - `BIG_MAP.LZ` / `BIG_MAP.PAL` — common 640x480 right-side chrome
 - `VMO_FULL.LZ` — screen-specific shell
-- `OPTIONS.LZ` — 569x464 save/options panel at `(3,8)`
+- `OPTIONS.LZ` — 569x464 save/options panel at `(6,8)` (verified against original 640x480 frame; right edge lands exactly at x=575)
 - `_SHARED1.PAL` + `_OPTIONS.PAL` + `BIG_MAP.PAL` — native palette banks
 - `VMO_BAR.LZ` — native 10x12 slider thumb
 - `STROPT.QH` — recovered interaction rectangles
@@ -35,9 +35,9 @@ Recovered `STROPT.QH` geometry used by the implementation:
 - Gamma is connected to `SpellMap::GetGamma/SetGamma`.
 - Music volume is connected to the live MIDI volume.
 - Sound volume is connected to the live sound-channel volume.
-- Battlefield resolution is applied when launching a tactical map (640x480 / 800x600 / 1024x768) when the main window is not maximized.
+- Battlefield resolution selector: **removed in Stage 6.20** because the remake does not implement the original tactical rendering modes. Its native STROPT panel remains intentionally inactive.
 - Quick Help selection is represented and clickable; the remake currently has no native contextual Quick Help subsystem to toggle behind it.
-- Exit persists the strategic autosave and closes the strategic screen.
+- Exit behavior was revised in **Stage 6.20**: the native STROPT Exit button now offers Save / Don't save / Cancel and exits the whole application.
 - The ninth toolbar icon stays inside the restored framebuffer instead of
   opening the wx Screen dialog.
 - The native selection brackets and +/- slider glyphs are reconstructed at

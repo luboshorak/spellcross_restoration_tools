@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STRSTAT.QH — 3 rectangles</text>
+<rect x="132" y="38" width="362" height="146" fill="none" stroke="white" stroke-width="1"/>
+<text x="134" y="49" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Overall Game statistics [132,38,362,146]</title>
+<rect x="132" y="193" width="362" height="146" fill="none" stroke="white" stroke-width="1"/>
+<text x="134" y="204" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Current level statistics [132,193,362,146]</title>
+<rect x="132" y="344" width="256" height="102" fill="none" stroke="white" stroke-width="1"/>
+<text x="134" y="355" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Player information [132,344,256,102]</title>
+</svg>

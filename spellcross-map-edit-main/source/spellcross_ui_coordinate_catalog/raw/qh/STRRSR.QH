@@ -1,0 +1,29 @@
+;/////////////strategic RESEARCH////////////
+;
+31,8,228,21
+Name of the research 
+in progress
+14,33,262,21
+Research progress indicator
+19,73,357,130
+Information about the
+research in progress
+31,236,228,21
+Name of the research item
+highlighted in the scrollbar
+19,286,359,130
+Information about research
+item highlighted in the
+scrollbar
+417,12,136,464
+List of items available 
+to research
+305,227,69,28
+Stop research in progress
+(stopped research items will
+have green light bulb on its
+name in the scrollbar)
+305,438,69,28
+Start research of a highlighted item
+(if an item is being researched then
+you have to first stop that research)

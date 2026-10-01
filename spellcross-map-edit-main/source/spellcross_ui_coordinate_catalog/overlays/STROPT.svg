@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+<rect width="640" height="480" fill="#111"/>
+<text x="8" y="16" fill="white" font-family="monospace" font-size="12">STROPT.QH — 9 rectangles</text>
+<rect x="234" y="339" width="166" height="76" fill="none" stroke="white" stroke-width="1"/>
+<text x="236" y="350" fill="white" font-family="monospace" font-size="9">1</text>
+<title>Display resolution of the battlefield [234,339,166,76]</title>
+<rect x="434" y="336" width="74" height="77" fill="none" stroke="white" stroke-width="1"/>
+<text x="436" y="347" fill="white" font-family="monospace" font-size="9">2</text>
+<title>Turn the quick help feature on / off [434,336,74,77]</title>
+<rect x="327" y="435" width="113" height="41" fill="none" stroke="white" stroke-width="1"/>
+<text x="329" y="446" fill="white" font-family="monospace" font-size="9">3</text>
+<title>Quit the game to the main menu. Your position will be saved and you will be able to continue by choosing &quot;CONTINUE GAME&quot; in the main menu [327,435,113,41]</title>
+<rect x="115" y="25" width="355" height="277" fill="none" stroke="white" stroke-width="1"/>
+<text x="117" y="36" fill="white" font-family="monospace" font-size="9">4</text>
+<title>Your saved positions [115,25,355,277]</title>
+<rect x="20" y="22" width="75" height="280" fill="none" stroke="white" stroke-width="1"/>
+<text x="22" y="33" fill="white" font-family="monospace" font-size="9">5</text>
+<title>Load game [20,22,75,280]</title>
+<rect x="490" y="22" width="75" height="280" fill="none" stroke="white" stroke-width="1"/>
+<text x="492" y="33" fill="white" font-family="monospace" font-size="9">6</text>
+<title>Save game - if you enter position without a name then the name will be created automatically. [490,22,75,280]</title>
+<rect x="28" y="333" width="178" height="41" fill="none" stroke="white" stroke-width="1"/>
+<text x="30" y="344" fill="white" font-family="monospace" font-size="9">7</text>
+<title>Slider control for display brightness [28,333,178,41]</title>
+<rect x="28" y="380" width="178" height="41" fill="none" stroke="white" stroke-width="1"/>
+<text x="30" y="391" fill="white" font-family="monospace" font-size="9">8</text>
+<title>Slide control for large map music volume [28,380,178,41]</title>
+<rect x="28" y="425" width="178" height="41" fill="none" stroke="white" stroke-width="1"/>
+<text x="30" y="436" fill="white" font-family="monospace" font-size="9">9</text>
+<title>Slide control for sound effects volume [28,425,178,41]</title>
+</svg>
