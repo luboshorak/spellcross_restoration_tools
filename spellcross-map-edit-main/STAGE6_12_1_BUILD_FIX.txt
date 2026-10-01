@@ -1,0 +1,16 @@
+Stage 6.12.1 build fix
+======================
+
+Fixes the Windows/MSVC compile stopper reported after Stage 6.12:
+
+- `heading`: undeclared identifier in the reconstructed strategic-map renderer.
+  The map branch used the yellow heading colour for the dynamically shifted
+  `Jednotky` heading but did not declare that colour locally. The missing
+  `const wxColour heading(232, 232, 0);` is now present.
+
+Also removes the one CP1250-only accented comment introduced by Stage 6.12 in
+`form_level.cpp`, so that modified file is valid UTF-8 again. The project still
+contains older legacy source files in Windows-1250; warnings about invalid
+UTF-8 in those files predate this fix and are not compile blockers.
+
+No formation, hierarchy, tactical, save-format, or UI behaviour was changed.

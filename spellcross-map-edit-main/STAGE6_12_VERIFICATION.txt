@@ -1,0 +1,55 @@
+Stage 6.12 verification
+=======================
+
+Scope
+-----
+- dynamic tactical formation downgrade/collapse after casualties
+- commander death propagation back to strategic state
+- original active-formation hierarchy overlays
+- hierarchy right roster full-height fix
+- strategic-map Special commander/formation shortcuts
+
+Original-game evidence checked
+------------------------------
+COMMON.FS / FORMACIE.DEF:
+- battalion: Attack +1, Defence +1
+- regiment: Attack +2, Defence +1
+- brigade: Attack +4, Defence +3
+
+COMMON.FS original active overlays:
+- UNT_ACT.LZ0
+- PRP_ACT.LZ0
+- PLK_ACT.LZ0
+- BRG_ACT.LZ0
+
+STRHIER.QH:
+- hierarchy roster area: 416,10,137,467
+- left-click selects an item from the unit/commander pool
+- hierarchy unit/formational and commander zones documented by the original game
+
+Runtime logic checks
+--------------------
+Formation-state simulation:
+1. battalion with >=3 surviving companies + battalion commander host -> level 1
+2. battalion commander host dies -> remaining companies drop to level 0
+3. active regiment with two active battalions + regiment host -> level 2
+4. regiment host dies -> surviving subordinate battalions remain level 1
+5. active brigade with two active regiments + brigade host -> level 3
+6. brigade host dies -> surviving active regiments remain level 2
+
+Source structural check
+-----------------------
+Balanced C/C++ (), [], {}, strings, char literals, line/block comments and raw strings checked for:
+- source/forms/form_level.cpp
+- source/forms/form_level.h
+- source/main.cpp
+- source/map.cpp
+- source/map.h
+- source/level.h
+- source/spell_units.cpp
+- source/spell_units.h
+Result: PASS
+
+Environment limitation
+----------------------
+The container does not include the Windows wxWidgets/MSVC project toolchain, so the final runtime/build check remains the normal Windows build of the project.

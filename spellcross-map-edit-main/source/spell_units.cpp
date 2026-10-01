@@ -1044,6 +1044,8 @@ MapUnit::MapUnit(SpellMap *map)
 	commander_id = 0;
 	is_commander = 0;
 	strategic_uid = 0;
+	formation_id = 0;
+	formation_commander_mask = 0;
 	formation_level = 0;
 	formation_attack_bonus = 0;
 	formation_defence_bonus = 0;
@@ -1504,7 +1506,7 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 	if(is_enemy)
 		hp_w = 26;
 	else
-		hp_w = (commander_id)?17:26;
+		hp_w = (commander_id || is_commander)?17:26;
 	int hp_h = 3;
 	
 	// hit points (in pixels)
@@ -1594,12 +1596,13 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 		buf[0] = hud_filter[252]; buf[1] = hud_filter[214]; buf[2] = hud_filter[214];
 	}
 
-	if(commander_id && !is_enemy)
+	if((commander_id || is_commander) && !is_enemy)
 	{
-		// render commander id
-		data->font7->RenderSymbol(psb, psb_end, buf_x_size, 19, 1, '0'+commander_id,hud_filter[232]);
+		// render active formation id (disappears immediately when formation breaks)
+		if(commander_id > 0)
+			data->font7->RenderSymbol(psb, psb_end, buf_x_size, 19, 1, '0'+commander_id,hud_filter[232]);
 
-		// render commander mark
+		// the host mark survives even when losses temporarily break the formation
 		if(is_commander)
 			data->font7->RenderSymbol(psb,psb_end,buf_x_size,24,1,31,hud_filter[232]);
 

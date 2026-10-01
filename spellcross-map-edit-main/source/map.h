@@ -907,6 +907,9 @@ public:
 		};
 		int FinishUnits();
 		void CleanupDeadUnits();
+		// Re-evaluate live battalion/regiment/brigade bonuses after any tactical
+		// formation member (especially a commander host) leaves the battlefield.
+		void RecalculateTacticalFormations();
 		std::vector<MapXY> UpdateDestructible(MapXY target_pos);
 		std::vector<MapSprite*> GetDestructibleList(MapXY target_pos);
 

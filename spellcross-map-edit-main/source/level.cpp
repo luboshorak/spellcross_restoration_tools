@@ -269,7 +269,9 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
             if (cmd == "AddUnitToPlayer" && args.size() >= 4) {
                 LevelData::PlayerUnitAdd pu;
                 parse_int(args[0], pu.unit_id);
-                parse_int(args[1], pu.count);
+                pu.count = 1;
+                parse_int(args[1], pu.experience_level);
+                pu.experience_level = std::clamp(pu.experience_level, 1, 12);
                 parse_int(args[2], pu.health);
                 pu.extra = args[3];
                 out.start_units.push_back(pu);
@@ -382,7 +384,8 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
             if (cmd == "AddUnitToPlayer" && args.size() >= 3) {
                 LevelEvent::UnitAdd ua;
                 parse_int(args[0], ua.unit_id);
-                parse_int(args[1], ua.count);
+                parse_int(args[1], ua.experience_level);
+                ua.experience_level = std::clamp(ua.experience_level, 1, 12);
                 parse_int(args[2], ua.health);
                 if (args.size() >= 4) ua.name = args[3];
                 curEvent.add_units.push_back(ua);

@@ -1,4 +1,4 @@
-#include "form_level.h"
+﻿#include "form_level.h"
 
 #include "main.h"
 #include "other.h"
@@ -441,32 +441,6 @@ namespace
     {
         const int fh = font ? std::max(1, font->GetHeight()) : 1;
         return y + std::max(0, (h - fh) / 2);
-    }
-
-    static void OriginalDrawStrategicListGrid(wxImage& image, int x, int y, int w, int h)
-    {
-        // The research browser and complex-info browser use the same native
-        // green CRT/grid backing. Keep this in one helper so strategic lists
-        // cannot slowly drift apart as individual screens are restored.
-        if (w <= 0 || h <= 0)
-            return;
-
-        const wxColour listBg(32, 74, 28);
-        const wxColour grid(42, 90, 38);
-        const wxColour frame(135, 132, 120);
-        const wxColour frameShadow(40, 40, 34);
-
-        OriginalFillRect(image, x, y, w, h, listBg);
-        OriginalVLine(image, x - 2, y, y + h - 1, frame);
-        OriginalVLine(image, x - 1, y, y + h - 1, frameShadow);
-        OriginalVLine(image, x + w, y, y + h - 1, frame);
-        OriginalHLine(image, x - 2, x + w + 20, y, frame);
-        OriginalHLine(image, x - 2, x + w + 20, y + h - 1, frame);
-
-        for (int gx = x + 2; gx < x + w; gx += 18)
-            OriginalVLine(image, gx, y + 1, y + h - 2, grid);
-        for (int gy = y + 2; gy < y + h - 1; gy += 18)
-            OriginalHLine(image, x + 1, x + w - 1, gy, grid);
     }
 
     static void OriginalDrawScrollButton(wxImage& image, int x, int y, bool up, bool enabled = true)
@@ -3856,11 +3830,23 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // the game. Stage 6 left that area black, which is why the restored
         // research screen looked visibly broken. Recreate the native green
         // grid/list frame before painting the dynamic rows.
+        const wxColour listBg(32, 74, 28);
+        const wxColour grid(42, 90, 38);
+        const wxColour frame(135, 132, 120);
         constexpr int researchListX = 418;
         constexpr int researchListY = 6;
         constexpr int researchListW = 136;
         constexpr int researchListH = 460;
-        OriginalDrawStrategicListGrid(image, researchListX, researchListY, researchListW, researchListH);
+        OriginalFillRect(image, researchListX, researchListY, researchListW, researchListH, listBg);
+        OriginalVLine(image, researchListX - 2, researchListY, researchListY + researchListH - 1, frame);
+        OriginalVLine(image, researchListX - 1, researchListY, researchListY + researchListH - 1, wxColour(40, 40, 34));
+        OriginalVLine(image, researchListX + researchListW, researchListY, researchListY + researchListH - 1, frame);
+        OriginalHLine(image, researchListX - 2, 574, researchListY, frame);
+        OriginalHLine(image, researchListX - 2, 574, researchListY + researchListH - 1, frame);
+        for (int x = researchListX + 2; x < researchListX + researchListW; x += 18)
+            OriginalVLine(image, x, researchListY + 1, researchListY + researchListH - 2, grid);
+        for (int y = 8; y < researchListY + researchListH - 1; y += 18)
+            OriginalHLine(image, researchListX + 1, researchListX + researchListW - 1, y, grid);
 
         auto groupLabel = [](const wxString& g) -> wxString {
             if (g == "Global") return L"Globální";
@@ -4043,15 +4029,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxColour green(0, 242, 0);
         const wxColour yellow(232, 232, 0);
         const wxColour red(242, 48, 40);
+        const wxColour dim(92, 100, 88);
         EnsureResearchLoaded();
-
-        // INFO uses the same live list backing as RESEARCH. VMI_FULL only
-        // supplies the metal silhouette, so the CRT/grid must be painted here.
-        constexpr int infoListX = 418;
-        constexpr int infoListY = 6;
-        constexpr int infoListW = 136;
-        constexpr int infoListH = 460;
-        OriginalDrawStrategicListGrid(image, infoListX, infoListY, infoListW, infoListH);
 
         auto groupLabel = [](const wxString& g) -> wxString {
             if (g == "Global") return L"Globální";
@@ -4111,18 +4090,10 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             OriginalDrawSpellText(image, font, allLines[static_cast<size_t>(li)], 20, y, green, 378);
             y += 14;
         }
-        // The native INFO controls are actual green grid buttons inside the
-        // metal recess, not bare labels. Their text is vertically centred in
-        // the live button face (the previous hard-coded y=444 sat too high).
-        OriginalDrawActionButton(image, font, 196, 443, 70, 25, L"Dolů",
-            m_originalInfoTextScroll < maxTextScroll);
-        OriginalDrawActionButton(image, font, 286, 443, 70, 25, L"Nahoru",
-            m_originalInfoTextScroll > 0);
-
-        OriginalDrawScrollButton(image, 553, 6, true, maxListScroll > 0);
-        OriginalDrawScrollButton(image, 553, 426, false, maxListScroll > 0);
-        OriginalDrawScrollTrack(image, 553, 34, 392, m_originalInfoListScroll, maxListScroll,
-            visibleRows, static_cast<int>(rows.size()));
+        OriginalDrawSpellText(image, font, L"Dolů", 196, 444,
+            m_originalInfoTextScroll < maxTextScroll ? green : dim, 72, true);
+        OriginalDrawSpellText(image, font, L"Nahoru", 286, 444,
+            m_originalInfoTextScroll > 0 ? green : dim, 78, true);
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
 
@@ -4234,12 +4205,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             }
         }
 
-        // Native FACTORY.LZ lower chrome sits a little lower than our first
-        // pass assumed.  Keep all numeric/text overlays aligned to one shared
-        // vertical offset so the per-slot yields, total SB, captions and the
-        // allocation bar all land back inside the original boxes.
-        constexpr int resourcesBottomYOffset = 11;
-
         // The fourteen top cells show each owned territory's current SB yield;
         // the centre box is the sum available for this strategic turn.
         int slot = 0;
@@ -4250,24 +4215,24 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const int yield = std::min(std::max(0, it->second.incomePerTurn), std::max(0, it->second.remaining));
             if (yield <= 0) continue;
             OriginalDrawSpellText(image, font, wxString::Format(L"%d", yield),
-                83 + slot * 24, 302 + resourcesBottomYOffset, text, 23, true);
+                83 + slot * 24, 302, text, 23, true);
             ++slot;
         }
         const int totalIncome = GetCurrentStrategicPointIncome();
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", totalIncome), 278, 342 + resourcesBottomYOffset, green, 55, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", totalIncome), 278, 342, green, 55, true);
 
         const int maxResearch = totalIncome / 3;
         const int R = std::clamp(m_resourcesGlobalResearch, 0, maxResearch);
         const int M = std::max(0, totalIncome - 3 * R);
-        OriginalDrawSpellText(image, font, L"Výzkum", 166, 397 + resourcesBottomYOffset, green, 65, true);
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", R), 166, 421 + resourcesBottomYOffset, green, 65, true);
-        OriginalDrawSpellText(image, font, L"Peníze", 348, 397 + resourcesBottomYOffset, green, 65, true);
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", M), 348, 421 + resourcesBottomYOffset, green, 65, true);
+        OriginalDrawSpellText(image, font, L"Výzkum", 166, 397, green, 65, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", R), 166, 421, green, 65, true);
+        OriginalDrawSpellText(image, font, L"Peníze", 348, 397, green, 65, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", M), 348, 421, green, 65, true);
 
         // FACTORY.LZ already contains the native arrow chrome.  Only fill the
-        // centre groove between the arrows; keep it slightly shorter than the
-        // housing so the original frame stays visible.
-        constexpr int meterX = 256, meterY = 421 + resourcesBottomYOffset, meterW = 60, meterH = 10;
+        // 60px centre allocation bar; Stage 6 painted a 92x23 rectangle over
+        // the arrows, which made the restored control look broken.
+        constexpr int meterX = 256, meterY = 419, meterW = 60, meterH = 14;
         OriginalFillRect(image, meterX, meterY, meterW, meterH, wxColour(9, 65, 8));
         if (maxResearch > 0 && R > 0)
         {
@@ -5383,18 +5348,6 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 }
                 return;
             }
-            const int maxListScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
-            if (lx >= 553 && lx < 575 && ((ly >= 6 && ly < 34) || (ly >= 426 && ly < 454)))
-            {
-                if (maxListScroll > 0)
-                {
-                    const int delta = (ly < 34) ? -1 : 1;
-                    m_originalInfoListScroll = std::clamp(
-                        m_originalInfoListScroll + delta, 0, maxListScroll);
-                    refreshRestored();
-                }
-                return;
-            }
             if (wxRect(190, 438, 82, 34).Contains(lx, ly))
             {
                 m_originalInfoTextScroll += 3;
@@ -5412,12 +5365,10 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
 
         if (m_originalStrategicScreen == OriginalStrategicScreen::Resources)
         {
-            constexpr int resourcesBottomYOffset = 11;
-
             // Native FACTORY.LZ controls.  The arrows occupy their original
             // screen-space rectangles; they modify the desired research output
             // by one point (i.e. three strategic points) and persist immediately.
-            if (wxRect(222, 419 + resourcesBottomYOffset, 34, 28).Contains(lx, ly))
+            if (wxRect(222, 419, 34, 28).Contains(lx, ly))
             {
                 SetGlobalResearchAllocation(m_resourcesGlobalResearch - 1);
                 SaveStrategicState();
@@ -5425,7 +5376,7 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 refreshRestored();
                 return;
             }
-            if (wxRect(316, 419 + resourcesBottomYOffset, 34, 28).Contains(lx, ly))
+            if (wxRect(316, 419, 34, 28).Contains(lx, ly))
             {
                 SetGlobalResearchAllocation(m_resourcesGlobalResearch + 1);
                 SaveStrategicState();
@@ -5436,8 +5387,8 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
 
             // Direct clicks on the centre bar are supported as a convenience,
             // but never steal clicks from the native arrows.
-            constexpr int meterX = 256, meterY = 421 + resourcesBottomYOffset, meterW = 60, meterH = 10;
-            if (wxRect(meterX, meterY - 2, meterW, meterH + 4).Contains(lx, ly))
+            constexpr int meterX = 256, meterW = 60;
+            if (wxRect(meterX, 419, meterW, 28).Contains(lx, ly))
             {
                 const int maxResearch = GetCurrentStrategicPointIncome() / 3;
                 const int rel = std::clamp(lx - meterX, 0, meterW - 1);

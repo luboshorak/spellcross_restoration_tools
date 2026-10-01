@@ -1,0 +1,31 @@
+Stage 6.15 verification
+=======================
+
+Scope
+-----
+- Complex info right-hand list backing/grid
+- shared Research/Info list-grid renderer
+- Complex info list scrollbar controls
+- Complex info Dolů/Nahoru button faces and text alignment
+
+Original-game evidence checked
+------------------------------
+Original info capture:
+- right-hand item browser is a green CRT panel with the same fine grid language used by Research
+- Dolů/Nahoru are green inset button faces inside the lower metal recess, not text-only labels
+- button labels are vertically centred in their green faces
+
+Original COMMON.FS resources:
+- VMI_FULL.LZ: 575x480 screen-specific silhouette; right browser area itself is live/black in the raw resource
+- INFO.LZ: 412x464 left information screen; does not supply the right browser grid or lower live button faces
+- VMR_FULL.LZ / RSRCH_BG.LZ confirm the same live-screen composition model used by Research
+
+Source structural check
+-----------------------
+Balanced C/C++ (), [], {}, strings, char literals, line/block comments and raw strings checked for:
+- source/forms/form_level.cpp
+Result: PASS
+
+Environment limitation
+----------------------
+The container does not include the Windows wxWidgets/MSVC project toolchain, so the final runtime/build check remains the normal Windows Visual Studio build of the project.

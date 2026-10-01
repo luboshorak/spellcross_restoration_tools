@@ -101,23 +101,36 @@ bool StrategicOriginalRenderer::BuildStrategyPalette(const AssetLoader& load,
 
     std::vector<std::uint8_t> strategy;
     std::vector<std::uint8_t> shared;
+    std::vector<std::uint8_t> bigMap;
     if(!LoadExact(load, "STRATEGY.PAL", 256u * 3u, strategy, error)) return false;
     if(!LoadExact(load, "_SHARED1.PAL", 128u * 3u, shared, error)) return false;
+    if(!LoadExact(load, "BIG_MAP.PAL", 64u * 3u, bigMap, error)) return false;
 
-    for(int i = 0; i < 256; ++i)
-        pal[static_cast<std::size_t>(i)] = {
-            strategy[static_cast<std::size_t>(i) * 3u + 0u],
-            strategy[static_cast<std::size_t>(i) * 3u + 1u],
-            strategy[static_cast<std::size_t>(i) * 3u + 2u]
-        };
-
-    // The original strategic screens reuse the shared stone/UI palette in the
-    // lower half, overriding STRATEGY.PAL's 0..127 bank.
+    // All strategic pages use the same three-bank composition. Map/Hierarchy/
+    // Units/Buy already did this explicitly, while Research/Info/Resources/
+    // Stats incorrectly left STRATEGY.PAL in the 192..255 bank. That is the
+    // source of the black / wrongly coloured right-hand chrome on later pages.
+    //
+    //   0..127   shared strategic chrome (_SHARED1.PAL)
+    //   128..191 page-specific/general STRATEGY bank
+    //   192..255 common BIG_MAP chrome (BIG_MAP.PAL)
     for(int i = 0; i < 128; ++i)
         pal[static_cast<std::size_t>(i)] = {
             shared[static_cast<std::size_t>(i) * 3u + 0u],
             shared[static_cast<std::size_t>(i) * 3u + 1u],
             shared[static_cast<std::size_t>(i) * 3u + 2u]
+        };
+    for(int i = 0; i < 64; ++i)
+        pal[static_cast<std::size_t>(128 + i)] = {
+            strategy[static_cast<std::size_t>(128 + i) * 3u + 0u],
+            strategy[static_cast<std::size_t>(128 + i) * 3u + 1u],
+            strategy[static_cast<std::size_t>(128 + i) * 3u + 2u]
+        };
+    for(int i = 0; i < 64; ++i)
+        pal[static_cast<std::size_t>(192 + i)] = {
+            bigMap[static_cast<std::size_t>(i) * 3u + 0u],
+            bigMap[static_cast<std::size_t>(i) * 3u + 1u],
+            bigMap[static_cast<std::size_t>(i) * 3u + 2u]
         };
     return true;
 }
@@ -467,7 +480,7 @@ bool StrategicOriginalRenderer::RenderUnits(const AssetLoader& load,
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmu, kScreenSpecificW, kScreenH);
     BlitOpaque(canvas, kScreenW, kScreenH, 6, 8, units, 406, 464);
     // These two resources are the original dynamic lower-right unit panel.
-    BlitOpaque(canvas, kScreenW, kScreenH, 334, 291, infoPanel, 241, 141);
+    BlitOpaque(canvas, kScreenW, kScreenH, 334, 292, infoPanel, 241, 141);
     BlitOpaque(canvas, kScreenW, kScreenH, 421, 434, actionStrip, 154, 41);
 
     out.width = kScreenW;

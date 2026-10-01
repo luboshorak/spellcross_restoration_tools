@@ -527,9 +527,11 @@ public:
 	// Tactical formation metadata propagated from the strategic hierarchy.
 	// commander_id is the original HUD's one-digit formation number;
 	// is_commander draws the green commander mark on the host unit.
-	int commander_id;
-	int is_commander;
+	int commander_id;            // currently displayed active formation number, 0 when formation is broken
+	int is_commander;             // host unit still carries at least one living commander
 	uint32_t strategic_uid;
+	int formation_id;             // persistent battalion membership (1..8), survives formation collapse
+	uint8_t formation_commander_mask; // bit0=battalion, bit1=regiment, bit2=brigade commander hosted here
 	int formation_level;          // 0=none, 1=battalion, 2=regiment, 3=brigade
 	int formation_attack_bonus;   // FORMACIE.DEF
 	int formation_defence_bonus;  // FORMACIE.DEF

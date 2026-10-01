@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <regex>
 #include <tuple>
+#include <array>
 #include <algorithm>
 #include <unordered_map>
 #include <random>
@@ -139,7 +140,7 @@ namespace
 namespace scsave
 {
 	static constexpr uint32_t MAGIC = 0x56435353; // 'SSCV'
-	static constexpr uint32_t VERSION = 2;
+	static constexpr uint32_t VERSION = 3;
 
 	template<typename T>
 	inline void write(std::ostream& os, const T& v)
@@ -264,6 +265,9 @@ static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, Spe
 	scsave::write(os, (int32_t)u->formation_level);
 	scsave::write(os, (int32_t)u->formation_attack_bonus);
 	scsave::write(os, (int32_t)u->formation_defence_bonus);
+	// v3: persistent hierarchy membership + commander-host level mask.
+	scsave::write(os, (int32_t)u->formation_id);
+	scsave::write(os, (uint8_t)u->formation_commander_mask);
 
 	scsave::write_string(os, std::string(u->name));
 
@@ -293,6 +297,8 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	int32_t formation_level = 0;
 	int32_t formation_attack_bonus = 0;
 	int32_t formation_defence_bonus = 0;
+	int32_t formation_id = 0;
+	uint8_t formation_commander_mask = 0;
 	std::string name;
 
 	if (!scsave::read(is, id) || !scsave::read(is, type_id)) return false;
@@ -315,6 +321,18 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 			!scsave::read(is, formation_level) ||
 			!scsave::read(is, formation_attack_bonus) ||
 			!scsave::read(is, formation_defence_bonus)) return false;
+	}
+	if (version >= 3)
+	{
+		if (!scsave::read(is, formation_id) ||
+			!scsave::read(is, formation_commander_mask)) return false;
+	}
+	else
+	{
+		// Best-effort compatibility for v1/v2 tactical saves.
+		formation_id = commander_id;
+		if (is_commander)
+			formation_commander_mask = formation_level >= 3 ? 0x04 : formation_level == 2 ? 0x02 : 0x01;
 	}
 
 	if (!scsave::read_string(is, name)) return false;
@@ -358,6 +376,8 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	u->commander_id = commander_id;
 	u->is_commander = is_commander;
 	u->strategic_uid = strategic_uid;
+	u->formation_id = formation_id;
+	u->formation_commander_mask = formation_commander_mask;
 	u->formation_level = formation_level;
 	u->formation_attack_bonus = formation_attack_bonus;
 	u->formation_defence_bonus = formation_defence_bonus;
@@ -884,7 +904,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	// Header
 	f << "{\n";
 	f << "  \"format\": \"spellcross_map_editor_save\",\n";
-	f << "  \"version\": 2,\n";
+	f << "  \"version\": 3,\n";
 	f << "  \"map_path\": \"" << wstring2string(GetTopPath()) << "\",\n";
 	f << "  \"note\": \"Binary payload follows after marker\",\n";
 	f << "  \"payload\": \"__BINARY__\"\n";
@@ -10572,6 +10592,95 @@ int SpellMap::FinishUnits()
 	return(0);
 }
 
+void SpellMap::RecalculateTacticalFormations()
+{
+	// formation_id is the permanent battalion membership copied from the
+	// strategic hierarchy. commander_id is only the currently ACTIVE formation
+	// number shown by the original HUD, so it may disappear and later reappear.
+	std::array<int, 9> alive_count{};
+	std::array<bool, 9> battalion_host{};
+	std::array<bool, 5> regiment_host{};
+	std::array<bool, 3> brigade_host{};
+
+	for (auto* u : units)
+	{
+		if (!u || u->is_enemy || u->isDead())
+			continue;
+		const int b = u->formation_id;
+		if (b < 1 || b > 8)
+			continue;
+		++alive_count[(size_t)b];
+		if (u->formation_commander_mask & 0x01)
+			battalion_host[(size_t)b] = true;
+		const int r = (b - 1) / 2 + 1;
+		const int br = (b - 1) / 4 + 1;
+		if (u->formation_commander_mask & 0x02)
+			regiment_host[(size_t)r] = true;
+		if (u->formation_commander_mask & 0x04)
+			brigade_host[(size_t)br] = true;
+	}
+
+	std::array<bool, 9> battalion_active{};
+	std::array<bool, 5> regiment_active{};
+	std::array<bool, 3> brigade_active{};
+	for (int b = 1; b <= 8; ++b)
+		battalion_active[(size_t)b] = alive_count[(size_t)b] >= 3 && battalion_host[(size_t)b];
+	for (int r = 1; r <= 4; ++r)
+	{
+		const int b0 = (r - 1) * 2 + 1;
+		regiment_active[(size_t)r] = regiment_host[(size_t)r] &&
+			battalion_active[(size_t)b0] && battalion_active[(size_t)(b0 + 1)];
+	}
+	for (int br = 1; br <= 2; ++br)
+	{
+		const int r0 = (br - 1) * 2 + 1;
+		brigade_active[(size_t)br] = brigade_host[(size_t)br] &&
+			regiment_active[(size_t)r0] && regiment_active[(size_t)(r0 + 1)];
+	}
+
+	for (auto* u : units)
+	{
+		if (!u || u->is_enemy)
+			continue;
+		const int b = u->formation_id;
+		if (b < 1 || b > 8 || u->isDead())
+		{
+			if (b >= 1 && b <= 8)
+			{
+				u->commander_id = 0;
+				u->formation_level = 0;
+				u->formation_attack_bonus = 0;
+				u->formation_defence_bonus = 0;
+			}
+			continue;
+		}
+
+		const int r = (b - 1) / 2 + 1;
+		const int br = (b - 1) / 4 + 1;
+		int level = 0;
+		int attack = 0;
+		int defence = 0;
+		if (battalion_active[(size_t)b])
+		{
+			level = 1; attack = 1; defence = 1;
+		}
+		if (regiment_active[(size_t)r])
+		{
+			level = 2; attack = 2; defence = 1;
+		}
+		if (brigade_active[(size_t)br])
+		{
+			level = 3; attack = 4; defence = 3;
+		}
+
+		u->formation_level = level;
+		u->formation_attack_bonus = attack;
+		u->formation_defence_bonus = defence;
+		u->commander_id = level > 0 ? b : 0;
+		u->is_commander = u->formation_commander_mask != 0 ? 1 : 0;
+	}
+}
+
 // Remove any dead units (man==0) still lingering in the units list.
 // Must be called outside of iteration over the units vector.
 void SpellMap::CleanupDeadUnits()
@@ -12276,6 +12385,8 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 
 	// resort units
 	SortUnits();
+	if (game_mode)
+		RecalculateTacticalFormations();
 
 	return(0);
 }
@@ -12300,6 +12411,8 @@ MapUnit* SpellMap::ExtractUnit(MapUnit* unit)
 
 	// resort units
 	SortUnits();
+	if (game_mode && unit && unit->formation_id > 0)
+		RecalculateTacticalFormations();
 
 	return(unit);
 }
@@ -12342,6 +12455,19 @@ MapUnit* SpellMap::CreateUnit(MapUnit* parent, SpellUnitRec* new_type)
 	unit->ClearDigLevel();
 	unit->ResetHealth();
 
+	// Runtime-created child/mission units are not new permanent strategic
+	// companies. A parent copy must therefore NOT clone its roster UID,
+	// formation membership or commander-host marker; otherwise a deployed child
+	// could incorrectly keep a formation alive after the real host is killed.
+	unit->strategic_uid = 0;
+	unit->formation_id = 0;
+	unit->formation_commander_mask = 0;
+	unit->commander_id = 0;
+	unit->is_commander = 0;
+	unit->formation_level = 0;
+	unit->formation_attack_bonus = 0;
+	unit->formation_defence_bonus = 0;
+
 	// try place unit to map
 	if (PlaceUnit(unit))
 	{
@@ -12370,6 +12496,8 @@ int SpellMap::AddUnit(MapUnit* unit)
 	units.push_back(unit);
 	ResumeUnitRanging(false);
 	ReleaseMap();
+	if (game_mode && unit && unit->formation_id > 0)
+		RecalculateTacticalFormations();
 	return(0);
 }
 

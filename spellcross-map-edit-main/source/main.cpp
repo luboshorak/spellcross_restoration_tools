@@ -72,11 +72,12 @@ namespace
         int territory_id = -1;
         std::string mission_token;
         std::vector<std::uint64_t> sent_unit_indices;
+        std::vector<std::uint32_t> sent_unit_uids;
     };
 
     static constexpr char kTacticalContextMarker[] = "\n--SPELLCROSS-STRATEGIC-CONTEXT-V1--\n";
     static constexpr std::uint32_t kTacticalContextMagic = 0x31584353u; // SCX1
-    static constexpr std::uint32_t kTacticalContextVersion = 1u;
+    static constexpr std::uint32_t kTacticalContextVersion = 2u;
 
     template <typename T>
     static bool WriteCtxPod(std::ostream& os, const T& v)
@@ -128,6 +129,10 @@ namespace
         if (!WriteCtxPod(os, count)) return false;
         for (std::uint64_t idx : ctx.sent_unit_indices)
             if (!WriteCtxPod(os, idx)) return false;
+        const std::uint64_t uidCount = static_cast<std::uint64_t>(ctx.sent_unit_uids.size());
+        if (!WriteCtxPod(os, uidCount)) return false;
+        for (std::uint32_t uid : ctx.sent_unit_uids)
+            if (!WriteCtxPod(os, uid)) return false;
         return static_cast<bool>(os);
     }
 
@@ -143,7 +148,7 @@ namespace
         std::istringstream is(all.substr(pos + marker.size()), std::ios::binary);
         std::uint32_t magic = 0, ver = 0;
         if (!ReadCtxPod(is, magic) || !ReadCtxPod(is, ver) ||
-            magic != kTacticalContextMagic || ver != kTacticalContextVersion)
+            magic != kTacticalContextMagic || ver < 1u || ver > kTacticalContextVersion)
             return false;
         if (!ReadCtxString(is, ctx.level_def_path)) return false;
         if (!ReadCtxString(is, ctx.strategic_state_json)) return false;
@@ -158,6 +163,14 @@ namespace
         ctx.sent_unit_indices.resize(static_cast<size_t>(count));
         for (std::uint64_t& idx : ctx.sent_unit_indices)
             if (!ReadCtxPod(is, idx)) return false;
+        if (ver >= 2u)
+        {
+            std::uint64_t uidCount = 0;
+            if (!ReadCtxPod(is, uidCount) || uidCount > 100000ull) return false;
+            ctx.sent_unit_uids.resize(static_cast<size_t>(uidCount));
+            for (std::uint32_t& uid : ctx.sent_unit_uids)
+                if (!ReadCtxPod(is, uid)) return false;
+        }
         ctx.present = true;
         return true;
     }
@@ -356,16 +369,19 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             unit->spec_type = MapUnitType::NormalUnit;
             unit->behave = MapUnitType::NormalUnit;
             unit->is_enemy = 0;
-            unit->experience_init = 0;
-            unit->experience_level = 1;
+            unit->experience = std::max(0, entry.experience);
+            unit->experience_level = std::clamp(entry.experience_level, 1, 12);
+            unit->experience_init = unit->experience_level;
 
             // Preserve strategic hierarchy identity in the tactical battle.
             // The original HUD shrinks the unit status plate for formation
             // members, prints the one-digit formation number, marks the unit
             // carrying a commander, and shows WM_FORM0/1/2 in unit info.
             unit->strategic_uid = entry.strategic_uid;
-            unit->commander_id = entry.formation_id;
-            unit->is_commander = entry.carries_commander ? 1 : 0;
+            unit->formation_id = entry.formation_id;
+            unit->formation_commander_mask = entry.formation_commander_mask;
+            unit->commander_id = entry.formation_level > 0 ? entry.formation_id : 0;
+            unit->is_commander = entry.formation_commander_mask != 0 ? 1 : (entry.carries_commander ? 1 : 0);
             unit->formation_level = entry.formation_level;
             unit->formation_attack_bonus = entry.formation_attack_bonus;
             unit->formation_defence_bonus = entry.formation_defence_bonus;
@@ -389,6 +405,7 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
     }
 
     spell_map->SortUnits();
+    spell_map->RecalculateTacticalFormations();
     spell_map->InvalidateUnitsView();
 
     return true;
@@ -1539,6 +1556,7 @@ bool MainFrame::SaveTacticalGameWithCampaignContext(const std::wstring& path)
     ctx.sent_unit_indices.reserve(pending.sent_unit_indices.size());
     for (size_t idx : pending.sent_unit_indices)
         ctx.sent_unit_indices.push_back(static_cast<std::uint64_t>(idx));
+    ctx.sent_unit_uids = pending.sent_unit_uids;
 
     return AppendTacticalCampaignContext(path, ctx);
 }
@@ -1600,6 +1618,7 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
             pending.sent_unit_indices.reserve(ctx.sent_unit_indices.size());
             for (std::uint64_t idx : ctx.sent_unit_indices)
                 pending.sent_unit_indices.push_back(static_cast<size_t>(idx));
+            pending.sent_unit_uids = ctx.sent_unit_uids;
 
             if (!win->ImportBattleSaveContext(ctx.strategic_state_json, pending))
             {

@@ -87,6 +87,12 @@ public:
     void ApplyUnitsCooldownTick();  // Called at end of turn
     int GetRecruitCost(int unitIndex, int quality) const;
     int GetRecruitTime(int quality) const;
+    int GetUnitExperienceLevel(int unitId, int experience) const;
+    void NormalizeStrategicUnitInstances();
+    void RebuildRosterRowUidsFromUnitStates();
+    bool IsTemporaryUnitIndex(size_t index) const;
+    int FindUnitIndexByUid(uint32_t uid) const;
+    void RemoveTemporaryUnitsForCampaignTransition();
     int GetUpgradeCost(int unitId, int upgradeId) const;  // re-arm cost (uses cost_upgrade from units.json)
     int GetUpgradeTime(int upgradeId) const;              // re-arm time
     int GetTechUpgradeCost(int upgradeId) const;          // tech upgrade cost (from UPGRADES.DEF)
@@ -193,8 +199,11 @@ public:
         bool valid = false;
         int territory_id = -1;
         std::string mission_token;
-        // Indices into m_playerUnits of units sent to this mission
+        // Indices into m_playerUnits of units sent to this mission. Kept for
+        // compatibility with older campaign saves; concrete roster UIDs are the
+        // authoritative identity for hierarchy/commander loss tracking.
         std::vector<size_t> sent_unit_indices;
+        std::vector<uint32_t> sent_unit_uids;
     };
     
     // Counter-attack state for owned territories
@@ -313,6 +322,7 @@ private:
         int formation_level = 0;
         int attack_bonus = 0;
         int defence_bonus = 0;
+        uint8_t commander_host_mask = 0; // bit0=battalion, bit1=regiment, bit2=brigade
         bool carries_commander = false;
     };
 
@@ -430,8 +440,9 @@ public:
     // Per-roster-row unique IDs (session-stable). Used for hierarchy assignment.
     mutable std::vector<uint32_t> m_rosterRowUids;
     mutable uint32_t m_nextRosterUid = 1;
-    std::unordered_map<int, int> m_unitCosts;        // unit_id -> cost_buy
-    std::unordered_map<int, int> m_unitUpgradeCosts; // unit_id -> cost_upgrade (re-arm cost)
+    std::unordered_map<int, int> m_unitCosts;         // unit_id -> cost_buy
+    std::unordered_map<int, int> m_unitUpgradeCosts;  // unit_id -> cost_upgrade (re-arm cost)
+    std::unordered_map<int, int> m_unitReplaceCosts;  // unit_id -> cost_replace from JEDNOTKY.DEF (reinforcement base cost)
     bool m_unitCostsLoaded = false;
 
     // Tech upgrades from UPGRADES.DEF (Engine/Weapon/Armour style)
@@ -716,6 +727,9 @@ public:
     HierarchyBattleMeta GetHierarchyBattleMeta(uint32_t unit_uid,
         const std::unordered_set<uint32_t>& participating_units) const;
     bool IsCommanderFormationActive(uint32_t commander_uid) const;
+    std::vector<uint32_t> GetActiveFormationCommanderUids() const;
+    void ToggleCommanderFormationForMission(uint32_t commander_uid);
+    void RemoveCommandersHostedByDeadUnits(const std::unordered_set<uint32_t>& dead_uids);
     // Handler for commander selection in roster (selects all units under them)
     void OnCommanderSelectForMission(wxListEvent& ev);
     // Handler for unit selection in roster
@@ -793,6 +807,8 @@ public:
     int m_originalBuySelectedUnitId = -1;
     int m_originalBuySelectedCommander = -1;
     int m_originalResearchListScroll = 0;
+    int m_originalResearchActiveTextScroll = 0;
+    int m_originalResearchBrowseTextScroll = 0;
     int m_originalInfoListScroll = 0;
     int m_originalInfoTextScroll = 0;
     int m_originalBattleResolution = 2; // 0=640x480, 1=800x600, 2=1024x768
@@ -881,6 +897,7 @@ public:
         int experience = 0;            // unit experience (gained in combat)
         int level = 0;                 // unit level (derived from experience)
         std::string custom_name;       // player-assigned name
+        bool temporary = false;        // support unit: valid only for the current strategic level
     };
     std::vector<UnitInstanceState> m_unitStates;
 

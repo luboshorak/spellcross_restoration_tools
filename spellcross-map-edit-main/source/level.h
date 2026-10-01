@@ -90,10 +90,10 @@ struct LevelEvent {
     int change_mission_territory = -1;
     std::string change_mission_name;
 
-    // AddUnitToPlayer(unit_id, count, health, name)
+    // AddUnitToPlayer(unit_id, experience_level, health, name)
     struct UnitAdd {
         int unit_id = 0;
-        int count = 0;
+        int experience_level = 1; // original 2nd AddUnitToPlayer parameter (1..12), not a count
         int health = 0;
         std::string name;
     };
@@ -123,7 +123,7 @@ struct LevelData {
 
     struct PlayerUnitAdd {
         int unit_id = 0;   // AddUnitToPlayer(0,1,100,-)
-        int count = 0;
+        int count = 1;     // runtime/tactical multiplicity; strategic AddUnitToPlayer always creates one company
         int health = 0;
         std::string extra; // campaign-specific extra field
 
@@ -132,11 +132,14 @@ struct LevelData {
         // unit is sent from the strategic screen they preserve its concrete
         // roster identity and active hierarchy/formation state.
         uint32_t strategic_uid = 0;
-        int formation_id = 0;             // displayed formation number (battalion 1..8)
+        int experience = 0;               // total strategic experience carried into the tactical battle
+        int experience_level = 1;         // derived Spellcross experience level (1..12)
+        int formation_id = 0;             // persistent battalion membership (1..8); HUD number only while active
         int formation_level = 0;          // 0=none, 1=battalion, 2=regiment, 3=brigade
         int formation_attack_bonus = 0;   // original FORMACIE.DEF bonus
         int formation_defence_bonus = 0;  // original FORMACIE.DEF bonus
-        bool carries_commander = false;   // green commander mark in tactical HUD
+        uint8_t formation_commander_mask = 0; // bit0=battalion, bit1=regiment, bit2=brigade commander hosted here
+        bool carries_commander = false;   // compatibility/convenience: formation_commander_mask != 0
     };    std::vector<PlayerUnitAdd> start_units;
 
     std::vector<LevelTerritory> territories;
