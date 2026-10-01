@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "timestamp": "2026-10-01 14:06:39",
+  "timestamp": "2026-10-01 14:36:58",
   "level_def": "Z:\\Games\\Spellcross\\Spellcross - pokusy\\SPELCROS\\DATA\\COMMON\\LEVEL_02.DEF",
   "turn": 1,
   "money": 70,
@@ -47,9 +47,9 @@
   "units": [
     {"unit_id": 0, "count": 1, "health": 100, "uid": 6, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
     {"unit_id": 0, "count": 1, "health": 100, "uid": 7, "cooldown": 0, "experience": 0, "level": 1, "temporary": false},
-    {"unit_id": 2, "count": 1, "health": 100, "uid": 8, "cooldown": 1, "experience": 107, "level": 1, "temporary": false},
-    {"unit_id": 3, "count": 1, "health": 100, "uid": 9, "cooldown": 1, "experience": 213, "level": 1, "temporary": false},
-    {"unit_id": 3, "count": 1, "health": 100, "uid": 10, "cooldown": 1, "experience": 174, "level": 1, "temporary": false},
+    {"unit_id": 2, "count": 1, "health": 100, "uid": 8, "cooldown": 1, "experience": 82, "level": 1, "temporary": false},
+    {"unit_id": 3, "count": 1, "health": 100, "uid": 9, "cooldown": 1, "experience": 238, "level": 2, "temporary": false},
+    {"unit_id": 3, "count": 1, "health": 100, "uid": 10, "cooldown": 1, "experience": 175, "level": 1, "temporary": false},
     {"unit_id": 29, "count": 1, "health": 100, "uid": 11, "cooldown": 1, "experience": 37, "level": 1, "temporary": false},
     {"unit_id": 3, "count": 1, "health": 100, "uid": 12, "cooldown": 0, "experience": 0, "level": 1, "temporary": false}
   ]

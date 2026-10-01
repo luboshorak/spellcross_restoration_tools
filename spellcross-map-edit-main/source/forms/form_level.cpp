@@ -4234,45 +4234,79 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             }
         }
 
-        // Native FACTORY.LZ lower chrome sits a little lower than our first
-        // pass assumed.  Keep all numeric/text overlays aligned to one shared
-        // vertical offset so the per-slot yields, total SB, captions and the
-        // allocation bar all land back inside the original boxes.
-        constexpr int resourcesBottomYOffset = 11;
+        // Resources overlay geometry verified against the original 640x480 game
+        // capture and COMMON.FS/STRRES.QH.  Do not apply one shared Y offset here:
+        // the source values sit in differently-sized native FACTORY.LZ boxes.
+        //
+        // FACTORY.LZ geometry in this composited framebuffer:
+        //   yield cells : x=85..486, pitch 25, y=335..356
+        //   total box   : x=259..312, y=376..406
+        //   research    : x=164..223, y=406..446
+        //   money       : x=339..398, y=406..446
+        //   slider fill : x=248..314, y=422..437
+        // STRRES.QH independently identifies the corresponding native controls
+        // (resource row / total / research / money / allocation slider).
 
-        // The fourteen top cells show each owned territory's current SB yield;
-        // the centre box is the sum available for this strategic turn.
+        // The original FACTORY row has sixteen 25px cells.  Draw the current
+        // per-territory yields centred in those exact cells.
         int slot = 0;
         for (int tid : m_ownedTerritories)
         {
             const auto it = m_territoryResources.find(tid);
-            if (it == m_territoryResources.end() || slot >= 14) continue;
+            if (it == m_territoryResources.end() || slot >= 16) continue;
             const int yield = std::min(std::max(0, it->second.incomePerTurn), std::max(0, it->second.remaining));
             if (yield <= 0) continue;
             OriginalDrawSpellText(image, font, wxString::Format(L"%d", yield),
-                83 + slot * 24, 302 + resourcesBottomYOffset, text, 23, true);
+                85 + slot * 25, 339, text, 25, true);
             ++slot;
         }
+
         const int totalIncome = GetCurrentStrategicPointIncome();
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", totalIncome), 278, 342 + resourcesBottomYOffset, green, 55, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", totalIncome),
+            259, 384, green, 54, true);
 
         const int maxResearch = totalIncome / 3;
         const int R = std::clamp(m_resourcesGlobalResearch, 0, maxResearch);
         const int M = std::max(0, totalIncome - 3 * R);
-        OriginalDrawSpellText(image, font, L"Výzkum", 166, 397 + resourcesBottomYOffset, green, 65, true);
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", R), 166, 421 + resourcesBottomYOffset, green, 65, true);
-        OriginalDrawSpellText(image, font, L"Peníze", 348, 397 + resourcesBottomYOffset, green, 65, true);
-        OriginalDrawSpellText(image, font, wxString::Format(L"%d", M), 348, 421 + resourcesBottomYOffset, green, 65, true);
 
-        // FACTORY.LZ already contains the native arrow chrome.  Only fill the
-        // centre groove between the arrows; keep it slightly shorter than the
-        // housing so the original frame stays visible.
-        constexpr int meterX = 256, meterY = 421 + resourcesBottomYOffset, meterW = 60, meterH = 10;
-        OriginalFillRect(image, meterX, meterY, meterW, meterH, wxColour(9, 65, 8));
+        // Native lower information boxes.  Labels and values have different
+        // baselines in the original; a shared offset is visibly wrong.
+        OriginalDrawSpellText(image, font, L"Výzkum", 164, 410, green, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", R), 164, 430, green, 60, true);
+        OriginalDrawSpellText(image, font, L"Peníze", 339, 410, green, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format(L"%d", M), 339, 430, green, 60, true);
+
+        // FACTORY.LZ deliberately contains palette-index-131 pink placeholder
+        // pixels throughout the allocation control (centre bar *and* parts of
+        // the arrow/connector chrome).  In the original 640x480 capture none
+        // of that pink survives: those pixels are recoloured to the dark meter
+        // green, then the allocated part of the centre bar is painted bright.
+        constexpr int meterX = 248, meterY = 422, meterW = 67, meterH = 16;
+        const wxColour meterEmpty(4, 134, 4);
+        const wxColour meterFill(4, 219, 4);
+        if (unsigned char* rgb = image.GetData())
+        {
+            constexpr int recolorX0 = 220, recolorY0 = 408;
+            constexpr int recolorX1 = 344, recolorY1 = 447; // exclusive
+            for (int yy = recolorY0; yy < recolorY1; ++yy)
+            {
+                for (int xx = recolorX0; xx < recolorX1; ++xx)
+                {
+                    const size_t q = (static_cast<size_t>(yy) * image.GetWidth() + xx) * 3u;
+                    if (rgb[q + 0] == 219 && rgb[q + 1] == 100 && rgb[q + 2] == 129)
+                    {
+                        rgb[q + 0] = meterEmpty.Red();
+                        rgb[q + 1] = meterEmpty.Green();
+                        rgb[q + 2] = meterEmpty.Blue();
+                    }
+                }
+            }
+        }
+        OriginalFillRect(image, meterX, meterY, meterW, meterH, meterEmpty);
         if (maxResearch > 0 && R > 0)
         {
             const int fill = std::clamp((R * meterW) / maxResearch, 1, meterW);
-            OriginalFillRect(image, meterX, meterY, fill, meterH, wxColour(0, 200, 0));
+            OriginalFillRect(image, meterX, meterY, fill, meterH, meterFill);
         }
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
@@ -5412,12 +5446,9 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
 
         if (m_originalStrategicScreen == OriginalStrategicScreen::Resources)
         {
-            constexpr int resourcesBottomYOffset = 11;
-
-            // Native FACTORY.LZ controls.  The arrows occupy their original
-            // screen-space rectangles; they modify the desired research output
-            // by one point (i.e. three strategic points) and persist immediately.
-            if (wxRect(222, 419 + resourcesBottomYOffset, 34, 28).Contains(lx, ly))
+            // Native FACTORY.LZ controls.  Keep the generous arrow hit boxes
+            // around the original sprites, but do not move them with text.
+            if (wxRect(222, 419, 34, 28).Contains(lx, ly))
             {
                 SetGlobalResearchAllocation(m_resourcesGlobalResearch - 1);
                 SaveStrategicState();
@@ -5425,7 +5456,7 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 refreshRestored();
                 return;
             }
-            if (wxRect(316, 419 + resourcesBottomYOffset, 34, 28).Contains(lx, ly))
+            if (wxRect(316, 419, 34, 28).Contains(lx, ly))
             {
                 SetGlobalResearchAllocation(m_resourcesGlobalResearch + 1);
                 SaveStrategicState();
@@ -5434,10 +5465,9 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 return;
             }
 
-            // Direct clicks on the centre bar are supported as a convenience,
-            // but never steal clicks from the native arrows.
-            constexpr int meterX = 256, meterY = 421 + resourcesBottomYOffset, meterW = 60, meterH = 10;
-            if (wxRect(meterX, meterY - 2, meterW, meterH + 4).Contains(lx, ly))
+            // Direct clicks use the exact dynamic slider interior.
+            constexpr int meterX = 248, meterY = 422, meterW = 67, meterH = 16;
+            if (wxRect(meterX, meterY, meterW, meterH).Contains(lx, ly))
             {
                 const int maxResearch = GetCurrentStrategicPointIncome() / 3;
                 const int rel = std::clamp(lx - meterX, 0, meterW - 1);
