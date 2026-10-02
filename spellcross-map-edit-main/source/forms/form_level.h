@@ -163,11 +163,30 @@ public:
         LossBlock enemy_level;
     };
 
+    // Minimal serializable form of a strategic hierarchy slot.  UIDs refer to
+    // the already-persisted unit/commander instances.
+    struct HierarchyPersistRec
+    {
+        std::string slot_id;
+        uint32_t commander_uid = 0;
+        uint32_t unit_uid = 0;
+        uint32_t assigned_unit_uid = 0;
+    };
+
 
     void LoadStrategicState();
     // Load an exact strategic JSON save selected outside the Strategic Level window.
     // This applies the save to the already-correct LevelData and does not change the save format.
     bool LoadStrategicStateFromPath(const std::filesystem::path& path);
+
+    // Import the original DOS strategic save (BIG_MAP.SAV). The file is
+    // Spellcross-LZW compressed; level number and strategic state are read
+    // directly from the original binary layout.
+    static bool PeekOriginalBigMapLevel(const std::filesystem::path& path, int& levelNumber,
+        std::string* error = nullptr);
+    bool LoadOriginalBigMapSaveFromPath(const std::filesystem::path& path,
+        std::string* warning = nullptr);
+
     void SaveStrategicState() const;
     void LoadPlayerStateFromPreviousLevel();
 
@@ -412,6 +431,8 @@ public:
     void OnCommanderBeginDrag(wxListEvent& event);
 
     void UpdateCommanderHierarchyLabel(const std::string& commanderSlotId);
+    std::vector<HierarchyPersistRec> CaptureHierarchyAssignments() const;
+    void RestoreHierarchyAssignments(const std::vector<HierarchyPersistRec>& records);
 
 public:
 

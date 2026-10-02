@@ -27,6 +27,7 @@
 #include <regex>
 #include <array>
 #include <sstream>
+#include <iomanip>
 #include "LZ_spell.h"
 #include "../strategic_original_renderer.h"
 
@@ -75,6 +76,142 @@ namespace
     // Keep this declaration near the other translation-unit constants because
     // the Original UI renderer uses it before the Resources-page functions.
     constexpr int kResourcesMetaTerritoryId = 0;
+
+    // ---------------------------------------------------------------------
+    // Original Spellcross BIG_MAP.SAV support.
+    //
+    // The binary layout below follows the original-save parser from
+    // Stanislav Maslan's Spellcross Mod Launcher.  We intentionally keep the
+    // decoder local to the strategic frame instead of pulling the launcher
+    // project in as a dependency: this project already contains the same
+    // Spellcross LZW codec used for map assets.
+    // ---------------------------------------------------------------------
+    constexpr size_t kOriginalBigMapMinSize = 21165;
+    constexpr size_t kOriginalBigMapLevelOffset = 0x4834;
+    constexpr size_t kOriginalBigMapRoundOffset = 0x4835;
+    constexpr size_t kOriginalBigMapUnitsOffset = 0x396C;
+    constexpr size_t kOriginalBigMapCommandersOffset = 0x45CC;
+    constexpr size_t kOriginalBigMapTerritoriesOffset = 0x48E3;
+    constexpr size_t kOriginalBigMapUnitAvailabilityOffset = 0x38B8;
+    constexpr size_t kOriginalBigMapPlayerRankOffset = 0x50ED;
+    constexpr size_t kOriginalBigMapPlayerXpOffset = 0x50EF;
+    constexpr size_t kOriginalBigMapMoneyOffset = 0x50F9;
+    constexpr size_t kOriginalBigMapResearchPoolOffset = 0x50FD;
+
+    static uint16_t OriginalReadU16(const std::vector<uint8_t>& data, size_t off)
+    {
+        if (off + 2 > data.size()) return 0;
+        return static_cast<uint16_t>(data[off]) |
+            (static_cast<uint16_t>(data[off + 1]) << 8);
+    }
+
+    static int16_t OriginalReadI16(const std::vector<uint8_t>& data, size_t off)
+    {
+        return static_cast<int16_t>(OriginalReadU16(data, off));
+    }
+
+    static uint32_t OriginalReadU32(const std::vector<uint8_t>& data, size_t off)
+    {
+        if (off + 4 > data.size()) return 0;
+        return static_cast<uint32_t>(data[off]) |
+            (static_cast<uint32_t>(data[off + 1]) << 8) |
+            (static_cast<uint32_t>(data[off + 2]) << 16) |
+            (static_cast<uint32_t>(data[off + 3]) << 24);
+    }
+
+    static int32_t OriginalReadI32(const std::vector<uint8_t>& data, size_t off)
+    {
+        return static_cast<int32_t>(OriginalReadU32(data, off));
+    }
+
+    static std::string OriginalReadString(const std::vector<uint8_t>& data,
+        size_t off, size_t maxLen)
+    {
+        if (off >= data.size())
+            return {};
+        const size_t end = std::min(data.size(), off + maxLen);
+        size_t n = off;
+        while (n < end && data[n] != 0)
+            ++n;
+        std::string out(reinterpret_cast<const char*>(data.data() + off), n - off);
+        while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back())))
+            out.pop_back();
+        return out;
+    }
+
+    static std::string OriginalCp895ToUtf8(const std::string& value)
+    {
+        if (value.empty())
+            return {};
+        const wxString converted(char2wstringCP895(value.c_str()));
+        const wxScopedCharBuffer utf8 = converted.ToUTF8();
+        return utf8 ? std::string(utf8.data()) : value;
+    }
+
+    static bool DecodeOriginalBigMapSave(const std::filesystem::path& inputPath,
+        std::vector<uint8_t>& raw, std::string* error)
+    {
+        namespace fs = std::filesystem;
+        raw.clear();
+
+        fs::path path = inputPath;
+        std::error_code ec;
+        if (fs::is_directory(path, ec))
+            path /= "BIG_MAP.SAV";
+
+        std::ifstream f(path, std::ios::binary);
+        if (!f)
+        {
+            if (error) *error = "Cannot open BIG_MAP.SAV.";
+            return false;
+        }
+
+        std::vector<uint8_t> compressed((std::istreambuf_iterator<char>(f)),
+            std::istreambuf_iterator<char>());
+        if (compressed.empty())
+        {
+            if (error) *error = "BIG_MAP.SAV is empty.";
+            return false;
+        }
+
+        LZWexpand decoder(100000);
+        std::vector<uint8_t>& decoded = decoder.Decode(
+            compressed.data(), compressed.data() + compressed.size());
+        if (decoded.empty())
+        {
+            if (error) *error = "Spellcross LZW decompression failed.";
+            return false;
+        }
+        raw.assign(decoded.begin(), decoded.end());
+
+        if (raw.size() < kOriginalBigMapMinSize)
+        {
+            if (error)
+            {
+                std::ostringstream ss;
+                ss << "Decompressed BIG_MAP.SAV is too small (" << raw.size()
+                   << " bytes, expected at least " << kOriginalBigMapMinSize << ").";
+                *error = ss.str();
+            }
+            return false;
+        }
+
+        const uint32_t researchCount = OriginalReadU32(raw, 0);
+        if (researchCount > 200)
+        {
+            if (error) *error = "BIG_MAP.SAV has an invalid research-record count.";
+            return false;
+        }
+
+        const int level = static_cast<int>(raw[kOriginalBigMapLevelOffset]);
+        if (level < 1 || level > 10)
+        {
+            if (error) *error = "BIG_MAP.SAV contains an invalid strategic level number.";
+            return false;
+        }
+
+        return true;
+    }
 
     // Clean wx strategic UI: presentation-only geometry.  The reconstructed
     // Original UI uses a completely separate render/input path and does not
@@ -1867,52 +2004,99 @@ static void append_text_snippet(wxString& info, const std::string& label, const 
     info << wxString(char2wstringCP895(s.c_str())) << "\n";
 }
 
-static void try_append_text_set(wxString& info, const std::filesystem::path& base_dir, std::string mission_token)
+static std::string mission_text_resource_name(std::string mission_token, const std::string& suffix)
 {
-    if (mission_token.empty())
-        return;
-
-    std::string base = mission_to_text_base(mission_token);
-
-    // Best-effort: if token ends with digit (M02_02), try A (T02_02A)
+    std::string base = mission_to_text_base(std::move(mission_token));
     if (!base.empty())
     {
-        char last = base.back();
+        const char last = base.back();
         if (last >= '0' && last <= '9')
             base.push_back('A');
     }
-
-    auto load_and_append = [&](const std::string& suffix, const char* caption)
-        {
-            std::string raw;
-            if (read_text_file(base_dir / (base + suffix), raw))
-                append_text_snippet(info, wxString::Format("%s (%s%s)", caption, base, suffix).ToStdString(), raw);
-        };
-
-    load_and_append("", "Briefing");
-    load_and_append(".OK", "Victory");
-    load_and_append(".BAD", "Defeat");
-    load_and_append(".S", "Counter-attack");
+    return base + suffix;
 }
 
-// Load a single text variant for a mission token: "" = briefing, ".OK", ".BAD", ".S"
-static void try_append_single_text(wxString& info, const std::filesystem::path& base_dir,
-    std::string mission_token, const std::string& suffix, const char* caption)
+static bool append_text_from_loaded_archive(wxString& info, SpellTexts* texts,
+    const std::string& mission_token, const std::string& suffix, const char* caption,
+    bool includeResourceName = false)
+{
+    if (!texts || mission_token.empty())
+        return false;
+
+    const std::string resource = mission_text_resource_name(mission_token, suffix);
+    if (resource.empty())
+        return false;
+
+    SpellTextRec* rec = texts->GetText(resource.c_str());
+    if (!rec || rec->text.empty())
+        return false;
+
+    if (includeResourceName)
+        info << "\n" << wxString::Format("%s (%s)", caption, resource) << "\n";
+    else
+        info << "\n" << caption << "\n";
+    info << wxString(rec->text) << "\n";
+    return true;
+}
+
+static bool append_text_from_disk(wxString& info, const std::filesystem::path& base_dir,
+    const std::string& mission_token, const std::string& suffix, const char* caption,
+    bool includeResourceName = false)
+{
+    if (base_dir.empty() || mission_token.empty())
+        return false;
+
+    const std::string resource = mission_text_resource_name(mission_token, suffix);
+    if (resource.empty())
+        return false;
+
+    const std::vector<std::filesystem::path> candidates = {
+        base_dir / resource,
+        base_dir / to_upper(resource),
+        base_dir / to_lower(resource),
+        base_dir / (resource + ".TXT"),
+        base_dir / (to_upper(resource) + ".TXT"),
+        base_dir / (to_lower(resource) + ".txt")
+    };
+
+    for (const auto& candidate : candidates)
+    {
+        std::string raw;
+        if (!read_text_file(candidate, raw))
+            continue;
+
+        const std::string label = includeResourceName
+            ? wxString::Format("%s (%s)", caption, resource).ToStdString()
+            : std::string(caption);
+        append_text_snippet(info, label, raw);
+        return true;
+    }
+    return false;
+}
+
+static bool try_append_single_text(wxString& info, SpellTexts* texts,
+    const std::filesystem::path& base_dir, std::string mission_token,
+    const std::string& suffix, const char* caption, bool includeResourceName = false)
+{
+    // TEXTS.FS is already loaded by SpellData.  Use it as the authoritative
+    // source so strategic briefings do not depend on an externally unpacked
+    // DATA/TEXTS directory.  The directory remains a useful fallback for
+    // custom/modded loose files.
+    if (append_text_from_loaded_archive(info, texts, mission_token, suffix, caption, includeResourceName))
+        return true;
+    return append_text_from_disk(info, base_dir, mission_token, suffix, caption, includeResourceName);
+}
+
+static void try_append_text_set(wxString& info, SpellTexts* texts,
+    const std::filesystem::path& base_dir, std::string mission_token)
 {
     if (mission_token.empty())
         return;
 
-    std::string base = mission_to_text_base(mission_token);
-    if (!base.empty())
-    {
-        char last = base.back();
-        if (last >= '0' && last <= '9')
-            base.push_back('A');
-    }
-
-    std::string raw;
-    if (read_text_file(base_dir / (base + suffix), raw))
-        append_text_snippet(info, caption, raw);
+    try_append_single_text(info, texts, base_dir, mission_token, "", "Briefing", true);
+    try_append_single_text(info, texts, base_dir, mission_token, ".OK", "Victory", true);
+    try_append_single_text(info, texts, base_dir, mission_token, ".BAD", "Defeat", true);
+    try_append_single_text(info, texts, base_dir, mission_token, ".S", "Counter-attack", true);
 }
 
 // ---------------- Campaign start territory helper ----------------
@@ -1972,28 +2156,39 @@ static std::filesystem::path FindTextsDirForLevel(const LevelData& level, const 
     return texts_dir;
 }
 
-static bool HasBriefingForMissionToken(const std::filesystem::path& texts_dir, const std::string& mission_token)
+static bool HasBriefingForMissionToken(SpellTexts* texts,
+    const std::filesystem::path& texts_dir, const std::string& mission_token)
 {
-    if (texts_dir.empty() || mission_token.empty() || mission_token == "none")
+    if (mission_token.empty() || to_lower(mission_token) == "none")
+        return false;
+
+    const std::string resource = mission_text_resource_name(mission_token, "");
+    if (resource.empty())
+        return false;
+
+    if (texts && texts->GetText(resource.c_str()))
+        return true;
+
+    if (texts_dir.empty())
         return false;
 
     namespace fs = std::filesystem;
     std::error_code ec;
-
-    std::string base = mission_to_text_base(mission_token);
-    if (base.empty())
-        return false;
-
-    // Briefing is stored as the A variant (Txx_yyA) when token ends with digit.
-    char last = base.back();
-    if (last >= '0' && last <= '9')
-        base.push_back('A');
-
-    const fs::path p1 = texts_dir / base;
-    const fs::path p2 = texts_dir / to_lower(base);
-    const fs::path p3 = texts_dir / to_upper(base);
-
-    return fs::exists(p1, ec) || fs::exists(p2, ec) || fs::exists(p3, ec);
+    const std::vector<fs::path> candidates = {
+        texts_dir / resource,
+        texts_dir / to_lower(resource),
+        texts_dir / to_upper(resource),
+        texts_dir / (resource + ".TXT"),
+        texts_dir / (to_upper(resource) + ".TXT"),
+        texts_dir / (to_lower(resource) + ".txt")
+    };
+    for (const auto& candidate : candidates)
+    {
+        if (fs::exists(candidate, ec))
+            return true;
+        ec.clear();
+    }
+    return false;
 }
 
 static std::vector<int> ReadExplicitStartTerritories(const LevelData& level)
@@ -2057,11 +2252,11 @@ static int ChooseDefaultStartTerritoryId_NoBriefing(const LevelData& level, cons
 
     // Older/custom definitions may omit the explicit marker. Only use the
     // briefing heuristic when the TEXTS directory was actually found.
-    if (!texts_dir.empty())
+    if ((spellData && spellData->texts) || !texts_dir.empty())
     {
         for (const auto& t : level.territories)
         {
-            if (!HasBriefingForMissionToken(texts_dir, t.mission))
+            if (!HasBriefingForMissionToken(spellData ? spellData->texts : nullptr, texts_dir, t.mission))
                 return t.id;
         }
     }
@@ -2090,11 +2285,11 @@ static std::vector<int> ChooseStartTerritories_NoBriefing(const LevelData& level
 
     // Compatibility fallback for older/custom definitions.
     const auto texts_dir = FindTextsDirForLevel(level, spellData);
-    if (out.empty() && !texts_dir.empty())
+    if (out.empty() && ((spellData && spellData->texts) || !texts_dir.empty()))
     {
         for (const auto& t : level.territories)
         {
-            if (!HasBriefingForMissionToken(texts_dir, t.mission))
+            if (!HasBriefingForMissionToken(spellData ? spellData->texts : nullptr, texts_dir, t.mission))
                 out.push_back(t.id);
         }
     }
@@ -2315,6 +2510,23 @@ struct UnitStatePersistLoadView
 
 static thread_local const UnitStatePersistSaveView* g_unitStatePersistSave = nullptr;
 static thread_local UnitStatePersistLoadView* g_unitStatePersistLoad = nullptr;
+
+// ------------------------------------------------------------------
+// Hierarchy persistence glue.  Keep SaveStrategicStateFile signatures stable;
+// the compact records only reference already-persisted unit/commander UIDs.
+// ------------------------------------------------------------------
+struct HierarchyPersistSaveView
+{
+    const std::vector<StrategicLevelFrame::HierarchyPersistRec>* records = nullptr;
+};
+
+struct HierarchyPersistLoadView
+{
+    std::vector<StrategicLevelFrame::HierarchyPersistRec>* records = nullptr;
+};
+
+static thread_local const HierarchyPersistSaveView* g_hierarchyPersistSave = nullptr;
+static thread_local HierarchyPersistLoadView* g_hierarchyPersistLoad = nullptr;
 
 // ------------------------------------------------------------------
 // Mission-flow persistence: time limits, campaign events and counter-attacks.
@@ -6373,6 +6585,12 @@ void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
     const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
     g_unitStatePersistSave = &usv;
 
+    const std::vector<HierarchyPersistRec> hierarchyRecords = CaptureHierarchyAssignments();
+    HierarchyPersistSaveView hsv;
+    hsv.records = &hierarchyRecords;
+    const HierarchyPersistSaveView* prevH = g_hierarchyPersistSave;
+    g_hierarchyPersistSave = &hsv;
+
     MissionFlowPersistSaveView mfsv;
     mfsv.timeoutTurn = &m_territoryTimeoutTurn;
     mfsv.triggeredEvents = &m_triggeredLevelEvents;
@@ -6388,6 +6606,7 @@ void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
         /*timestamp*/NowIsoLocal());
 
     g_missionFlowPersistSave = prevMF;
+    g_hierarchyPersistSave = prevH;
     g_unitStatePersistSave = prevU;
     g_researchPersistSave = prevR;
 
@@ -6411,11 +6630,31 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
     std::string loaded_level_def;
     std::string ts;
 
+    int loadedResearchActiveId = -1;
+    int loadedResearchActiveIndex = -1;
+    int loadedResearchAllocPerTurn = 0;
+    std::unordered_map<int, int> loadedResearchProgress;
+    std::unordered_set<int> loadedResearchCompleted;
+    ResearchPersistLoadView rlv;
+    rlv.activeId = &loadedResearchActiveId;
+    rlv.activeIndex = &loadedResearchActiveIndex;
+    rlv.allocPerTurn = &loadedResearchAllocPerTurn;
+    rlv.progressById = &loadedResearchProgress;
+    rlv.completed = &loadedResearchCompleted;
+    ResearchPersistLoadView* prevRL = g_researchPersistLoad;
+    g_researchPersistLoad = &rlv;
+
     std::vector<UnitInstanceState> loadedUnitStates;
     UnitStatePersistLoadView ulv;
     ulv.states = &loadedUnitStates;
     UnitStatePersistLoadView* prevUL = g_unitStatePersistLoad;
     g_unitStatePersistLoad = &ulv;
+
+    std::vector<HierarchyPersistRec> loadedHierarchy;
+    HierarchyPersistLoadView hlv;
+    hlv.records = &loadedHierarchy;
+    HierarchyPersistLoadView* prevHL = g_hierarchyPersistLoad;
+    g_hierarchyPersistLoad = &hlv;
 
     MissionFlowPersistLoadView mflv;
     mflv.timeoutTurn = &m_territoryTimeoutTurn;
@@ -6432,14 +6671,33 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         &loaded_level_def, &ts))
     {
         g_missionFlowPersistLoad = prevMFL;
+        g_hierarchyPersistLoad = prevHL;
         g_unitStatePersistLoad = prevUL;
+        g_researchPersistLoad = prevRL;
         if (notify)
             wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
         return;
     }
     g_missionFlowPersistLoad = prevMFL;
+    g_hierarchyPersistLoad = prevHL;
     g_unitStatePersistLoad = prevUL;
+    g_researchPersistLoad = prevRL;
     m_unitStates = std::move(loadedUnitStates);
+    m_researchActiveId = loadedResearchActiveId;
+    m_researchActiveIndex = loadedResearchActiveIndex;
+    m_researchAllocPerTurn = loadedResearchAllocPerTurn;
+    m_researchProgressById = std::move(loadedResearchProgress);
+    m_researchCompleted = std::move(loadedResearchCompleted);
+
+    uint32_t maxCommanderUid = 0;
+    for (const auto& c : m_playerCommanders)
+        maxCommanderUid = std::max(maxCommanderUid, c.uid);
+    m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid + 1);
+    for (auto& c : m_playerCommanders)
+        if (c.uid == 0) c.uid = m_nextCommanderUid++;
+    for (auto& c : m_availableCommanders)
+        if (c.uid == 0) c.uid = m_nextCommanderUid++;
+    RestoreHierarchyAssignments(loadedHierarchy);
 
     if (GetMenuBar())
     {
@@ -6488,26 +6746,55 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         std::vector<int> owned2;
         std::unordered_map<int, TerritoryResourceState> terrRes;
 
+        int resActiveId2 = -1;
+        int resActiveIndex2 = -1;
+        int resAllocPerTurn2 = 0;
+        std::unordered_map<int, int> resProgressById2;
+        std::unordered_set<int> resCompleted2;
+        ResearchPersistLoadView rlv2;
+        rlv2.activeId = &resActiveId2;
+        rlv2.activeIndex = &resActiveIndex2;
+        rlv2.allocPerTurn = &resAllocPerTurn2;
+        rlv2.progressById = &resProgressById2;
+        rlv2.completed = &resCompleted2;
+        ResearchPersistLoadView* prevRL2 = g_researchPersistLoad;
+        g_researchPersistLoad = &rlv2;
+
         std::vector<UnitInstanceState> loadedUnitStates2;
         UnitStatePersistLoadView ulv2;
         ulv2.states = &loadedUnitStates2;
         UnitStatePersistLoadView* prevUL2 = g_unitStatePersistLoad;
         g_unitStatePersistLoad = &ulv2;
 
+        std::vector<HierarchyPersistRec> loadedHierarchy2;
+        HierarchyPersistLoadView hlv2;
+        hlv2.records = &loadedHierarchy2;
+        HierarchyPersistLoadView* prevHL2 = g_hierarchyPersistLoad;
+        g_hierarchyPersistLoad = &hlv2;
+
         if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch,
             units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2))
         {
+            g_hierarchyPersistLoad = prevHL2;
             g_unitStatePersistLoad = prevUL2;
+            g_researchPersistLoad = prevRL2;
             if (notify)
                 wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
             return;
         }
+        g_hierarchyPersistLoad = prevHL2;
         g_unitStatePersistLoad = prevUL2;
+        g_researchPersistLoad = prevRL2;
 
         auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
         win->m_turn = turn;
         win->m_money = money;
         win->m_research = research;
+        win->m_researchActiveId = resActiveId2;
+        win->m_researchActiveIndex = resActiveIndex2;
+        win->m_researchAllocPerTurn = resAllocPerTurn2;
+        win->m_researchProgressById = std::move(resProgressById2);
+        win->m_researchCompleted = std::move(resCompleted2);
         win->m_selectedTerritory = selTerr;
         win->m_player = pl;
         win->m_territoryCurrentMission = std::move(terrMission);
@@ -6516,10 +6803,24 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         win->m_unitStates = std::move(loadedUnitStates2);
         win->m_playerCommanders = std::move(playerCmds2);
         win->m_availableCommanders = std::move(availCmds2);
+        uint32_t maxCommanderUid2 = 0;
+        for (const auto& c : win->m_playerCommanders)
+            maxCommanderUid2 = std::max(maxCommanderUid2, c.uid);
+        win->m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid2 + 1);
+        for (auto& c : win->m_playerCommanders)
+            if (c.uid == 0) c.uid = win->m_nextCommanderUid++;
+        for (auto& c : win->m_availableCommanders)
+            if (c.uid == 0) c.uid = win->m_nextCommanderUid++;
         win->m_cmdGenWindowStartTurn = windowStart2;
         win->m_cmdGenCountInWindow = genCount2;
         win->m_gameModeEnabled = gm2;
         win->m_ownedTerritories = std::move(owned2);
+        win->m_territoryResources = std::move(terrRes);
+        const auto metaIt2 = win->m_territoryResources.find(kResourcesMetaTerritoryId);
+        win->m_resourcesGlobalResearch = metaIt2 != win->m_territoryResources.end()
+            ? std::max(0, metaIt2->second.researchCarry) : 0;
+        win->SetGlobalResearchAllocation(win->m_resourcesGlobalResearch);
+        win->RestoreHierarchyAssignments(loadedHierarchy2);
         win->TryLoadBackground();
         win->RefreshUI();
         win->SetOriginalStrategicUi(true);
@@ -6629,150 +6930,11 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         return;
     }
 
-    const auto path = GetStrategicSaveSlotPath(m_level, slot);
-
-    std::string loaded_level_def;
-    std::string ts;
-
-    // Hook unit state persistence for load
-    std::vector<UnitInstanceState> loadedUnitStates;
-    UnitStatePersistLoadView ulv;
-    ulv.states = &loadedUnitStates;
-    UnitStatePersistLoadView* prevUL = g_unitStatePersistLoad;
-    g_unitStatePersistLoad = &ulv;
-
-    MissionFlowPersistLoadView mflv;
-    mflv.timeoutTurn = &m_territoryTimeoutTurn;
-    mflv.triggeredEvents = &m_triggeredLevelEvents;
-    mflv.activatedEvents = &m_activatedEvents;
-    mflv.counterAttacks = &m_counterAttacks;
-    MissionFlowPersistLoadView* prevMFL = g_missionFlowPersistLoad;
-    g_missionFlowPersistLoad = &mflv;
-
-    if (!LoadStrategicStateFile(path, m_level, m_turn, m_money, m_research, m_selectedTerritory, m_player,
-        m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
-        m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
-        m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
-        &loaded_level_def, &ts))
-    {
-        g_missionFlowPersistLoad = prevMFL;
-        g_unitStatePersistLoad = prevUL;
-        wxMessageBox("Failed to load the saved game.", "Load game", wxOK | wxICON_ERROR, this);
-        return;
-    }
-    g_missionFlowPersistLoad = prevMFL;
-    g_unitStatePersistLoad = prevUL;
-    m_unitStates = std::move(loadedUnitStates);
-
-    if (GetMenuBar())
-    {
-        auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE);
-        if (item) item->Check(m_gameModeEnabled);
-    }
-
-    // Save slot may belong to a different strategic LEVEL_XX.DEF.
-    // In that case, automatically switch to the correct level and load there.
-    if (!loaded_level_def.empty() && loaded_level_def != m_level.source_path)
-    {
-        if (!m_main)
-        {
-            wxString msg;
-            msg << L"This save belongs to a different level/DEF:\n\n";
-            msg << wxString::FromUTF8(loaded_level_def) << L"\n\n";
-            msg << L"Current level is:\n\n";
-            msg << wxString::FromUTF8(m_level.source_path) << L"\n";
-            wxMessageBox(msg, L"Load game", wxOK | wxICON_WARNING, this);
-            return;
-        }
-
-        LevelData lvl;
-        std::string err;
-        LevelLoader loader;
-        if (!loader.LoadLevelDef(loaded_level_def, lvl, &err))
-        {
-            wxMessageBox(L"Failed to load the level DEF from this save:\n" + wxString::FromUTF8(err),
-                L"Load game", wxOK | wxICON_ERROR, this);
-            return;
-        }
-
-        // Re-load the save file using the correct level, so territory defaults match.
-        int turn = 1, money = 0, research = 0, selTerr = -1;
-        PlayerProgress pl;
-        std::unordered_map<int, std::string> terrMission;
-        std::unordered_map<int, int> terrLaunch;
-        std::vector<LevelData::PlayerUnitAdd> units;
-        std::string def2, ts2;
-
-
-        std::vector<CommanderRec> playerCmds2;
-        std::vector<CommanderRec> availCmds2;
-        int windowStart2 = 1;
-        int genCount2 = 0;
-
-
-        bool gm2 = false;
-        std::vector<int> owned2;
-        std::unordered_map<int, TerritoryResourceState> terrRes;
-
-        // Hook unit state persistence for cross-level load
-        std::vector<UnitInstanceState> loadedUnitStates2;
-        UnitStatePersistLoadView ulv2;
-        ulv2.states = &loadedUnitStates2;
-        UnitStatePersistLoadView* prevUL2 = g_unitStatePersistLoad;
-        g_unitStatePersistLoad = &ulv2;
-
-        if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch, units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2)) {
-            g_unitStatePersistLoad = prevUL2;
-            wxMessageBox(L"Failed to load the saved game.", L"Load game", wxOK | wxICON_ERROR, this);
-            return;
-        }
-        g_unitStatePersistLoad = prevUL2;
-
-        // Open new Strategic Level window for that DEF and apply loaded state.
-        auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
-
-        win->m_turn = turn;
-        win->m_money = money;
-        win->m_research = research;
-        win->m_selectedTerritory = selTerr;
-        win->m_player = pl;
-        win->m_territoryCurrentMission = std::move(terrMission);
-        win->m_territoryLaunchCount = std::move(terrLaunch);
-        win->m_playerUnits = std::move(units);
-        win->m_unitStates = std::move(loadedUnitStates2);
-        win->m_playerCommanders = std::move(playerCmds2);
-        win->m_availableCommanders = std::move(availCmds2);
-        win->m_cmdGenWindowStartTurn = windowStart2;
-        win->m_cmdGenCountInWindow = genCount2;
-
-        win->m_gameModeEnabled = gm2;
-        win->m_ownedTerritories = std::move(owned2);
-        win->TryLoadBackground();
-        win->RefreshUI();
-        if (win->m_selectedTerritory >= 0)
-            win->SelectTerritoryById(win->m_selectedTerritory);
-
-        if (m_main)
-            m_main->m_strategicLevel = win;
-        win->Show();
-        win->Raise();
-
-        // Close this (wrong-level) window.
-        Close(true);
-        return;
-    }
-
-    // Rebuild background, visibility and timeouts for loaded state
-    TryLoadBackground();
-    CheckTimeouts();
-
-    if (m_selectedTerritory >= 0)
-        SelectTerritoryById(m_selectedTerritory);
-
-    RefreshUI();
-    wxMessageBox(wxString::Format("Loaded slot %02d.", slot), "Load game", wxOK | wxICON_INFORMATION, this);
+    // Keep all strategic persistence in one path.  This is important for
+    // imported BIG_MAP.SAV games because research, stable UIDs and hierarchy
+    // assignments must survive the first native save/load round trip.
+    LoadStrategicGameFromSlot(slot, true);
 }
-
 
 void StrategicLevelFrame::MarkOverlayDirty()
 {
@@ -10365,6 +10527,126 @@ void StrategicLevelFrame::RegisterHierarchySlot(const std::string& slotId,
     m_hierarchySlots.push_back(std::move(slot));
 }
 
+std::vector<StrategicLevelFrame::HierarchyPersistRec>
+StrategicLevelFrame::CaptureHierarchyAssignments() const
+{
+    std::vector<HierarchyPersistRec> out;
+    out.reserve(m_hierarchySlots.size());
+    for (const auto& slot : m_hierarchySlots)
+    {
+        if (slot.commander_uid == 0 && slot.unit_uid == 0 && slot.assigned_unit_uid == 0)
+            continue;
+        HierarchyPersistRec rec;
+        rec.slot_id = slot.id;
+        rec.commander_uid = slot.commander_uid;
+        rec.unit_uid = slot.unit_uid;
+        rec.assigned_unit_uid = slot.assigned_unit_uid;
+        out.push_back(std::move(rec));
+    }
+    return out;
+}
+
+void StrategicLevelFrame::RestoreHierarchyAssignments(
+    const std::vector<HierarchyPersistRec>& records)
+{
+    // Reset without calling ClearHierarchySlot recursively; some records are
+    // the paired commander-assignment unit slots and must be restored together.
+    for (auto& slot : m_hierarchySlots)
+    {
+        slot.rank = -1;
+        slot.commander_uid = 0;
+        slot.commander_name.clear();
+        slot.unit_uid = 0;
+        slot.unit_display.clear();
+        slot.assigned_unit_uid = 0;
+        slot.assigned_unit_display.clear();
+        if (slot.label)
+            slot.label->SetLabel(slot.placeholder);
+    }
+
+    auto unitDisplay = [&](uint32_t uid) -> wxString
+    {
+        const int idx = FindUnitIndexByUid(uid);
+        if (idx < 0 || idx >= static_cast<int>(m_playerUnits.size()))
+            return {};
+        if (idx < static_cast<int>(m_unitStates.size()) &&
+            !m_unitStates[static_cast<size_t>(idx)].custom_name.empty())
+        {
+            return wxString::FromUTF8(
+                m_unitStates[static_cast<size_t>(idx)].custom_name);
+        }
+        return GetUnitDisplayName(m_playerUnits[static_cast<size_t>(idx)].unit_id);
+    };
+
+    auto findCommander = [&](uint32_t uid) -> const CommanderRec*
+    {
+        for (const auto& c : m_playerCommanders)
+            if (c.uid == uid)
+                return &c;
+        return nullptr;
+    };
+
+    // First restore unit and commander occupancy.
+    for (const auto& rec : records)
+    {
+        const auto it = m_hierarchySlotIndex.find(rec.slot_id);
+        if (it == m_hierarchySlotIndex.end())
+            continue;
+        HierarchySlot& slot = m_hierarchySlots[it->second];
+
+        if (slot.type == "unit" && rec.unit_uid != 0)
+        {
+            const wxString display = unitDisplay(rec.unit_uid);
+            if (!display.empty())
+            {
+                slot.unit_uid = rec.unit_uid;
+                slot.unit_display = display;
+                if (slot.label)
+                    slot.label->SetLabel(display);
+            }
+        }
+        else if (slot.type == "commander" && rec.commander_uid != 0)
+        {
+            const CommanderRec* c = findCommander(rec.commander_uid);
+            if (c)
+            {
+                slot.commander_uid = c->uid;
+                slot.rank = c->rank;
+                slot.commander_name = c->name;
+            }
+        }
+    }
+
+    // Then restore each commander's host company.  Doing this after the unit
+    // pass lets us derive a clean display label even for custom unit names.
+    for (const auto& rec : records)
+    {
+        if (rec.assigned_unit_uid == 0)
+            continue;
+        const auto it = m_hierarchySlotIndex.find(rec.slot_id);
+        if (it == m_hierarchySlotIndex.end())
+            continue;
+        HierarchySlot& slot = m_hierarchySlots[it->second];
+        if (slot.type != "commander" || slot.commander_uid == 0)
+            continue;
+
+        const wxString display = unitDisplay(rec.assigned_unit_uid);
+        if (display.empty())
+            continue;
+        slot.assigned_unit_uid = rec.assigned_unit_uid;
+        slot.assigned_unit_display = display;
+    }
+
+    for (auto& slot : m_hierarchySlots)
+    {
+        if (slot.type == "commander" && slot.commander_uid != 0)
+            UpdateCommanderHierarchyLabel(slot.id);
+        if (slot.label && slot.label->GetParent())
+            slot.label->GetParent()->Layout();
+    }
+}
+
+
 void StrategicLevelFrame::ApplyHierarchyDrop(const std::string& slotId, const wxString& data)
 {
     auto it = m_hierarchySlotIndex.find(slotId);
@@ -13698,19 +13980,29 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
 
         if (hasCounterAttack)
         {
-            // Counter-attack active: show .S text
+            // Counter-attack active: show .S text. TEXTS.FS is authoritative;
+            // loose DATA/TEXTS is only a modding fallback.
             info << "*** COUNTER-ATTACK ***\n\n";
-            if (!texts_dir.empty())
-                try_append_single_text(info, texts_dir, cur, ".S", "Counter-Attack Briefing");
+            bool found = try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+                texts_dir, cur, ".S", "Counter-Attack Briefing");
+            if (!found && to_lower(cur) != to_lower(t.mission))
+                try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+                    texts_dir, t.mission, ".S", "Counter-Attack Briefing");
         }
         else if (!isOwned)
         {
-            // Not owned: show briefing only
+            // Not owned: show briefing only. Imported original saves may carry
+            // a stale/temporary DEF token in a territory record; if that token
+            // has no text resource, fall back to the mission declared by
+            // LEVEL_XX.DEF instead of leaving the panel blank.
             if (timeoutRemaining > 0)
                 info << wxString::Format("Time remaining: %d turns\n\n", timeoutRemaining);
 
-            if (!texts_dir.empty())
-                try_append_single_text(info, texts_dir, cur, "", "Briefing");
+            bool found = try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+                texts_dir, cur, "", "Briefing");
+            if (!found && to_lower(cur) != to_lower(t.mission))
+                try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+                    texts_dir, t.mission, "", "Briefing");
         }
         else
         {
@@ -13738,18 +14030,15 @@ void StrategicLevelFrame::OnTerritory(wxCommandEvent& ev)
             info << wxString::Format("Played: %d\n", itn->second);
 
         std::filesystem::path texts_dir = FindTextsDirForLevel(m_level, m_spellData);
+        try_append_text_set(info, m_spellData ? m_spellData->texts : nullptr, texts_dir, cur);
 
-        if (!texts_dir.empty())
-        {
-            try_append_text_set(info, texts_dir, cur);
+        // Also show intro (some territories use different intro token).
+        if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
+            try_append_text_set(info, m_spellData ? m_spellData->texts : nullptr, texts_dir, t.intro_mission);
 
-            // Also show intro (some territories use different intro token)
-            if (!t.intro_mission.empty() && to_lower(t.intro_mission) != "none")
-                try_append_text_set(info, texts_dir, t.intro_mission);
-        }
-        else
+        if ((!m_spellData || !m_spellData->texts) && texts_dir.empty())
         {
-            info << "\n(TEXTS) DATA/TEXTS not found.\n";
+            info << "\n(TEXTS) Neither loaded TEXTS.FS nor loose DATA/TEXTS is available.\n";
             info << "Level path: " << m_level.source_path << "\n";
             info << "Working dir: " << std::filesystem::current_path().string() << "\n";
         }
@@ -14958,6 +15247,11 @@ static bool LoadStrategicStateFile(
                 StrategicLevelFrame::CommanderRec c;
                 (void)ParseJsonStringField(obj, "name", c.name);
                 (void)ParseJsonIntField(obj, "rank", c.rank);
+                {
+                    int uid = 0;
+                    if (ParseJsonIntField(obj, "uid", uid) && uid > 0)
+                        c.uid = static_cast<uint32_t>(uid);
+                }
                 if (!c.name.empty())
                     out.push_back(c);
             }
@@ -14965,6 +15259,36 @@ static bool LoadStrategicStateFile(
 
     parse_commander_array("player_commanders", playerCommanders);
     parse_commander_array("available_commanders", availableCommanders);
+
+    // Strategic hierarchy (optional/backward compatible).
+    if (g_hierarchyPersistLoad && g_hierarchyPersistLoad->records)
+    {
+        auto& records = *g_hierarchyPersistLoad->records;
+        records.clear();
+        const std::string hv = ExtractJsonBlock(data, "hierarchy");
+        if (!hv.empty() && hv != "null" && hv.front() == '[')
+        {
+            std::regex item_re("\\{([^}]*)\\}");
+            for (auto it = std::sregex_iterator(hv.begin(), hv.end(), item_re);
+                it != std::sregex_iterator(); ++it)
+            {
+                const std::string obj = (*it)[1].str();
+                StrategicLevelFrame::HierarchyPersistRec rec;
+                (void)ParseJsonStringField(obj, "slot", rec.slot_id);
+                int v = 0;
+                if (ParseJsonIntField(obj, "commander_uid", v) && v > 0)
+                    rec.commander_uid = static_cast<uint32_t>(v);
+                v = 0;
+                if (ParseJsonIntField(obj, "unit_uid", v) && v > 0)
+                    rec.unit_uid = static_cast<uint32_t>(v);
+                v = 0;
+                if (ParseJsonIntField(obj, "assigned_unit_uid", v) && v > 0)
+                    rec.assigned_unit_uid = static_cast<uint32_t>(v);
+                if (!rec.slot_id.empty())
+                    records.push_back(std::move(rec));
+            }
+        }
+    }
 
     return true;
 }
@@ -15174,7 +15498,8 @@ static void SaveStrategicStateFile(
     for (size_t i = 0; i < playerCommanders.size(); ++i)
     {
         const auto& c = playerCommanders[i];
-        f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
+        f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank
+          << ", \"uid\": " << c.uid << "}";
         if (i + 1 < playerCommanders.size())
             f << ",";
         f << "\n";
@@ -15185,12 +15510,36 @@ static void SaveStrategicStateFile(
     for (size_t i = 0; i < availableCommanders.size(); ++i)
     {
         const auto& c = availableCommanders[i];
-        f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank << "}";
+        f << "    {\"name\": \"" << EscapeJson(c.name) << "\", \"rank\": " << c.rank
+          << ", \"uid\": " << c.uid << "}";
         if (i + 1 < availableCommanders.size())
             f << ",";
         f << "\n";
     }
     f << "  ],\n";
+
+    // Hierarchy assignments. UIDs make these records independent of display
+    // names and preserve formations after a native JSON save/reload.
+    if (g_hierarchyPersistSave && g_hierarchyPersistSave->records)
+    {
+        f << "  \"hierarchy\": [\n";
+        const auto& records = *g_hierarchyPersistSave->records;
+        for (size_t i = 0; i < records.size(); ++i)
+        {
+            const auto& r = records[i];
+            f << "    {\"slot\": \"" << EscapeJson(r.slot_id) << "\""
+              << ", \"commander_uid\": " << r.commander_uid
+              << ", \"unit_uid\": " << r.unit_uid
+              << ", \"assigned_unit_uid\": " << r.assigned_unit_uid << "}";
+            if (i + 1 < records.size()) f << ",";
+            f << "\n";
+        }
+        f << "  ],\n";
+    }
+    else
+    {
+        f << "  \"hierarchy\": [],\n";
+    }
 
     // units (with per-unit instance state if available)
     f << "  \"units\": [\n";
@@ -15236,6 +15585,464 @@ void StrategicLevelFrame::LoadStrategicState()
     (void)LoadStrategicStateFromPath(GetStrategicStatePath(m_level));
 }
 
+bool StrategicLevelFrame::PeekOriginalBigMapLevel(
+    const std::filesystem::path& path, int& levelNumber, std::string* error)
+{
+    levelNumber = -1;
+    std::vector<uint8_t> raw;
+    if (!DecodeOriginalBigMapSave(path, raw, error))
+        return false;
+    levelNumber = static_cast<int>(raw[kOriginalBigMapLevelOffset]);
+    return true;
+}
+
+bool StrategicLevelFrame::LoadOriginalBigMapSaveFromPath(
+    const std::filesystem::path& path, std::string* warning)
+{
+    if (warning)
+        warning->clear();
+
+    std::vector<uint8_t> raw;
+    std::string err;
+    if (!DecodeOriginalBigMapSave(path, raw, &err))
+    {
+        if (warning) *warning = err;
+        return false;
+    }
+
+    // Make sure a caller cannot accidentally apply a valid save to the wrong
+    // strategic chapter.
+    int expectedLevel = -1;
+    {
+        std::smatch m;
+        const std::string fn = std::filesystem::path(m_level.source_path).filename().string();
+        if (std::regex_search(fn, m, std::regex("LEVEL[_-]?(\\d{1,2})",
+            std::regex_constants::icase)) && m.size() > 1)
+        {
+            expectedLevel = std::stoi(m[1].str());
+        }
+    }
+    const int saveLevel = static_cast<int>(raw[kOriginalBigMapLevelOffset]);
+    if (expectedLevel > 0 && expectedLevel != saveLevel)
+    {
+        if (warning)
+        {
+            std::ostringstream ss;
+            ss << "BIG_MAP.SAV belongs to LEVEL_" << std::setfill('0')
+               << std::setw(2) << saveLevel << ", but the opened DEF is LEVEL_"
+               << std::setw(2) << expectedLevel << ".";
+            *warning = ss.str();
+        }
+        return false;
+    }
+
+    m_gameModeEnabled = true;
+    m_turn = std::max(1, static_cast<int>(OriginalReadI16(raw, kOriginalBigMapRoundOffset)));
+    m_money = OriginalReadI32(raw, kOriginalBigMapMoneyOffset);
+    m_research = OriginalReadI32(raw, kOriginalBigMapResearchPoolOffset);
+    m_player.name = "John Alexander";
+    m_player.rank = static_cast<int>(static_cast<int8_t>(raw[kOriginalBigMapPlayerRankOffset]));
+    m_player.experience = OriginalReadI32(raw, kOriginalBigMapPlayerXpOffset);
+    m_player.actions = 0;
+
+    // The save stores a 90-entry unit availability table separately from the
+    // research records.  Use it as the authoritative campaign unlock state.
+    m_levelResearchFlags.clear();
+    for (int unitId = 0; unitId < 90; ++unitId)
+    {
+        if (OriginalReadI16(raw,
+            kOriginalBigMapUnitAvailabilityOffset + static_cast<size_t>(unitId) * 2) != 0)
+        {
+            m_levelResearchFlags.insert(unitId);
+        }
+    }
+
+    // Research records are ordered exactly like RESEARCH.DEF. State 3 means
+    // completed/researched in original saves; 0/1/2 are not completed.
+    m_researchCompleted.clear();
+    m_researchProgressById.clear();
+    m_researchActiveId = -1;
+    m_researchActiveIndex = -1;
+    m_researchBrowseIndex = -1;
+    m_infoBrowseIndex = -1;
+    m_researchAllocPerTurn = 0;
+    const uint32_t researchCount = std::min<uint32_t>(200, OriginalReadU32(raw, 0));
+    for (uint32_t i = 0; i < researchCount; ++i)
+    {
+        const size_t off = 8 + static_cast<size_t>(i) * 47;
+        if (OriginalReadI16(raw, off) == 3)
+            m_researchCompleted.insert(static_cast<int>(i));
+    }
+    EnsureResearchLoaded();
+    NormalizeResearchSelection();
+
+    // Territory state. Original territory record N corresponds to territory
+    // id N+1; LEVEL_xx.DEF ids are built on the same numbering.
+    m_ownedTerritories.clear();
+    m_territoryCurrentMission.clear();
+    m_territoryLaunchCount.clear();
+    m_territoryResources.clear();
+    m_territoryTimeoutTurn.clear();
+    m_territoryResources[kResourcesMetaTerritoryId] = TerritoryResourceState{};
+    m_resourcesGlobalResearch = 0;
+    SetGlobalResearchAllocation(0);
+
+    int firstAttackable = -1;
+    int firstOwned = -1;
+    for (const auto& territory : m_level.territories)
+    {
+        const int index = territory.id - 1;
+        if (index < 0)
+            continue;
+        const size_t off = kOriginalBigMapTerritoriesOffset +
+            static_cast<size_t>(index) * 56;
+        if (off + 56 > raw.size())
+            continue;
+
+        const int flags = raw[off];
+        if (flags == 0x0F)
+        {
+            m_ownedTerritories.push_back(territory.id);
+            if (firstOwned < 0) firstOwned = territory.id;
+        }
+        else if (firstAttackable < 0 &&
+            (flags == 0x0D || flags == 0x1D || flags == 0x0C))
+        {
+            firstAttackable = territory.id;
+        }
+
+        std::string mission = to_lower(OriginalReadString(raw, off + 14, 13));
+        if (mission.size() > 4 && mission.substr(mission.size() - 4) == ".def")
+            mission.resize(mission.size() - 4);
+        if (mission.empty())
+            mission = to_lower(territory.mission);
+        m_territoryCurrentMission[territory.id] = mission;
+        m_territoryLaunchCount[territory.id] = 0;
+
+        TerritoryResourceState rs;
+        const int remain = static_cast<int>(OriginalReadI16(raw, off + 0x2C));
+        const int perTurn = static_cast<int>(OriginalReadI16(raw, off + 0x2E));
+        rs.remaining = std::max(0, remain);
+        rs.total = std::max(std::max(0, territory.strategic_points_total), rs.remaining);
+        rs.incomePerTurn = std::max(0, perTurn);
+        m_territoryResources[territory.id] = rs;
+
+        const int remainTime = OriginalReadI32(raw, off + 0x28);
+        if (remainTime >= 0)
+            m_territoryTimeoutTurn[territory.id] = m_turn + remainTime;
+    }
+    m_selectedTerritory = firstAttackable >= 0 ? firstAttackable : firstOwned;
+
+    // Player companies. Keep original slot number as UID (+1), so commander
+    // host-company references can be translated without fuzzy name matching.
+    m_playerUnits.clear();
+    m_unitStates.clear();
+    m_rosterRowUids.clear();
+    std::array<uint32_t, 48> originalUnitUid{};
+    std::array<int, 48> originalHierarchyPos{};
+    originalHierarchyPos.fill(-1);
+
+    int pendingRearms = 0;
+    uint32_t maxUnitUid = 0;
+    for (int slot = 0; slot < 48; ++slot)
+    {
+        const size_t off = kOriginalBigMapUnitsOffset + static_cast<size_t>(slot) * 66;
+        const uint8_t flags = raw[off + 38];
+        const std::string rawName = OriginalReadString(raw, off, 30);
+        if (flags == 0 || rawName.empty())
+            continue;
+
+        int unitType = static_cast<int>(raw[off + 30]);
+        const int pendingType = static_cast<int>(static_cast<int8_t>(raw[off + 62])) - 1;
+        const int upgradeTimeout = static_cast<int>(static_cast<int8_t>(raw[off + 44]));
+        if (pendingType >= 0)
+        {
+            // Our strategic re-arm model changes the type immediately and then
+            // keeps the company on cooldown. Mirror that representation.
+            unitType = pendingType;
+            ++pendingRearms;
+        }
+
+        const int hp = static_cast<int>(raw[off + 42]);
+        const int hpMax = static_cast<int>(raw[off + 43]);
+        const int health = hpMax > 0
+            ? std::clamp((hp * 100 + hpMax / 2) / hpMax, 0, 100)
+            : 100;
+
+        const uint32_t uid = static_cast<uint32_t>(slot + 1);
+        originalUnitUid[static_cast<size_t>(slot)] = uid;
+        maxUnitUid = std::max(maxUnitUid, uid);
+        originalHierarchyPos[static_cast<size_t>(slot)] =
+            static_cast<int>(static_cast<int8_t>(raw[off + 46]));
+
+        LevelData::PlayerUnitAdd add;
+        add.unit_id = unitType;
+        add.count = 1;
+        add.health = health;
+        add.extra = "-";
+        add.strategic_uid = uid;
+        add.experience = OriginalReadI32(raw, off + 32);
+        add.experience_level = std::clamp(static_cast<int>(raw[off + 36]) + 1, 1, 12);
+        m_playerUnits.push_back(add);
+
+        UnitInstanceState state;
+        state.uid = uid;
+        state.cooldown_turns = std::max(
+            static_cast<int>(raw[off + 39]), std::max(0, upgradeTimeout));
+        state.experience = std::max(0, add.experience);
+        state.level = add.experience_level;
+        state.custom_name = OriginalCp895ToUtf8(rawName);
+        state.temporary = ((flags & 0x01) == 0) || ((flags & 0x02) != 0);
+
+        const int engine = static_cast<int>(static_cast<int8_t>(raw[off + 48])) - 1;
+        const int armor = static_cast<int>(static_cast<int8_t>(raw[off + 50])) - 1;
+        const int weapon = static_cast<int>(static_cast<int8_t>(raw[off + 52])) - 1;
+        for (int upgrade : {engine, armor, weapon})
+        {
+            if (upgrade >= 0 &&
+                std::find(state.upgrades.begin(), state.upgrades.end(), upgrade) == state.upgrades.end())
+            {
+                state.upgrades.push_back(upgrade);
+            }
+        }
+
+        m_unitStates.push_back(std::move(state));
+    }
+    m_nextRosterUid = std::max<uint32_t>(1, maxUnitUid + 1);
+    RebuildRosterRowUidsFromUnitStates();
+
+    // Commanders and hierarchy placement.
+    m_playerCommanders.clear();
+    m_availableCommanders.clear();
+    m_commanderRankByUid.clear();
+    std::vector<HierarchyPersistRec> hierarchy;
+    hierarchy.reserve(64);
+
+    // Unit positions are a flat 0..31 array: 8 battalions x 4 companies.
+    for (int originalSlot = 0; originalSlot < 48; ++originalSlot)
+    {
+        const uint32_t uid = originalUnitUid[static_cast<size_t>(originalSlot)];
+        const int pos = originalHierarchyPos[static_cast<size_t>(originalSlot)];
+        if (uid == 0 || pos < 0 || pos >= 32)
+            continue;
+
+        HierarchyPersistRec rec;
+        rec.slot_id = "battalion_" + std::to_string(pos / 4 + 1) +
+            "_unit_" + std::to_string(pos % 4 + 1);
+        rec.unit_uid = uid;
+        hierarchy.push_back(std::move(rec));
+    }
+
+    // Load known commander-name pool so corrupt original name fields can be
+    // repaired the same way Mašláň's editor repairs them.
+    (void)EnsureCommanderNamesLoaded();
+    std::unordered_set<std::string> usedCommanderNames;
+    int repairedCommanderNames = 0;
+    uint32_t maxCommanderUid = 0;
+
+    struct OriginalCommanderPlacement
+    {
+        uint32_t uid = 0;
+        uint16_t flags = 0;
+        int unitSlot = -1;
+    };
+    std::vector<OriginalCommanderPlacement> commanderPlacements;
+
+    for (int slot = 0; slot < 14; ++slot)
+    {
+        const size_t off = kOriginalBigMapCommandersOffset + static_cast<size_t>(slot) * 44;
+        const uint16_t cflags = OriginalReadU16(raw, off + 40);
+
+        const auto begin = raw.begin() + static_cast<std::ptrdiff_t>(off);
+        const auto end = begin + 30;
+        const auto nul = std::find(begin, end, static_cast<uint8_t>(0));
+        std::string rawName;
+        if (nul != end && nul != begin)
+            rawName.assign(reinterpret_cast<const char*>(&*begin),
+                static_cast<size_t>(std::distance(begin, nul)));
+
+        // A zero-flags commander can still be an owned, currently unplaced
+        // commander. A truly empty slot has neither a sane name nor placement.
+        const bool hasPlacement = cflags != 0 && cflags != 0xFFFF;
+        if (rawName.empty() && !hasPlacement)
+            continue;
+
+        std::string name = OriginalCp895ToUtf8(rawName);
+        if (name.empty())
+        {
+            for (const auto& candidate : m_commanderNames)
+            {
+                if (!candidate.empty() && !usedCommanderNames.count(candidate))
+                {
+                    name = candidate;
+                    ++repairedCommanderNames;
+                    break;
+                }
+            }
+        }
+        if (name.empty())
+        {
+            name = "Commander " + std::to_string(slot + 1);
+            ++repairedCommanderNames;
+        }
+        usedCommanderNames.insert(name);
+
+        CommanderRec commander;
+        commander.uid = static_cast<uint32_t>(slot + 1);
+        commander.name = name;
+        commander.rank = static_cast<int>(raw[off + 34]);
+        maxCommanderUid = std::max(maxCommanderUid, commander.uid);
+        m_commanderRankByUid[commander.uid] = commander.rank;
+        m_playerCommanders.push_back(commander);
+
+        OriginalCommanderPlacement placement;
+        placement.uid = commander.uid;
+        placement.flags = cflags;
+        placement.unitSlot = static_cast<int>(static_cast<int8_t>(raw[off + 42]));
+        commanderPlacements.push_back(placement);
+    }
+    m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid + 1);
+
+    for (const auto& placement : commanderPlacements)
+    {
+        if (placement.flags == 0 || placement.flags == 0xFFFF)
+            continue;
+
+        const int commandLevel = static_cast<int>(placement.flags >> 7);
+        const int commandPos = static_cast<int>(placement.flags & 0x0F);
+        std::string commanderSlot;
+        std::string assignmentSlot;
+        if (commandLevel == 0 && commandPos >= 0 && commandPos < 8)
+        {
+            const int n = commandPos + 1;
+            commanderSlot = "battalion_" + std::to_string(n) + "_commander";
+            assignmentSlot = commanderSlot + "_unit";
+        }
+        else if (commandLevel == 1 && commandPos >= 0 && commandPos < 4)
+        {
+            const int n = commandPos + 1;
+            commanderSlot = "regiment_" + std::to_string(n) + "_commander";
+            assignmentSlot = "regiment_" + std::to_string(n) + "_unit";
+        }
+        else if (commandLevel == 2 && commandPos >= 0 && commandPos < 2)
+        {
+            const int n = commandPos + 1;
+            commanderSlot = "brigade_" + std::to_string(n) + "_commander";
+            assignmentSlot = "brigade_" + std::to_string(n) + "_unit";
+        }
+        else
+        {
+            continue;
+        }
+
+        HierarchyPersistRec commanderRec;
+        commanderRec.slot_id = commanderSlot;
+        commanderRec.commander_uid = placement.uid;
+        if (placement.unitSlot >= 0 && placement.unitSlot < 48)
+            commanderRec.assigned_unit_uid =
+                originalUnitUid[static_cast<size_t>(placement.unitSlot)];
+        hierarchy.push_back(commanderRec);
+
+        if (commanderRec.assigned_unit_uid != 0)
+        {
+            HierarchyPersistRec hostRec;
+            hostRec.slot_id = assignmentSlot;
+            hostRec.unit_uid = commanderRec.assigned_unit_uid;
+            hierarchy.push_back(std::move(hostRec));
+        }
+    }
+    RestoreHierarchyAssignments(hierarchy);
+
+    // Original loss/kill counters.
+    m_lossStats.enemy_all.light = OriginalReadI32(raw, 0x5101);
+    m_lossStats.enemy_all.heavy = OriginalReadI32(raw, 0x5105);
+    m_lossStats.enemy_all.air = OriginalReadI32(raw, 0x5109);
+    m_lossStats.enemy_all.commanders = 0;
+    m_lossStats.alliance_all.light = OriginalReadI32(raw, 0x510D);
+    m_lossStats.alliance_all.heavy = OriginalReadI32(raw, 0x5111);
+    m_lossStats.alliance_all.air = OriginalReadI32(raw, 0x5115);
+    m_lossStats.alliance_all.commanders = OriginalReadI32(raw, 0x5119);
+    m_lossStats.enemy_level.light = OriginalReadI32(raw, 0x511D);
+    m_lossStats.enemy_level.heavy = OriginalReadI32(raw, 0x5121);
+    m_lossStats.enemy_level.air = OriginalReadI32(raw, 0x5125);
+    m_lossStats.enemy_level.commanders = 0;
+    m_lossStats.alliance_level.light = OriginalReadI32(raw, 0x5129);
+    m_lossStats.alliance_level.heavy = OriginalReadI32(raw, 0x512D);
+    m_lossStats.alliance_level.air = OriginalReadI32(raw, 0x5131);
+    m_lossStats.alliance_level.commanders = OriginalReadI32(raw, 0x5135);
+
+    // Values that do not have a direct equivalent in BIG_MAP.SAV are reset
+    // instead of inheriting stale data from the constructor/autosave.
+    m_stats = MissionStats{};
+    m_pendingMission = PendingMissionResult{};
+    m_counterAttacks.clear();
+    m_selectedUnitsForMission.clear();
+    m_selectedCommandersForMission.clear();
+    m_cmdGenWindowStartTurn = ((m_turn - 1) / 25) * 25 + 1;
+    m_cmdGenCountInWindow = 0;
+
+    // We cannot losslessly map the original event runtime flags to the remake's
+    // newer event bookkeeping. Reconstruct events that are certainly already
+    // satisfied from current turn/territory state so past intro/condition events
+    // are not replayed on the next end-turn.
+    m_triggeredLevelEvents.clear();
+    m_activatedEvents.clear();
+    for (const auto& evt : m_level.events)
+    {
+        bool waitedTerritoriesOwned = true;
+        for (int tid : evt.wait_for_territories)
+        {
+            if (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) ==
+                m_ownedTerritories.end())
+            {
+                waitedTerritoriesOwned = false;
+                break;
+            }
+        }
+
+        if (evt.abs_time && evt.time_value >= 0 && m_turn >= evt.time_value &&
+            (evt.wait_for_territories.empty() || waitedTerritoriesOwned))
+        {
+            m_triggeredLevelEvents.insert(evt.id);
+        }
+        else if (!evt.abs_time && evt.time_value < 0 &&
+            !evt.wait_for_territories.empty() && waitedTerritoriesOwned)
+        {
+            m_triggeredLevelEvents.insert(evt.id);
+        }
+    }
+
+    if (GetMenuBar())
+    {
+        if (auto* item = GetMenuBar()->FindItem(ID_MENU_GAME_MODE_TOGGLE))
+            item->Check(true);
+    }
+
+    ApplyTerritoryVisibility();
+    MarkOverlayDirty();
+
+    // Immediately convert the imported state to our native JSON autosave. This
+    // makes the import a one-time bridge: subsequent loads use the regular
+    // campaign format, including hierarchy and stable instance UIDs.
+    SaveStrategicState();
+
+    if (warning && (repairedCommanderNames > 0 || pendingRearms > 0))
+    {
+        std::ostringstream ss;
+        if (repairedCommanderNames > 0)
+            ss << "Repaired " << repairedCommanderNames << " damaged commander name(s).";
+        if (pendingRearms > 0)
+        {
+            if (repairedCommanderNames > 0) ss << " ";
+            ss << "Converted " << pendingRearms
+               << " pending re-arm operation(s) to the remake cooldown model.";
+        }
+        *warning = ss.str();
+    }
+
+    return true;
+}
+
 bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path& path)
 {
 
@@ -15270,6 +16077,12 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
     UnitStatePersistLoadView* prevU = g_unitStatePersistLoad;
     g_unitStatePersistLoad = &ulv;
 
+    std::vector<HierarchyPersistRec> loadedHierarchy;
+    HierarchyPersistLoadView hlv;
+    hlv.records = &loadedHierarchy;
+    HierarchyPersistLoadView* prevH = g_hierarchyPersistLoad;
+    g_hierarchyPersistLoad = &hlv;
+
     MissionFlowPersistLoadView mflv;
     mflv.timeoutTurn = &m_territoryTimeoutTurn;
     mflv.triggeredEvents = &m_triggeredLevelEvents;
@@ -15283,6 +16096,7 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
         gm, owned, terrRes,
         &level_def, &ts);
     g_missionFlowPersistLoad = prevMF;
+    g_hierarchyPersistLoad = prevH;
     g_unitStatePersistLoad = prevU;
     g_researchPersistLoad = prevR;
 
@@ -15313,6 +16127,26 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
         NormalizeStrategicUnitInstances();
         m_playerCommanders = std::move(playerCmds);
         m_availableCommanders = std::move(availCmds);
+
+        // Commander UIDs are now persisted.  Older JSON saves did not carry
+        // them, so assign deterministic fresh IDs before restoring hierarchy.
+        uint32_t maxCommanderUid = 0;
+        for (const auto& c : m_playerCommanders)
+            maxCommanderUid = std::max(maxCommanderUid, c.uid);
+        m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid + 1);
+        for (auto& c : m_playerCommanders)
+        {
+            if (c.uid == 0)
+                c.uid = m_nextCommanderUid++;
+        }
+        for (auto& c : m_availableCommanders)
+        {
+            if (c.uid == 0)
+                c.uid = m_nextCommanderUid++;
+        }
+
+        RestoreHierarchyAssignments(loadedHierarchy);
+
         m_cmdGenWindowStartTurn = windowStart;
         m_cmdGenCountInWindow = genCount;
 
@@ -15429,10 +16263,17 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     UnitStatePersistLoadView* prevU = g_unitStatePersistLoad;
     g_unitStatePersistLoad = &ulv;
 
+    std::vector<HierarchyPersistRec> loadedHierarchy;
+    HierarchyPersistLoadView hlv;
+    hlv.records = &loadedHierarchy;
+    HierarchyPersistLoadView* prevH = g_hierarchyPersistLoad;
+    g_hierarchyPersistLoad = &hlv;
+
     const bool ok = LoadStrategicStateFile(prevSave, m_level, turn, money, research, selected, player,
         terrM, terrL, units, playerCmds, availCmds, windowStart, genCount,
         gm, owned, terrRes, &level_def, &ts);
 
+    g_hierarchyPersistLoad = prevH;
     g_unitStatePersistLoad = prevU;
     g_researchPersistLoad = prevR;
 
@@ -15488,6 +16329,12 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     for (const auto& commander : m_playerCommanders)
         maxCommanderUid = std::max(maxCommanderUid, commander.uid);
     m_nextCommanderUid = std::max<uint32_t>(1, maxCommanderUid + 1);
+    for (auto& commander : m_playerCommanders)
+        if (commander.uid == 0) commander.uid = m_nextCommanderUid++;
+
+    // Keep surviving campaign formations. Temporary/support companies removed
+    // above are simply skipped by the UID-based restoration.
+    RestoreHierarchyAssignments(loadedHierarchy);
 
     // Load cumulative research flags for the new level (game mode unit filtering)
     {
@@ -15563,6 +16410,12 @@ void StrategicLevelFrame::SaveStrategicState() const
     const UnitStatePersistSaveView* prevU = g_unitStatePersistSave;
     g_unitStatePersistSave = &usv;
 
+    const std::vector<HierarchyPersistRec> hierarchyRecords = CaptureHierarchyAssignments();
+    HierarchyPersistSaveView hsv;
+    hsv.records = &hierarchyRecords;
+    const HierarchyPersistSaveView* prevH = g_hierarchyPersistSave;
+    g_hierarchyPersistSave = &hsv;
+
     MissionFlowPersistSaveView mfsv;
     mfsv.timeoutTurn = &m_territoryTimeoutTurn;
     mfsv.triggeredEvents = &m_triggeredLevelEvents;
@@ -15579,6 +16432,7 @@ void StrategicLevelFrame::SaveStrategicState() const
         NowIsoLocal());
 
     g_missionFlowPersistSave = prevMF;
+    g_hierarchyPersistSave = prevH;
     g_unitStatePersistSave = prevU;
     g_researchPersistSave = prev;
 }
@@ -18269,22 +19123,37 @@ void StrategicLevelFrame::ShowBriefing(int territory_id)
         }
     }
 
-    // Resolve texts dir
+    // Loose DATA/TEXTS is only a fallback; normal installs use the already
+    // loaded TEXTS.FS archive through m_spellData->texts.
     std::filesystem::path texts_dir = FindTextsDirForLevel(m_level, m_spellData);
-    if (texts_dir.empty())
+
+    std::string fallbackToken;
+    for (const auto& territory : m_level.territories)
     {
-        return;
+        if (territory.id == territory_id)
+        {
+            fallbackToken = territory.mission;
+            break;
+        }
     }
 
     wxString info;
     if (isCounterAttack)
     {
         info << "*** COUNTER-ATTACK ***\n\n";
-        try_append_single_text(info, texts_dir, token, ".S", "Counter-Attack Briefing");
+        bool found = try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+            texts_dir, token, ".S", "Counter-Attack Briefing");
+        if (!found && !fallbackToken.empty() && to_lower(token) != to_lower(fallbackToken))
+            try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+                texts_dir, fallbackToken, ".S", "Counter-Attack Briefing");
     }
     else
     {
-        try_append_single_text(info, texts_dir, token, "", "Briefing");
+        bool found = try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+            texts_dir, token, "", "Briefing");
+        if (!found && !fallbackToken.empty() && to_lower(token) != to_lower(fallbackToken))
+            try_append_single_text(info, m_spellData ? m_spellData->texts : nullptr,
+                texts_dir, fallbackToken, "", "Briefing");
     }
 
     if (info.IsEmpty())

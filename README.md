@@ -1,225 +1,311 @@
 # Spellcross Reloaded
 
-Fanouškovský pokus **oživit a zpřístupnit starý Spellcross** modernějším způsobem. Projekt původně vyšel z map editoru, ale postupně se posouvá hlavně směrem k hratelné hře.
+Fanouškovská open-source rekonstrukce a reimplementace **Spellcross: Poslední bitva** s cílem dostat původní hru do podoby, která je znovu pohodlně hratelná na moderním Windows a přitom si co nejvíc zachovává původní vzhled, data a herní logiku.
 
-- **Map editor (wxWidgets/C++)** rozšířený o *game mode*
-- **Python utility** pro extrakci, dekompresi a rekonstrukci herních dat / UI obrazovek
-- průběžná rekonstrukce kampaně, strategických obrazovek a herních mechanik
+Projekt vznikl jako fork / rozšíření původního map editoru, ale dnes už je jeho hlavním cílem **samotná hra**:
 
-> Stav projektu: **WIP / experiment / první veřejný release**. Hratelné, ale bez jakékoli záruky.
+- hratelná taktická bojová mapa,
+- kampaň a přechod mezi taktickou a strategickou částí,
+- rekonstruovaná strategická vrstva ve stylu původního Spellcrossu,
+- práce s jednotkami, veliteli, výzkumem, zdroji a statistikami,
+- nástroje pro reverse engineering, extrakci a rekonstrukci původních dat a grafiky.
+
+> **Stav projektu:** aktivní WIP / experimentální build. Hra je použitelná a velká část kampaně a strategické vrstvy už funguje, ale stále nejde o hotový ani plně otestovaný remake.
 
 ---
 
 ## Release
 
-K dispozici je veřejný release:
+Poslední veřejně publikovaný build:
 
 [**`Spellcross_Reloaded_v0.0.4`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.4)
 
-Aktuální cíl tohoto buildu je prostý: dostat hru do stavu, kdy by měla být **dohratelná od začátku do konce kampaně**. To ale neznamená, že je hotová nebo stabilní.
+`main` je vývojová větev a může obsahovat novější změny než poslední release.
 
-- testováno na **Windows 11**
-- bez jakékoli záruky
-- očekává se **velké množství bugů, rozbitých okrajových stavů a placeholder hodnot**
+Aktuální vývojový cíl zůstává stejný: dostat Spellcross do stavu, kdy je možné **odehrát celou kampaň od začátku do konce** bez nutnosti vracet se k editorovým nebo debugovacím postupům.
 
-Tenhle release je určen hlavně pro průběžné testování, hledání chyb a ověřování, že se celý projekt konečně posouvá z „editor experimentu“ směrem ke skutečné hře.
+Projekt je vyvíjen a testován především na **Windows 11**.
 
----
+Počítejte s tím, že:
 
-## Známé nedodělky a problémy v release 0.0.4
-
-### Herní logika
-- **Hierarchické začlenění jednotek** se zatím správně nepropisuje do hrací mapy.
-- **Upgrady jednotek** se zatím také nepropisují korektně do samotné hry / bojové mapy.
-- **Dočasné jednotky** nejsou hotové a jejich systémy aktuálně nefungují správně.
-- **Other Side counterattack / protiútoky** nejsou plně funkční.
-- **Deployment mod** není implementován - jednotky jsou na začátku mise deploynuty automaticky na startovací pozice
-
-### Game mode / stabilita
-- **Game Mode ON** je v této verzi již nastaven automaticky - vypnout se dá z hlavního menu pomocí konzole (~) a příkazem GAMEMODEOFF
-- Může zlobit **přehrávání videí**.
-- AI nepřátel i aliančních jednotek je zatím spíš **demo verze AI** než hotová herní inteligence.
-- Kvůli tomu je momentálně **rozbitá obtížnost hry**.
-
-### Balancing a ekonomika
-- **Balanc peněz a výzkumu** není doladěný.
-- **Ceny za jednotky, upgrady, akce a další hodnoty** jsou na mnoha místech jen placeholdery.
-
-### UI / vizuál
-- **Strategická mapa** zatím používá jen základní grafiku a ne finální grafiku ve stylu původní hry.
+- build může obsahovat chyby a nehotové okrajové stavy,
+- některé herní hodnoty a balancing ještě nemusí odpovídat originálu,
+- některé mechaniky se stále ověřují proti původní hře a dokumentaci,
+- save z vývojové verze nemusí být vždy kompatibilní s budoucími změnami.
+- import originálních strategických save Spellcrossu `BIG_MAP.SAV` (automatická detekce kapitoly a převod do interního stavu),
 
 ---
 
-## Co je tohle za projekt?
+## Co je Spellcross Reloaded dnes
 
-Původní myšlenka byla **oživit game mode v editoru**. To se podařilo a od té chvíle se projekt začal posouvat dál – od pouhého editoru směrem k rekonstrukci původního Spellcrossu.
+Původní projekt byl map editor s experimentálním `game mode`. Spellcross Reloaded z tohoto základu postupně vyrostl v pokus o **otevřenou rekonstrukci celé hry**.
 
-Dnes má projekt dva hlavní směry:
+Editor v projektu stále existuje a je důležitý pro práci s mapami a původními daty, ale není už hlavním produktem. Primární směr je dnes:
 
-1. **udržet a rozšířit hratelný game mode**
-2. postupně vytvořit něco jako vlastní **OpenSpellcross experiment**
+1. zprovoznit původní kampaň,
+2. rekonstruovat strategickou část hry,
+3. propojit strategickou a taktickou vrstvu,
+4. postupně zpřesňovat původní herní mechaniky,
+5. zachovat vzhled a atmosféru původního Spellcrossu místo vytváření moderního redesignu.
 
-To v praxi znamená hlavně:
-- načítání map a původních datových formátů
-- základní herní mechaniky
-- rekonstrukci obrazovek mimo mapu (Strategic level, Hierarchy, Research, Units…)
-- kampaňovou logiku a progression
-- postupné nahrazování debug/editor workflow skutečným hraním
-
-Právě kvůli rekonstrukci UI a asset pipeline v repu vzniklo i velké množství přiložených Python utilit.
+Jinými slovy: cílem už není „editor, ve kterém se dá trochu hrát“, ale **Spellcross, který se dá znovu normálně hrát**.
 
 ---
 
-## Důležitá poznámka k map editoru
+## Aktuálně implementované části
 
-S ohledem na povahu tohoto projektu **není cílem dál výrazně rozvíjet map editor jako samostatný produkt**. To je spíš role původního editoru.
+### Taktická bojová mapa
 
-Tenhle projekt se postupně soustředí hlavně na:
-- debugging game mode
-- stabilizaci kampaně
-- doplňování mechanik
-- vylepšování samotné hry
+Základ projektu stále tvoří původní C++/wxWidgets mapový engine a game mode.
 
-Map editor tedy v tomhle repu bude postupně spíš **upozaděn ve prospěch hry samotné**.
+Aktuálně je možné mimo jiné:
 
----
+- načítat a hrát původní mapy a mise,
+- pracovat s původními jednotkami a mapovými daty,
+- pohybovat jednotkami a provádět útoky,
+- používat základní mission/event logiku,
+- vyhodnocovat cíle misí,
+- přecházet mezi taktickou a strategickou částí hry,
+- ukládat a načítat rozehraný stav,
+- používat skupinový pohyb hráčských jednotek,
+- hrát proti základní AI nepřátelských jednotek.
 
-## Co je aktuálně použitelné
-
-### Game mode na mapě
-- možnost přidat jednotky na načtenou mapu a mapu „hrát“
-- možnost hrát původní mise
-- **save/load stavu** rozehrané hry
-- základní AI pro nepřátelské jednotky
-- základní přechod mezi taktickou a strategickou částí hry
-
-### Strategická část hry
-- rozpracované obrazovky jako:
-  - `StrategicLevelFrame`
-  - `HierarchyCanvas`
-  - `Research`
-  - `Units`
-- základní campaign flow
-- práce se zdroji, výzkumem a jednotkami v nějaké funkční podobě
-
-### Další věci
-- skupinový pohyb hráčských jednotek
-- main menu / původní menu
-- průběžná rekonstrukce dalších částí původního UI
-
-> Prakticky: použitelné to je, ale stále je potřeba počítat s tím, že jde o rozpracovaný build a ne hotovou hru.
+Taktická část je hratelná, ale AI, balancing a některé méně běžné mise či události stále potřebují další práci a testování.
 
 ---
 
-## Co je dál v plánu
+## Strategická část hry
 
-- stabilizace game modu
-- opravy campaign flow a okrajových stavů
-- dotažení hierarchy / units / research / strategy map obrazovek
-- správné propsání upgradů a hierarchie do boje
-- dodělání dočasných jednotek
-- lepší AI nepřátel i aliančních jednotek
-- rozumnější balancing peněz, výzkumu a cen
-- postupné nahrazování placeholder grafiky a UI věrnější verzí původní hry
+Strategická vrstva už není jen několik provizorních debug oken. Postupně byla rekonstruována jako skutečné herní rozhraní ve stylu originálu a používá společný stav kampaně.
+
+Aktuálně jsou implementované nebo rozpracované zejména tyto části:
+
+### Strategická mapa
+
+- zobrazení aktuální kapitoly / strategické mapy,
+- jednotlivá území a jejich stav,
+- textové informace k misím,
+- výběr jednotek pro útok,
+- přechod do taktické mise,
+- společné údaje o penězích, výzkumu a strategickém kole.
+
+### Bojová hierarchie
+
+- seznam jednotek a velitelů,
+- zařazování jednotek do bojových formací,
+- práce s veliteli,
+- vizuální rekonstrukce původní obrazovky hierarchie.
+
+### Řízení jednotek
+
+- správa stálých jednotek,
+- práce s poškozenými / dočasně nedostupnými jednotkami,
+- příprava mechanik doplňování, úprav a přezbrojení,
+- napojení jednotek na společný stav kampaně.
+
+### Nákup jednotek a velitelů
+
+- rozdělení jednotek do původních kategorií,
+- ceny a čas potřebný pro získání jednotky,
+- omezení dostupnosti podle aktuálního stavu kampaně,
+- nákup nových jednotek a velitelů.
+
+### Výzkum
+
+- původní kategorie výzkumu,
+- seznam dostupných výzkumných položek,
+- spuštění / zastavení výzkumu,
+- průběh výzkumu v čase,
+- odemykání technologií, jednotek a vylepšení podle campaign state.
+
+### Komplexní informace
+
+- procházení informací o výzkumu, technologiích, vylepšeních, rasách a jednotkách,
+- zobrazení původních textových informací ve stylu původní hry.
+
+### Správa území a zdrojů
+
+- zobrazení obsazených území,
+- strategické body / produkce území,
+- rozdělování zdrojů mezi **peníze** a **výzkum**,
+- aktualizace zdrojů mezi strategickými koly.
+
+### Statistiky
+
+- ztráty Aliance a Other Side,
+- statistika celé hry i aktuální kapitoly,
+- hodnost a zkušenost Johna Alexandra,
+- limity stálých jednotek a velitelů.
+
+### Nastavení a save/load
+
+- více save slotů,
+- ukládání a načítání strategického stavu,
+- gamma correction,
+- hlasitost hudby a zvuků,
+- volba rozlišení bojové mapy,
+- Quick Help.
 
 ---
 
-## Struktura repa (orientačně)
+## Věrnost původní hře
 
-- `spellcross-map-edit-main/` – C++/wxWidgets editor + game mode, hlavní aplikace
-- `spell_extract_fs_gui/` – GUI pro rozbalení `.FS` archivů
-- `spell_decomp/` – nástroje pro dekompresi (`LZ`, `LZ0`, `DELZ`)
-- `bin_inspector/` – rychlá inspekce a extrakce obsahu z binů
-- `spellcross_level_tool_v5/` – skládání a rekonstrukce map/levelů
-- `bin_out/spell_ui_builder/` – skládání UI obrazovek z vytažených podkladů
-- různé `*_gui.py` a helpery – experimenty a dílčí pipeline kroky
+Jedním z hlavních cílů není Spellcross „předělat“, ale **co nejvěrněji zrekonstruovat jeho původní chování a rozhraní**.
 
-Názvy a umístění se mohou měnit. Repo je živé a část obsahu je stále spíš workbench než finální struktura.
+Proto projekt využívá:
+
+- původní datové formáty,
+- původní mapy a definice misí,
+- extrahované grafické prvky původního UI,
+- rekonstrukci rozložení strategických obrazovek,
+- původní texty a herní data tam, kde jsou dostupné,
+- původní manuál a reálné chování DOS verze jako referenci při obnovování mechanik.
+
+Ne všechno je zatím 1:1. V řadě míst bylo nutné nejprve vytvořit funkční implementaci a teprve potom ji zpřesňovat podle originálu.
 
 ---
 
-## Build (Windows / Visual Studio)
+## Co ještě není hotové
+
+Projekt je stále ve vývoji. Největší otevřené oblasti jsou zejména:
+
+- další stabilizace campaign flow,
+- okrajové podmínky jednotlivých misí a eventů,
+- přesnější chování AI nepřátel i aliančních jednotek,
+- dokončení a ověření všech vazeb mezi strategickou a taktickou vrstvou,
+- úplné dotažení jednotkových upgradů, přezbrojení a souvisejících časových stavů,
+- ověření všech typů pomocných a dočasných jednotek,
+- přesnější balancing peněz, výzkumu, cen a časů,
+- další porovnávání s původní DOS verzí,
+- stabilita přehrávání některých původních multimediálních formátů,
+- cleanup kódu, který stále nese část historie původního editoru a experimentálních implementací.
+
+README se snaží popisovat stav `main`; konkrétní release může být proti němu o něco pozadu.
+
+---
+
+## Map editor
+
+Map editor je původní technologický základ celého projektu a stále zůstává součástí repozitáře.
+
+Umí mimo jiné:
+
+- načítat a ukládat mapové `DTA` / `DEF` soubory,
+- zobrazovat a upravovat terén, objekty, animace a jednotky,
+- pracovat s eventy a mission objectives,
+- zobrazovat a exportovat různé herní resources,
+- používat původní datové formáty Spellcrossu.
+
+Další výrazný vývoj editoru jako samostatného produktu ale **není hlavní prioritou Spellcross Reloaded**. Pro čistě editorový vývoj je důležitý především původní projekt Stanislava Mašláně.
+
+---
+
+## Struktura repozitáře
+
+Aktuální hlavní části repa:
+
+- `spellcross-map-edit-main/` – hlavní C++/wxWidgets aplikace, mapový engine, game mode a rekonstruovaná hra,
+- `spellcross-master-pytools/` – Python workbench a utility pro analýzu, extrakci a rekonstrukci herních dat / UI,
+- `spell_decomp/` – nástroje pro dekompresi původních datových formátů,
+- `spell_extractfs/` – nástroje pro práci s původními `.FS` archivy.
+
+Repo je stále živý vývojový workspace, takže umístění a názvy pomocných utilit se mohou měnit.
+
+---
+
+## Reverse engineering / data pipeline
+
+Vedle samotné hry obsahuje projekt řadu pomocných Python nástrojů, které vznikly při rozebírání původních dat Spellcrossu.
+
+Typický pracovní postup je zhruba:
+
+1. rozbalit původní `.FS` / `.FSU` archivy,
+2. dekomprimovat datové bloky (`LZ`, `LZ0`, `DELZ` a další),
+3. prohlédnout a určit obsah vzniklých binárních souborů,
+4. extrahovat grafiku, palety, texty nebo další resources,
+5. rekonstruovat mapy a strategické obrazovky,
+6. porovnat výsledek s původní hrou,
+7. implementovat chování přímo do C++ části Spellcross Reloaded.
+
+Část Python utilit je univerzálně použitelná, část jsou jednorázové nebo experimentální nástroje vytvořené pro konkrétní krok reverse engineeringu.
+
+---
+
+## Build
 
 ### Požadavky
-- **Visual Studio 2022/2026**
+
+- **Windows**
+- **Visual Studio 2022 nebo novější**
 - **wxWidgets** buildnuté pro odpovídající MSVC toolchain
+- C++ toolchain odpovídající projektu
 
-### Poznámky
-Pokud to chcete zkoušet rozchodit, všechno podstatné je v:
+Hlavní aplikace je v:
 
-`spellcross-map-edit-main/`
+```text
+spellcross-map-edit-main/
+```
 
-To je hlavní aplikace. Zbytek repa jsou z velké části pomocné utility, experimenty a pipeline skripty.
+Projekt vychází z původního wxWidgets editoru, takže při ručním buildu je nejčastější komplikací správné nastavení knihoven a cest k wxWidgets.
 
-Pokud narazíte na linker chyby typu **LNK2005 / LNK1169** (duplicitní symboly), zkontrolujte, že implementace UI tříd není omylem ve více `.cpp` souborech zároveň.
-
----
-
-## Pipeline: jak z toho dostat data a výsledky
-
-Typický postup:
-
-1. **Rozbalit FS soubory**  
-   `spell_extract_fs_gui`
-2. **Roztřídit data pro orientaci**  
-   `data_sorter.py`
-3. **Extrahovat LS a LS0 soubory → vzniknou biny**  
-   `spell_decomp/spell_bulk_delz_gui.py`
-4. **Zjistit, co je uvnitř binů a případně extrahovat**  
-   `bin_inspector`
-5. **Zpětně komponovat mapy z levelů**  
-   `spellcross_level_tool_v5`
-6. **Rekonstruovat herní menu/UI z vyextrahovaných podkladů**  
-   `bin_out/spell_ui_builder`
+Pokud narazíte na linker chyby typu `LNK2005` / `LNK1169`, zkontrolujte zejména duplicitní implementace tříd nebo zdrojové soubory přidané do projektu vícekrát.
 
 ---
 
-## Utility na rekonstrukci grafiky Spellcrossu
+## Debug / Game Mode
 
-### `unlz_gui.py`
-- rozbaluje **LZ** a **LZ0** soubory do `*.bin`
-- výstup je binárka, kterou je potřeba dál interpretovat podle typu dat
+Game mode je dnes součástí běžného workflow hry a není už jen experimentální funkce editoru.
 
-### `spell_rawimg_guy_v2.py`
-- funkční řešení pro „klasické“ raw obrázky
-- vstup: rozbalený `*.bin`
-- je potřeba vybrat správnou paletu
-- výstup: `*.png`
-
-### `spell_rawimg_gui_v4.py` + `spell_rawimg_tool_v4.py`
-- experimentální řešení pro skládanou raw grafiku
-- vstup: rozbalený `*.bin`
-- výstup: `*.png`
-- výsledek je často potřeba ručně doladit:
-  - otáčení
-  - prokládání (`interleave`)
-  - další parametry
-
-### Ostatní soubory
-Zbytek jsou různé experimenty, pomocné skripty a pracovní poznámky. Něco funguje dobře, něco částečně a něco vůbec.
+Pro vývoj a debugging ale stále existují interní / konzolové možnosti. Některé z nich se mohou mezi verzemi změnit a nejsou považovány za stabilní veřejné rozhraní.
 
 ---
 
 ## Poděkování / Credits
 
-Obrovské díky patří **Stanislavu Mašláňovi** – bez něj by nebylo nic.  
-Veškeré unwrapery a původní map editor jsou jeho práce a muselo to stát velké množství času.
+Obrovské díky patří **Stanislavu Mašláňovi** – bez jeho práce by tenhle projekt prakticky neměl z čeho vyrůst.
+
+Původní map editor, velká část reverse engineeringu datových formátů a řada nástrojů jsou jeho práce.
 
 Jeho utility:
+
 - https://spellcross.kvalitne.cz/
 
 Originální map editor:
+
 - https://github.com/smaslan/spellcross-map-edit
+
+Spellcross Reloaded na této práci staví a posouvá původní editorový základ směrem k rekonstrukci celé hry.
 
 ---
 
 ## Jak přispět
 
-- issue / popis problému: ideálně přiložit vzorek souboru, save, screenshot nebo přesný postup reprodukce
-- PR vítané, hlavně pokud jde o stabilizaci, cleanup, dokumentaci nebo technické opravy
+Bug reporty a pull requesty jsou vítané.
+
+U issue je ideální přiložit:
+
+- přesný postup reprodukce,
+- save game,
+- screenshot,
+- název mise / strategické kapitoly,
+- případně vzorek problematického původního souboru.
+
+Nejvíc pomůže práce na:
+
+- stabilitě campaign flow,
+- porovnávání mechanik s originálem,
+- AI,
+- save/load,
+- jednotkových a strategických mechanikách,
+- reverse engineeringu dosud nejasných formátů,
+- dokumentaci a cleanupu kódu.
 
 ---
 
-## Licence
+## Licence a původní herní data
 
-Tento projekt je licencován pod **MIT licencí** – viz soubor [`LICENSE`](LICENSE).
+Zdrojový kód vytvořený v rámci tohoto projektu je licencován pod **MIT licencí** – viz [`LICENSE`](LICENSE), pokud není u konkrétní části uvedeno jinak.
+
+**Spellcross**, původní herní grafika, zvuky, hudba, texty, data a další původní obsah hry nejsou tímto repozitářem relicencovány. Práva k původní hře a jejím assetům zůstávají jejich příslušným držitelům.
+
+Projekt je nekomerční fanouškovská rekonstrukce a není oficiálním produktem původních autorů ani vydavatele.

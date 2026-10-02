@@ -1193,15 +1193,50 @@ static bool OpenStrategicSaveFromPath(MainFrame* main, const std::filesystem::pa
         return false;
     }
 
-    const fs::path defPath = ResolveStrategicLevelDefForSave(savePath, main->spell_data);
-    if (defPath.empty())
+    const bool originalBigMap =
+        to_lower(savePath.extension().string()) == ".sav";
+
+    fs::path defPath;
+    if (originalBigMap)
     {
-        wxMessageBox(
-            "The strategic save was found, but its LEVEL_XX.DEF could not be located.\n\n"
-            "The loader checked the level_def stored in the save, the configured Spellcross data, "
-            "the save/strategic/level_XX directory name and the save folder itself.",
-            "Load strategic game", wxOK | wxICON_ERROR, main);
-        return false;
+        int levelNumber = -1;
+        std::string importError;
+        if (!StrategicLevelFrame::PeekOriginalBigMapLevel(savePath, levelNumber, &importError))
+        {
+            wxMessageBox(
+                "The selected file is not a valid original BIG_MAP.SAV.\n\n" +
+                wxString::FromUTF8(importError),
+                "Load original strategic game", wxOK | wxICON_ERROR, main);
+            return false;
+        }
+
+        char levelDefName[32] = {};
+        std::snprintf(levelDefName, sizeof(levelDefName), "LEVEL_%02d.DEF", levelNumber);
+        const fs::path root = main->spell_data
+            ? fs::path(main->spell_data->spell_data_root) : fs::path();
+        defPath = FindSpellDataFile(root, levelDefName);
+        if (defPath.empty())
+        {
+            wxMessageBox(
+                wxString::Format(
+                    "BIG_MAP.SAV is from strategic level %d, but %s could not be located in the configured Spellcross data.",
+                    levelNumber, wxString::FromUTF8(levelDefName).c_str()),
+                "Load original strategic game", wxOK | wxICON_ERROR, main);
+            return false;
+        }
+    }
+    else
+    {
+        defPath = ResolveStrategicLevelDefForSave(savePath, main->spell_data);
+        if (defPath.empty())
+        {
+            wxMessageBox(
+                "The strategic save was found, but its LEVEL_XX.DEF could not be located.\n\n"
+                "The loader checked the level_def stored in the save, the configured Spellcross data, "
+                "the save/strategic/level_XX directory name and the save folder itself.",
+                "Load strategic game", wxOK | wxICON_ERROR, main);
+            return false;
+        }
     }
 
     LevelData lvl;
@@ -1214,15 +1249,21 @@ static bool OpenStrategicSaveFromPath(MainFrame* main, const std::filesystem::pa
         return false;
     }
 
-    // skipAutosave=true is essential: the explicitly selected JSON is the
+    // skipAutosave=true is essential: the explicitly selected save is the
     // authoritative state. Do not let the constructor silently substitute the
     // level autosave before we apply it.
     auto* win = new StrategicLevelFrame(main, lvl, /*skipAutosave=*/true);
-    if (!win->LoadStrategicStateFromPath(savePath))
+    std::string importWarning;
+    const bool loaded = originalBigMap
+        ? win->LoadOriginalBigMapSaveFromPath(savePath, &importWarning)
+        : win->LoadStrategicStateFromPath(savePath);
+    if (!loaded)
     {
         win->Destroy();
         wxMessageBox(
-            "The selected file is not a valid strategic save for the resolved LEVEL DEF.",
+            originalBigMap
+                ? "The selected BIG_MAP.SAV could not be imported for the resolved LEVEL DEF."
+                : "The selected file is not a valid strategic save for the resolved LEVEL DEF.",
             "Load strategic game", wxOK | wxICON_ERROR, main);
         return false;
     }
@@ -1240,6 +1281,12 @@ static bool OpenStrategicSaveFromPath(MainFrame* main, const std::filesystem::pa
     main->HideTacticalWindow();
     win->Show();
     win->Raise();
+
+    if (originalBigMap && !importWarning.empty())
+    {
+        wxMessageBox(wxString::FromUTF8(importWarning),
+            "Original save imported", wxOK | wxICON_INFORMATION, win);
+    }
     return true;
 }
 
@@ -1880,8 +1927,8 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     Bind(wxEVT_MENU,&MainFrame::OnOpenMainMenu,this,ID_MainMenu);
 	Bind(wxEVT_MENU, &MainFrame::OnOpenLevelDef, this, ID_OpenLevelDef);
 
-// Load an exact strategic JSON save. The save itself identifies LEVEL_XX.DEF;
-// it no longer needs to be copied next to the DEF file.
+// Load a remake strategic JSON save or an original BIG_MAP.SAV.
+// JSON identifies its DEF; BIG_MAP.SAV carries the original level number.
 Bind(wxEVT_MENU, [this](wxCommandEvent&)
 {
     namespace fs = std::filesystem;
@@ -1895,7 +1942,7 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
         "Load strategic game",
         wxString::FromUTF8(startDir.string()),
         "",
-        "Strategic saves (*.json)|*.json|All files|*.*",
+        "Strategic saves (*.json;*.sav)|*.json;*.sav|Remake strategic save (*.json)|*.json|Original Spellcross save (*.sav)|*.sav|All files|*.*",
         wxFD_OPEN | wxFD_FILE_MUST_EXIST
     );
 
@@ -2775,7 +2822,7 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                     "Load game",
                     wxString::FromUTF8(loadStart.string()),
                     "",
-                    "All saves (*.scsave;*.json)|*.scsave;*.json|Spellcross save (*.scsave)|*.scsave|Strategic state (*.json)|*.json",
+                    "All saves (*.scsave;*.json;*.sav)|*.scsave;*.json;*.sav|Tactical save (*.scsave)|*.scsave|Remake strategic state (*.json)|*.json|Original BIG_MAP.SAV (*.sav)|*.sav",
                     wxFD_OPEN | wxFD_FILE_MUST_EXIST
                 );
                 if (dlg.ShowModal() == wxID_CANCEL)
@@ -2787,10 +2834,10 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                 std::wstring load_path = dlg.GetPath().ToStdWstring();
                 std::string ext_lower = to_lower(std::filesystem::path(load_path).extension().string());
 
-                if (ext_lower == ".json")
+                if (ext_lower == ".json" || ext_lower == ".sav")
                 {
-                    // Strategic campaign save. Load the exact selected JSON and
-                    // resolve LEVEL_XX.DEF from the metadata/stable save folder.
+                    // Strategic campaign save. JSON is the remake format;
+                    // .SAV imports the original Spellcross BIG_MAP.SAV.
                     if (!OpenStrategicSaveFromPath(this, std::filesystem::path(load_path)))
                         ShowMainMenuWindow();
                 }
