@@ -16,11 +16,11 @@ Projekt vznikl jako fork / rozšíření původního map editoru, ale dnes už j
 
 ## Release
 
-Poslední veřejně publikovaný build:
+Aktuální verze tohoto zdrojového buildu je **0.7.1**.
 
-[**`Spellcross_Reloaded_v0.0.4`**](https://github.com/luboshorak/spellcross_restoration_tools/releases/tag/v0.0.4)
+Veřejné buildy jsou publikované na [GitHub Releases](https://github.com/luboshorak/spellcross_restoration_tools/releases).
 
-`main` je vývojová větev a může obsahovat novější změny než poslední release.
+`main` je vývojová větev a může obsahovat novější změny než poslední publikovaný release.
 
 Aktuální vývojový cíl zůstává stejný: dostat Spellcross do stavu, kdy je možné **odehrát celou kampaň od začátku do konce** bez nutnosti vracet se k editorovým nebo debugovacím postupům.
 

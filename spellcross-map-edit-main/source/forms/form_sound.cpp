@@ -6,12 +6,14 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_sound.h"
+#include "app_identity.h"
 #include "other.h"
 
 ///////////////////////////////////////////////////////////////////////////
 
 FormSound::FormSound( wxWindow* parent,SpellData* spell_data,wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	// === AUTO GENERATED STUFF STARTS HERE ===
 
 	this->SetSizeHints( wxSize( 600,400 ), wxDefaultSize );

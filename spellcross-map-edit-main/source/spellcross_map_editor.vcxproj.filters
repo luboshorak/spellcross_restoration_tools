@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -372,6 +372,12 @@
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="app_identity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="app_version.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="wx_other.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -441,6 +447,12 @@
       <Filter>Resource Files</Filter>
     </Image>
     <Image Include="ico\orc_icon.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="ico\spellcross_reloaded.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="ico\spellcross_reloaded.png">
       <Filter>Resource Files</Filter>
     </Image>
   </ItemGroup>

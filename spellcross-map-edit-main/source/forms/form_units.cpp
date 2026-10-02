@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_units.h"
+#include "app_identity.h"
 #include "other.h"
 
 #include <wx/rawbmp.h>
@@ -16,6 +17,7 @@
 
 FormUnits::FormUnits( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	// === AUTO GENERATED START ===	
 	
 	this->SetSizeHints(wxDefaultSize,wxDefaultSize);

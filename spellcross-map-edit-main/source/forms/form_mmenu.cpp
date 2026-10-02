@@ -1,4 +1,5 @@
 #include "form_mmenu.h"
+#include "app_identity.h"
 
 #include <wx/wx.h>
 #include <wx/dcbuffer.h>
@@ -247,6 +248,7 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
     const wxSize windowSize(1390, 1050);
     long style = wxDEFAULT_FRAME_STYLE;
     form = new wxFrame(nullptr, win_id, "Spellcross", wxDefaultPosition, windowSize, style);
+    spellcross_app::ApplyWindowIcon(form);
     form->SetMinSize(wxSize(660, 520));
     form->SetBackgroundStyle(wxBG_STYLE_PAINT);
     form->SetDoubleBuffered(true);

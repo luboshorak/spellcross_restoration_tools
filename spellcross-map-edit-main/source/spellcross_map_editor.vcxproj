@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -96,6 +96,8 @@
     <ClInclude Include="cxxmidi\player\player_sync.hpp" />
     <ClInclude Include="cxxmidi\sysex.hpp" />
     <ClInclude Include="cxxmidi\track.hpp" />
+    <ClInclude Include="app_identity.h" />
+    <ClInclude Include="app_version.h" />
     <ClInclude Include="forms\form_about.h" />
     <ClInclude Include="forms\form_anm.h" />
     <ClInclude Include="forms\form_edit_toolset.h" />
@@ -155,6 +157,8 @@
     <Image Include="ico\map.ICO" />
     <Image Include="ico\multi.png" />
     <Image Include="ico\orc_icon.ico" />
+    <Image Include="ico\spellcross_reloaded.ico" />
+    <Image Include="ico\spellcross_reloaded.png" />
     <Image Include="ico\pal.ico" />
     <Image Include="ico\sprite.ico" />
     <Image Include="wx\msw\cdrom.ico" />

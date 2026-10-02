@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_objects.h"
+#include "app_identity.h"
 #include "form_edit_toolset.h"
 #include "sprites.h"
 #include "other.h"
@@ -20,6 +21,7 @@
 
 FormObjects::FormObjects( wxWindow* parent,SpellData* spell_data,wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	this->spell_data = spell_data;
 	spell_map = NULL;
 	m_spell_obj = NULL;
@@ -389,7 +391,7 @@ void FormObjects::OnLoadObjects(wxCommandEvent& event)
 
 	std::wstring path = dlg.GetPath().ToStdWstring();
 
-	// InitSpriteContext vrací int – pøedpokládám 0 = OK, jinak fail
+	// InitSpriteContext vracï¿½ int ï¿½ pï¿½edpoklï¿½dï¿½m 0 = OK, jinak fail
 	if (terr->InitSpriteContext(path) != 0)
 	{
 		wxMessageBox("Failed to load context file.", "Error", wxICON_ERROR);
@@ -621,7 +623,7 @@ void FormObjects::SetMap(SpellMap* map)
 // find terrain selected
 Terrain* FormObjects::FindTerrain()
 {
-	// 1) preferuj checked položku
+	// 1) preferuj checked poloï¿½ku
 	for (int k = 0; k < spell_data->GetTerrainCount(); k++)
 	{
 		auto* mi = GetMenuBar()->FindItem(TERR_ID0 + k);
@@ -629,7 +631,7 @@ Terrain* FormObjects::FindTerrain()
 			return spell_data->GetTerrain(k);
 	}
 
-	// 2) fallback: pokud nic není checked, vynu první terén
+	// 2) fallback: pokud nic nenï¿½ checked, vynuï¿½ prvnï¿½ terï¿½n
 	if (spell_data->GetTerrainCount() > 0)
 	{
 		auto* mi0 = GetMenuBar()->FindItem(TERR_ID0 + 0);
@@ -652,15 +654,15 @@ void FormObjects::SelectTerrain()
 	if (!terr)
 		return;
 
-	// 1) Pokud ještì nejsou objekty, zkus naèíst sprite context (.con)
-	//    (pokud už ho známe z minula / z konfigurace)
+	// 1) Pokud jeï¿½tï¿½ nejsou objekty, zkus naï¿½ï¿½st sprite context (.con)
+	//    (pokud uï¿½ ho znï¿½me z minula / z konfigurace)
 	auto& ctx = terr->GetSpriteContextPath();
 	if (terr->GetObjectsCount() == 0 && !ctx.empty())
 	{
 		terr->InitSpriteContext(ctx);
 	}
 
-	// 2) Pokud poøád nic, aspoò to dej vìdìt do statusbaru (a víš, že je to data-issue)
+	// 2) Pokud poï¿½ï¿½d nic, aspoï¿½ to dej vï¿½dï¿½t do statusbaru (aï¿½ vï¿½, ï¿½e je to data-issue)
 	if (terr->GetObjectsCount() == 0)
 	{
 		sbar->SetStatusText("No objects loaded for this terrain (missing .con context?)");
@@ -745,24 +747,24 @@ void FormObjects::OnPaintCanvas(wxPaintEvent& event)
             Terrain* found_terr = NULL;
             Sprite* found_spr = NULL;
 
-            // Najdi první terrain, který obsahuje sprite odpovídající tagu (wildcard)
+            // Najdi prvnï¿½ terrain, kterï¿½ obsahuje sprite odpovï¿½dajï¿½cï¿½ tagu (wildcard)
             std::string pat;
-			// SPECOBJ: už má správný wildcard tag typu SOA?_000
+			// SPECOBJ: uï¿½ mï¿½ sprï¿½vnï¿½ wildcard tag typu SOA?_000
 			if (m_l2_kind == L2_SPEC)
 			{
 				pat = m_l2_obj->tag;
 			}
 			// MURY: sprity jsou MRA??_??, class_id je v hex na pozici [3]
-			// jako reprezentativní dílek zvolíme „5“ (rovná èást) a zbytek wildcard
+			// jako reprezentativnï¿½ dï¿½lek zvolï¿½me ï¿½5ï¿½ (rovnï¿½ ï¿½ï¿½st) a zbytek wildcard
 			else if (m_l2_kind == L2_WALL)
 			{
 				int cls = (m_l2_obj->index & 0x03);   // 0..3
-				char h = hex_digit(cls | 0x08);       // 0x08 = „intact“ varianta (podle logiky ve sprites.cpp)
+				char h = hex_digit(cls | 0x08);       // 0x08 = ï¿½intactï¿½ varianta (podle logiky ve sprites.cpp)
 				pat = "MRA";
 				pat += h;
 				pat += "5_??";
 			}
-			// MOSTY: sprity jsou MTA1A_?? (tøída A..D na pozici [4])
+			// MOSTY: sprity jsou MTA1A_?? (tï¿½ï¿½da A..D na pozici [4])
 			else if (m_l2_kind == L2_BRIDGE)
 			{
 				int cls = (m_l2_obj->index & 0x03);   // 0..3
@@ -770,7 +772,7 @@ void FormObjects::OnPaintCanvas(wxPaintEvent& event)
 
 				pat = "MTA1";
 				pat += c;        // A..D
-				pat += "_??";    // napø. _01
+				pat += "_??";    // napï¿½. _01
 			}
 
 			if (!pat.empty())
@@ -838,7 +840,7 @@ void FormObjects::FillToolsClasses()
 		for (int oid = 0; oid < terr->GetObjectsCount(); oid++)
 		{
 			auto obj = terr->objects[oid];
-			if (obj->GetToolClass() == k) // a group 0 / cokoliv podle tvé logiky
+			if (obj->GetToolClass() == k) // a group 0 / cokoliv podle tvï¿½ logiky
 				treeCtrlClasses->AppendItem(cid, obj->GetDescription(),
 					Icons::SINGLE, -1, (wxTreeItemData*)new TreeNode(obj));
 		}
@@ -866,7 +868,7 @@ void FormObjects::FillToolsClasses()
 			}
 		}
 
-		// “single” objekty bez group
+		// ï¿½singleï¿½ objekty bez group
 		for (int oid = 0; oid < terr->GetObjectsCount(); oid++)
 		{
 			auto obj = terr->objects[oid];

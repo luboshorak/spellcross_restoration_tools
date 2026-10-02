@@ -1,4 +1,5 @@
-﻿#include "form_level.h"
+#include "form_level.h"
+#include "app_identity.h"
 
 #include "main.h"
 #include "other.h"
@@ -2335,6 +2336,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     m_spellData(parent ? parent->spell_data : nullptr),
     m_level(level)
 {
+    spellcross_app::ApplyWindowIcon(this);
     static bool seeded = false;
     if (!seeded) { std::srand((unsigned)std::time(nullptr)); seeded = true; }
 

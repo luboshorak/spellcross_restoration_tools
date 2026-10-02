@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_gr_view.h"
+#include "app_identity.h"
 #include "sprites.h"
 #include "other.h"
 #include "LZ_spell.h"
@@ -21,6 +22,7 @@
 
 FormGResView::FormGResView(wxWindow* parent,SpellData* spell_data,wxWindowID id,const wxString& title,const wxPoint& pos,const wxSize& size,long style) : wxFrame(parent,id,title,pos,size,style)
 {
+    spellcross_app::ApplyWindowIcon(this);
 	this->spell_data = spell_data;
 
 	// === AUTO GENERATED START ===	

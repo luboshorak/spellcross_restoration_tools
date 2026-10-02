@@ -6,11 +6,13 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_mission_params.h"
+#include "app_identity.h"
 
 ///////////////////////////////////////////////////////////////////////////
 
 FormMissionParams::FormMissionParams( wxWindow* parent,SpellData* spell_data,SpellMap *spell_map,wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxDialog( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	m_spell_data = spell_data;
 	m_spell_map = spell_map;
 

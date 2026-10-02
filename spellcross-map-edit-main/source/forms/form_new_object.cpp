@@ -6,11 +6,13 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_new_object.h"
+#include "app_identity.h"
 
 ///////////////////////////////////////////////////////////////////////////
 
 FormNewObject::FormNewObject(wxWindow* parent,Terrain* terrain,wxWindowID id,const wxString& title,const wxPoint& pos,const wxSize& size,long style) : wxDialog(parent,id,title,pos,size,style)
 {
+    spellcross_app::ApplyWindowIcon(this);
 	this->SetSizeHints(wxSize(400,-1),wxDefaultSize);
 
 	wxBoxSizer* szrNewObj;

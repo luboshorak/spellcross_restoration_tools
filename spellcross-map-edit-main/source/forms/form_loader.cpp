@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_loader.h"
+#include "app_identity.h"
 #include <wx/stdpaths.h>
 
 #include <filesystem>
@@ -65,6 +66,7 @@ namespace
 
 FormLoader::FormLoader(wxWindow* parent,SpellData *&spell_data, wstring config_path, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxDialog( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	// === AUTO GENERATER START ===
 	
 	this->SetSizeHints(wxDefaultSize,wxDefaultSize);

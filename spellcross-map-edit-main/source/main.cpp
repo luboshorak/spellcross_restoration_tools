@@ -40,6 +40,7 @@
 #include <map>
 
 #include "resource.h"
+#include "app_identity.h"
 #include "main.h"
 #include "other.h"
 #include "simpleini.h"
@@ -1703,6 +1704,7 @@ static wxString BuildSpellcrossWindowTitle(SpellMap* map)
 // Main panel init
 MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY, "Spellcross", wxDefaultPosition, wxSize(1600,1000))
 {
+    spellcross_app::ApplyWindowIcon(this);
     // store local reference to initial map and data
     spell_map = map;
     spell_data = spelldata;
@@ -5448,6 +5450,7 @@ void MainFrame::LoadToolsetRibbon(Terrain *terr)
 //--------------------------------------------------------------------------------------------------------------------
 FormGamma::FormGamma(wxFrame* parent,SpellMap* map,wxWindowID id) :wxDialog(parent,wxID_ANY,"Gamma correction",wxDefaultPosition,wxSize(400,80),wxDEFAULT_FRAME_STYLE|wxSTAY_ON_TOP)
 {
+    spellcross_app::ApplyWindowIcon(this);
     // store local reference to initial map and data
     spell_map = map;
 
@@ -5492,6 +5495,7 @@ void FormGamma::OnExit(wxKeyEvent& event)
 //--------------------------------------------------------------------------------------------------------------------
 FormTerrain::FormTerrain(wxFrame* parent,SpellData* data,wxWindowID id) :wxDialog(parent,wxID_ANY,"Terrain selection",wxDefaultPosition,wxSize(300,150),wxDEFAULT_FRAME_STYLE|wxSTAY_ON_TOP)
 {
+    spellcross_app::ApplyWindowIcon(this);
     // store local reference to initial map and data
     m_spell_data = data;
 

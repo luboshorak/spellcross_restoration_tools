@@ -6,11 +6,13 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_anm.h"
+#include "app_identity.h"
 
 ///////////////////////////////////////////////////////////////////////////
 
 FormANM::FormANM(wxWindow* parent,SpellData* spell_data,bool is_pnm,wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
-{		
+{
+    spellcross_app::ApplyWindowIcon(this);		
 	// === AUTO GENERATED STUFF STARTS HERE ===
 
 	this->SetSizeHints(wxSize(700,500),wxDefaultSize);

@@ -1,6 +1,7 @@
 // Microsoft Visual C++ generated resource script.
 //
 #include "resource.h"
+#include "app_version.h"
 
 #define APSTUDIO_READONLY_SYMBOLS
 /////////////////////////////////////////////////////////////////////////////
@@ -97,9 +98,9 @@ WXCURSOR_CROSS          CURSOR                  "wx/msw/cross.cur"
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_ICON1               ICON                    "ico/orc_icon.ico"
+IDI_ICON1               ICON                    "ico/spellcross_reloaded.ico"
 
-WXICON_AAA              ICON                    "wx/msw/std.ico"
+WXICON_AAA              ICON                    "ico/spellcross_reloaded.ico"
 
 WXICON_SMALL_CLOSED_FOLDER ICON                    "wx/msw/folder1.ico"
 
@@ -117,12 +118,49 @@ WXICON_SMALL_FLOPPY     ICON                    "wx/msw/floppy.ico"
 
 WXICON_SMALL_REMOVEABLE ICON                    "wx/msw/removble.ico"
 
-IDI_ICON2               ICON                    "ico/orc_icon.ico"
+IDI_ICON2               ICON                    "ico/spellcross_reloaded.ico"
 
-IDI_ICON_SPR            ICON                    "ico/sprite.ico"
+IDI_ICON_SPR            ICON                    "ico/spellcross_reloaded.ico"
 
-IDI_ICON_PAL            ICON                    "ico/pal.ico"
+IDI_ICON_PAL            ICON                    "ico/spellcross_reloaded.ico"
 
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION SPELLCROSS_VERSION_COMMA
+ PRODUCTVERSION SPELLCROSS_VERSION_COMMA
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Spellcross Reloaded\0"
+            VALUE "FileVersion", "0.7.1\0"
+            VALUE "InternalName", "Spellcross\0"
+            VALUE "OriginalFilename", "Spellcross.exe\0"
+            VALUE "ProductName", "Spellcross Reloaded\0"
+            VALUE "ProductVersion", "0.7.1\0"
+            VALUE "Comments", "Fan-made Spellcross restoration project\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
 
 /////////////////////////////////////////////////////////////////////////////
 //

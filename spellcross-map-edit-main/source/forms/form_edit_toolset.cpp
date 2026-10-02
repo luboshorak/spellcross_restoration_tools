@@ -6,12 +6,14 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_edit_toolset.h"
+#include "app_identity.h"
 #include "spellcross.h"
 
 ///////////////////////////////////////////////////////////////////////////
 
 FormEditToolset::FormEditToolset( wxWindow* parent,Terrain* terr,int toolset_id, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxDialog( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	m_terr = terr;
 	m_toolset_id = toolset_id;
 	

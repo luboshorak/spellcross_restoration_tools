@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_sprite_view.h"
+#include "app_identity.h"
 #include "form_edit_toolset.h"
 #include "spellcross.h"
 #include "sprites.h"
@@ -22,6 +23,7 @@
 
 FormSprite::FormSprite( wxWindow* parent,SpellData* spell_data,wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
 {
+    spellcross_app::ApplyWindowIcon(this);
 	this->spell_data = spell_data;
 	
 	

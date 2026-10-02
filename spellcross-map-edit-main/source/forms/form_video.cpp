@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////
 
 #include "form_video.h"
+#include "app_identity.h"
 #include "other.h"
 
 
@@ -19,6 +20,7 @@
 
 FormVideo::FormVideo(wxWindow* parent,SpellData* spell_data,wxWindowID id,const wxString& title,const wxPoint& pos,const wxSize& size,long style) : wxFrame(parent,id,title,pos,size,style)
 {
+    spellcross_app::ApplyWindowIcon(this);
 	m_spell_data = spell_data;
 
 	// === AUTO GENERATED START ===
