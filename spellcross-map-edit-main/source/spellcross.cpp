@@ -306,8 +306,34 @@ string &SpellStringTable::GetRaw()
 // class SpellData
 //=============================================================================
 
-SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path,std::function<void(std::string)> status_list,std::function<void(std::string)> status_item)
+static SpellDataFiles BuildLegacySpellDataFiles(const std::wstring& data_path, const std::wstring& cd_data_path)
 {
+	SpellDataFiles files;
+	files.data_root = data_path;
+	files.cd_root = cd_data_path;
+	const std::filesystem::path data(data_path);
+	const std::filesystem::path cd(cd_data_path);
+	files.common_fs = (data / "COMMON.FS").wstring();
+	files.terrain_t11_fs = (data / "T11.FS").wstring();
+	files.terrain_pust_fs = (data / "PUST.FS").wstring();
+	files.terrain_devast_fs = (data / "DEVAST.FS").wstring();
+	files.units_fsu = (data / "UNITS.FSU").wstring();
+	files.texts_fs = (data / "TEXTS.FS").wstring();
+	files.samples_fs = (data / "SAMPLES.FS").wstring();
+	files.music_fs = (data / "MUSIC.FS").wstring();
+	files.info_fs = (cd / "INFO.FS").wstring();
+	return files;
+}
+
+SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path,std::function<void(std::string)> status_list,std::function<void(std::string)> status_item)
+	: SpellData(BuildLegacySpellDataFiles(data_path, cd_data_path), spec_path, status_list, status_item)
+{
+}
+
+SpellData::SpellData(const SpellDataFiles& files,wstring& spec_path,std::function<void(std::string)> status_list,std::function<void(std::string)> status_item)
+{
+	const std::wstring data_path = !files.data_root.empty() ? files.data_root : std::filesystem::path(files.common_fs).parent_path().wstring();
+	const std::wstring cd_data_path = !files.cd_root.empty() ? files.cd_root : std::filesystem::path(files.info_fs).parent_path().wstring();
 	std::memset(map_pal, 0, sizeof(map_pal));
 	std::memset(strategy_pal, 0, sizeof(strategy_pal));
 
@@ -341,7 +367,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	// load COMMON.FS
 	if(status_list)
 		status_list("Loading COMMON.FS archive...");	
-	wstring common_path = std::filesystem::path(data_path) / std::filesystem::path("COMMON.FS");
+	wstring common_path = files.common_fs;
 	try{
 		common_fs = new FSarchive(common_path,FSarchive::Options::DELZ_ALL);
 	}catch(const runtime_error& error){
@@ -354,7 +380,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	// export COMMON.FS to temp folder (append-only)
 	if(status_list)
 		status_list("Exporting COMMON.FS to temp cache...");
-	if(common_fs->DumpToFolder(temp_root))
+	if(common_fs->DumpToFolder(temp_root, true, true))
 	{
 		this->~SpellData();
 		if(status_list)
@@ -366,7 +392,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	if(status_list)
 		status_list("Loading sound samples...");
 	try{
-		sounds = new SpellSounds(common_fs,data_path,16,status_list,status_item);
+		sounds = new SpellSounds(common_fs,files.samples_fs,16,status_list,status_item);
 	}catch(const runtime_error& error) {
 		this->~SpellData();
 		if(status_list)
@@ -378,7 +404,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	if(status_list)
 		status_list("Loading MIDI files...");
 	try {
-		midi = new SpellMIDI(data_path,status_list,status_item);
+		midi = new SpellMIDI(files.music_fs,status_list,status_item);
 	}
 	catch(const runtime_error& error) {
 		this->~SpellData();
@@ -475,15 +501,20 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	// load terrains
 	if(status_list)
 		status_list("Loading terrain graphics data...");
-	vector<string> terrain_list = {"T11.FS", "PUST.FS", "DEVAST.FS"};
-	for(auto & name : terrain_list)
+	vector<std::pair<string, std::wstring>> terrain_list = {
+		{"T11.FS", files.terrain_t11_fs},
+		{"PUST.FS", files.terrain_pust_fs},
+		{"DEVAST.FS", files.terrain_devast_fs}
+	};
+	for(auto & terrain_src : terrain_list)
 	{
+		auto & name = terrain_src.first;
 		// load terrain
 		if(status_list)
 			status_list(string_format(" - loading terrain \"%s\"",name.c_str()));
 
 		// load FS
-		wstring path = std::filesystem::path(data_path) / std::filesystem::path(name);
+		wstring path = terrain_src.second;
 		try{
 			terrain_fs = new FSarchive(path);
 		}catch(const runtime_error& error) {
@@ -504,7 +535,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 		// export terrain FS to temp folder (append-only)
 		if(status_list)
 			status_list("   - caching terrain data to temp...");
-		if(terrain_fs->DumpToFolder(temp_root))
+		if(terrain_fs->DumpToFolder(temp_root, true, true))
 		{
 			this->~SpellData();
 			if(status_list)
@@ -534,7 +565,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	// load FSU data
 	if(status_list)
 		status_list("Loading units graphics data (UNITS.FSU)...");
-	wstring fsu_path = std::filesystem::path(data_path) / std::filesystem::path("UNITS.FSU");
+	wstring fsu_path = files.units_fsu;
 	try{
 		units_fsu = new FSUarchive(fsu_path, status_item);
 	}catch(const runtime_error& error) {
@@ -592,7 +623,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	// load TEXTS.FS
 	if(status_list)
 		status_list("Loading string tables...");
-	wstring texts_path = std::filesystem::path(data_path) / std::filesystem::path("TEXTS.FS");
+	wstring texts_path = files.texts_fs;
 	FSarchive* texts_fs = new FSarchive(texts_path);
 	try{
 		texts = new SpellTexts(texts_fs, SpellLang::CZE, sounds); // ###todo: decode language somehow?
@@ -609,7 +640,7 @@ SpellData::SpellData(wstring &data_path,wstring& cd_data_path,wstring& spec_path
 	// load INFO.FS (units art)
 	if(status_list)
 		status_list("Loading units info/renders (INFO.FS)...");
-	wstring info_path = std::filesystem::path(cd_data_path) / std::filesystem::path("INFO.FS");
+	wstring info_path = files.info_fs;
 	try{
 		info = new FSarchive(info_path);
 	}catch(const runtime_error& error) {

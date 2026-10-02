@@ -22,6 +22,7 @@
 #include <wx/rawbmp.h>
 #include <wx/timer.h>
 #include <wx/filedlg.h>
+#include <wx/dirdlg.h>
 #include <wx/slider.h>
 #include <wx/stdpaths.h>
 #include <wx/event.h>
@@ -36,6 +37,7 @@
 #include <future>
 #include <thread>
 #include <memory>
+#include <map>
 
 #include "resource.h"
 #include "main.h"
@@ -227,6 +229,9 @@ namespace
     {
         namespace fs = std::filesystem;
 
+        // Prefer a config placed next to the executable even when it is empty.
+        // A fresh release is allowed to ship an empty config.ini; the startup
+        // source wizard will populate it instead of rejecting it outright.
         std::vector<fs::path> candidates = {
             executable_dir / "config.ini",
             runtime_root / "config.ini",
@@ -246,12 +251,16 @@ namespace
             dir = parent;
         }
 
+        std::error_code ec;
         for (const auto& candidate : candidates)
         {
-            if (IsUsableConfig(candidate))
+            if (fs::is_regular_file(candidate, ec) && !ec)
                 return fs::absolute(candidate).lexically_normal();
+            ec.clear();
         }
-        return {};
+
+        // No config yet: create/use one beside the executable.
+        return fs::absolute(executable_dir / "config.ini").lexically_normal();
     }
 
     static std::string to_lower(std::string s)
@@ -320,6 +329,730 @@ namespace
                 return found;
         }
         return {};
+    }
+
+
+    static std::filesystem::path ResolveStartupConfigPath(const char* value,
+        const std::filesystem::path& config_path,
+        const std::filesystem::path& executable_dir)
+    {
+        namespace fs = std::filesystem;
+        if (!value || !*value)
+            return {};
+
+        const fs::path configured = char2wstring(value);
+        if (configured.is_absolute())
+            return configured.lexically_normal();
+
+        std::vector<fs::path> roots = {
+            fs::current_path(), config_path.parent_path(), executable_dir
+        };
+        std::error_code ec;
+        for (const auto& root : roots)
+        {
+            const fs::path candidate = (root / configured).lexically_normal();
+            if (fs::exists(candidate, ec) && !ec)
+                return candidate;
+            ec.clear();
+        }
+        return (config_path.parent_path() / configured).lexically_normal();
+    }
+
+    static bool FileNameEquals(const std::filesystem::path& path, const std::string& expected)
+    {
+        return to_lower(path.filename().string()) == to_lower(expected);
+    }
+
+    static bool IsValidSourceFile(const std::filesystem::path& path, const std::string& expected)
+    {
+        std::error_code ec;
+        return !path.empty() && FileNameEquals(path, expected) &&
+            std::filesystem::is_regular_file(path, ec) && !ec &&
+            std::filesystem::file_size(path, ec) > 0 && !ec;
+    }
+
+    static std::string ConfigPathValue(const std::filesystem::path& path,
+        const std::filesystem::path& config_path,
+        const std::filesystem::path& runtime_root)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path abs = fs::absolute(path, ec).lexically_normal();
+        const std::vector<fs::path> bases = { config_path.parent_path(), runtime_root };
+        for (const auto& base : bases)
+        {
+            if (base.empty()) continue;
+            const fs::path rel = abs.lexically_relative(fs::absolute(base, ec).lexically_normal());
+            if (!rel.empty())
+            {
+                const auto first = rel.begin();
+                if (first != rel.end() && first->string() != "..")
+                    return wstring2string(rel.wstring());
+            }
+        }
+        return wstring2string(abs.wstring());
+    }
+
+    struct InstallDtaEntry
+    {
+        std::string name;
+        std::uint32_t offset = 0;
+        std::uint32_t size = 0;
+        std::uint32_t directory_index = 0;
+    };
+
+    static bool ReadInstallDtaU32(std::ifstream& f, std::uint32_t& value)
+    {
+        unsigned char b[4] = {};
+        f.read(reinterpret_cast<char*>(b), 4);
+        if (!f)
+            return false;
+        value = static_cast<std::uint32_t>(b[0]) |
+            (static_cast<std::uint32_t>(b[1]) << 8) |
+            (static_cast<std::uint32_t>(b[2]) << 16) |
+            (static_cast<std::uint32_t>(b[3]) << 24);
+        return true;
+    }
+
+    // INSTALL.DTA is the original DOS installer's payload container. Its layout is:
+    //   u32 directory-block-size
+    //   u32 directory-count + NUL-terminated directory names
+    //   u32 file-count
+    //   file-count * { char name[13], u32 absolute_offset, u32 size, u32 directory_index }
+    // File payloads are stored raw at the recorded absolute offsets.
+    static bool ReadInstallDtaIndex(const std::filesystem::path& dta_path,
+        std::vector<std::string>& directories,
+        std::vector<InstallDtaEntry>& entries,
+        std::string& error)
+    {
+        namespace fs = std::filesystem;
+        directories.clear();
+        entries.clear();
+        error.clear();
+
+        std::ifstream f(dta_path, std::ios::binary);
+        if (!f)
+        {
+            error = "Cannot open INSTALL.DTA.";
+            return false;
+        }
+
+        std::error_code ec;
+        const std::uintmax_t total_size = fs::file_size(dta_path, ec);
+        if (ec || total_size < 16)
+        {
+            error = "INSTALL.DTA is empty or invalid.";
+            return false;
+        }
+
+        std::uint32_t directory_block_size = 0;
+        std::uint32_t directory_count = 0;
+        if (!ReadInstallDtaU32(f, directory_block_size) ||
+            !ReadInstallDtaU32(f, directory_count) ||
+            directory_block_size < 4 || directory_block_size > 1024 * 1024 ||
+            directory_count == 0 || directory_count > 1024)
+        {
+            error = "INSTALL.DTA has an invalid directory table.";
+            return false;
+        }
+
+        directories.reserve(directory_count);
+        for (std::uint32_t i = 0; i < directory_count; ++i)
+        {
+            std::string dir;
+            for (size_t guard = 0; guard < 4096; ++guard)
+            {
+                char ch = 0;
+                f.read(&ch, 1);
+                if (!f)
+                {
+                    error = "INSTALL.DTA directory table is truncated.";
+                    return false;
+                }
+                if (ch == '\0')
+                    break;
+                dir.push_back(ch);
+                if (guard == 4095)
+                {
+                    error = "INSTALL.DTA contains an invalid directory name.";
+                    return false;
+                }
+            }
+            directories.push_back(dir);
+        }
+
+        // The first DWORD describes the whole directory block beginning at byte 4.
+        // Seek to its end instead of relying on exact string packing/padding.
+        const std::uint64_t file_count_pos = 4ull + static_cast<std::uint64_t>(directory_block_size);
+        if (file_count_pos + 4ull > total_size)
+        {
+            error = "INSTALL.DTA directory table points outside the file.";
+            return false;
+        }
+        f.clear();
+        f.seekg(static_cast<std::streamoff>(file_count_pos), std::ios::beg);
+
+        std::uint32_t file_count = 0;
+        if (!ReadInstallDtaU32(f, file_count) || file_count == 0 || file_count > 100000)
+        {
+            error = "INSTALL.DTA has an invalid file table.";
+            return false;
+        }
+
+        const std::uint64_t records_end = file_count_pos + 4ull + static_cast<std::uint64_t>(file_count) * 25ull;
+        if (records_end > total_size)
+        {
+            error = "INSTALL.DTA file table is truncated.";
+            return false;
+        }
+
+        entries.reserve(file_count);
+        for (std::uint32_t i = 0; i < file_count; ++i)
+        {
+            char raw_name[13] = {};
+            f.read(raw_name, sizeof(raw_name));
+            if (!f)
+            {
+                error = "INSTALL.DTA file table is truncated.";
+                return false;
+            }
+
+            InstallDtaEntry entry;
+            size_t name_len = 0;
+            while (name_len < sizeof(raw_name) && raw_name[name_len] != '\0')
+                ++name_len;
+            entry.name.assign(raw_name, raw_name + name_len);
+
+            if (!ReadInstallDtaU32(f, entry.offset) ||
+                !ReadInstallDtaU32(f, entry.size) ||
+                !ReadInstallDtaU32(f, entry.directory_index))
+            {
+                error = "INSTALL.DTA file table is truncated.";
+                return false;
+            }
+
+            if (entry.name.empty() || entry.directory_index >= directories.size() ||
+                static_cast<std::uint64_t>(entry.offset) + static_cast<std::uint64_t>(entry.size) > total_size)
+            {
+                error = "INSTALL.DTA contains an invalid file entry.";
+                return false;
+            }
+            entries.push_back(entry);
+        }
+
+        return true;
+    }
+
+    static bool InstallDtaSegmentMatchesFile(std::ifstream& dta,
+        std::uint64_t offset,
+        std::uint64_t size,
+        const std::filesystem::path& destination)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        if (!fs::is_regular_file(destination, ec) || ec || fs::file_size(destination, ec) != size || ec)
+            return false;
+
+        std::ifstream out(destination, std::ios::binary);
+        if (!out)
+            return false;
+
+        dta.clear();
+        dta.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        if (!dta)
+            return false;
+
+        std::vector<char> a(1024 * 1024);
+        std::vector<char> b(a.size());
+        std::uint64_t remaining = size;
+        while (remaining)
+        {
+            const size_t chunk = static_cast<size_t>(std::min<std::uint64_t>(remaining, a.size()));
+            dta.read(a.data(), static_cast<std::streamsize>(chunk));
+            out.read(b.data(), static_cast<std::streamsize>(chunk));
+            if (!dta || !out || !std::equal(a.begin(), a.begin() + chunk, b.begin()))
+                return false;
+            remaining -= chunk;
+        }
+        return true;
+    }
+
+    static bool ExtractInstallDtaDataFiles(const std::filesystem::path& dta_path,
+        const std::filesystem::path& destination_data_dir,
+        std::vector<std::filesystem::path>& extracted,
+        std::string& error)
+    {
+        namespace fs = std::filesystem;
+        extracted.clear();
+        error.clear();
+
+        std::vector<std::string> directories;
+        std::vector<InstallDtaEntry> entries;
+        if (!ReadInstallDtaIndex(dta_path, directories, entries, error))
+            return false;
+
+        std::error_code ec;
+        fs::create_directories(destination_data_dir, ec);
+        if (ec)
+        {
+            error = "Cannot create the local Spellcross game-data folder: " + ec.message();
+            return false;
+        }
+
+        std::ifstream dta(dta_path, std::ios::binary);
+        if (!dta)
+        {
+            error = "Cannot reopen INSTALL.DTA for extraction.";
+            return false;
+        }
+
+        std::vector<char> buffer(1024 * 1024);
+        for (const auto& entry : entries)
+        {
+            const std::string dir_name = to_lower(directories[entry.directory_index]);
+            if (dir_name != "data")
+                continue;
+
+            // INSTALL.DTA uses DOS 8.3 names. Reject anything path-like even if a
+            // damaged/custom image contains it; extraction must stay inside our folder.
+            if (entry.name.find('/') != std::string::npos || entry.name.find('\\') != std::string::npos ||
+                entry.name == "." || entry.name == "..")
+                continue;
+
+            const fs::path destination = destination_data_dir / fs::path(entry.name);
+            if (InstallDtaSegmentMatchesFile(dta, entry.offset, entry.size, destination))
+            {
+                extracted.push_back(destination);
+                continue;
+            }
+
+            dta.clear();
+            dta.seekg(static_cast<std::streamoff>(entry.offset), std::ios::beg);
+            if (!dta)
+            {
+                error = "Cannot seek to " + entry.name + " inside INSTALL.DTA.";
+                return false;
+            }
+
+            fs::path partial = destination;
+            partial += L".partial";
+            std::ofstream out(partial, std::ios::binary | std::ios::trunc);
+            if (!out)
+            {
+                error = "Cannot create " + destination.string() + ".";
+                return false;
+            }
+
+            std::uint64_t remaining = entry.size;
+            while (remaining)
+            {
+                const size_t chunk = static_cast<size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
+                dta.read(buffer.data(), static_cast<std::streamsize>(chunk));
+                if (!dta)
+                {
+                    out.close();
+                    fs::remove(partial, ec);
+                    error = "INSTALL.DTA is truncated while extracting " + entry.name + ".";
+                    return false;
+                }
+                out.write(buffer.data(), static_cast<std::streamsize>(chunk));
+                if (!out)
+                {
+                    out.close();
+                    fs::remove(partial, ec);
+                    error = "Writing " + destination.string() + " failed.";
+                    return false;
+                }
+                remaining -= chunk;
+            }
+            out.close();
+
+            fs::remove(destination, ec);
+            ec.clear();
+            fs::rename(partial, destination, ec);
+            if (ec)
+            {
+                fs::remove(partial, ec);
+                error = "Cannot finalize " + destination.string() + ".";
+                return false;
+            }
+            extracted.push_back(destination);
+        }
+
+        if (extracted.empty())
+        {
+            error = "INSTALL.DTA was readable, but it did not contain a DATA payload.";
+            return false;
+        }
+        return true;
+    }
+
+    static bool CopyCdArchiveIfPresent(const std::filesystem::path& cd_data_dir,
+        const std::filesystem::path& destination_data_dir,
+        const std::string& source_name,
+        const std::string& destination_name,
+        std::filesystem::path* copied_path = nullptr)
+    {
+        namespace fs = std::filesystem;
+        const fs::path source = FindFileCaseInsensitive(cd_data_dir, source_name);
+        if (source.empty())
+            return false;
+
+        std::error_code ec;
+        fs::create_directories(destination_data_dir, ec);
+        if (ec)
+            return false;
+
+        const fs::path destination = destination_data_dir / destination_name;
+        // CD import is an explicit repair/import operation, so overwrite the
+        // local sidecar. This also repairs a same-sized but corrupted old copy.
+        fs::copy_file(source, destination, fs::copy_options::overwrite_existing, ec);
+        if (ec)
+            return false;
+        if (copied_path)
+            *copied_path = destination;
+        return true;
+    }
+
+    static std::filesystem::path FindInstallDtaFromCdSelection(const std::filesystem::path& selected)
+    {
+        namespace fs = std::filesystem;
+        if (selected.empty())
+            return {};
+
+        fs::path found = FindFileCaseInsensitive(selected, "INSTALL.DTA");
+        if (!found.empty())
+            return found;
+        found = FindFileCaseInsensitive(selected / "DATA", "INSTALL.DTA");
+        if (!found.empty())
+            return found;
+        return {};
+    }
+
+    struct StartupSourceRequirement
+    {
+        const char* key;
+        const char* filename;
+        const char* label;
+        bool optional;
+        const char* skip_key;
+    };
+
+    static bool EnsureSpellcrossSourceConfiguration(CSimpleIniA& ini,
+        const std::filesystem::path& config_path,
+        const std::filesystem::path& runtime_root,
+        const std::filesystem::path& executable_dir)
+    {
+        namespace fs = std::filesystem;
+
+        const StartupSourceRequirement reqs[] = {
+            {"common_fs", "COMMON.FS", "core graphics and definitions", false, nullptr},
+            {"t11_fs", "T11.FS", "T11 terrain graphics", false, nullptr},
+            {"pust_fs", "PUST.FS", "PUST terrain graphics", false, nullptr},
+            {"devast_fs", "DEVAST.FS", "DEVAST terrain graphics", false, nullptr},
+            {"units_fsu", "UNITS.FSU", "unit graphics", false, nullptr},
+            {"texts_fs", "TEXTS.FS", "game text tables", false, nullptr},
+            {"info_fs", "INFO.FS", "unit information graphics", false, nullptr},
+            {"samples_fs", "SAMPLES.FS", "sound effects", true, "samples_fs_skip"},
+            {"music_fs", "MUSIC.FS", "music", true, "music_fs_skip"}
+        };
+
+        // Program-side helper data ships with the release; make clean configs useful.
+        if (!*ini.GetValue("DATA", "spec_data_path", ""))
+            ini.SetValue("DATA", "spec_data_path", "data");
+        if (!*ini.GetValue("DATA", "units_aux_data_path", ""))
+            ini.SetValue("DATA", "units_aux_data_path", "data\\units.fsa");
+
+        auto saveNow = [&]() -> bool
+        {
+            std::error_code saveEc;
+            fs::create_directories(config_path.parent_path(), saveEc);
+            if(saveEc)
+                return false;
+            return ini.SaveFile(config_path.wstring().c_str()) == SI_OK;
+        };
+
+        // Legacy directory config is still accepted and migrated automatically.
+        const fs::path legacyData = ResolveStartupConfigPath(ini.GetValue("SPELCROS", "spell_path", ""), config_path, executable_dir);
+        const fs::path legacyCd = ResolveStartupConfigPath(ini.GetValue("SPELCROS", "spellcd_path", ""), config_path, executable_dir);
+
+        auto configuredPath = [&](const StartupSourceRequirement& req) -> fs::path
+        {
+            const char* value = ini.GetValue("FILES", req.key, "");
+            if (value && *value)
+                return ResolveStartupConfigPath(value, config_path, executable_dir);
+            return {};
+        };
+
+        auto storeSource = [&](const StartupSourceRequirement& req, const fs::path& selected)
+        {
+            ini.SetValue("FILES", req.key, ConfigPathValue(selected, config_path, runtime_root).c_str());
+            if (req.skip_key)
+                ini.SetBoolValue("FILES", req.skip_key, false, nullptr, true);
+        };
+
+        auto tryLegacy = [&](const StartupSourceRequirement& req) -> fs::path
+        {
+            if (std::string(req.key) == "info_fs")
+            {
+                fs::path p = FindFileCaseInsensitive(legacyCd, req.filename);
+                if (!p.empty()) return p;
+                p = FindFileCaseInsensitive(legacyData / "CD", req.filename);
+                if (!p.empty()) return p;
+            }
+            return FindFileCaseInsensitive(legacyData, req.filename);
+        };
+
+        // Seed [FILES] from old spell_path/spellcd_path where possible.
+        bool migrated = false;
+        for (const auto& req : reqs)
+        {
+            if (IsValidSourceFile(configuredPath(req), req.filename))
+                continue;
+            fs::path p = tryLegacy(req);
+            if (IsValidSourceFile(p, req.filename))
+            {
+                storeSource(req, p);
+                migrated = true;
+            }
+        }
+        if (migrated && !saveNow())
+        {
+            wxMessageBox("The configuration could not be saved.", "Startup configuration", wxOK | wxICON_ERROR);
+            return false;
+        }
+
+        auto autoDiscoverFrom = [&](const fs::path& seedDir)
+        {
+            if (seedDir.empty()) return;
+            std::vector<fs::path> dirs = { seedDir, seedDir / "CD", seedDir.parent_path(), seedDir.parent_path() / "CD" };
+            for (const auto& req : reqs)
+            {
+                if (IsValidSourceFile(configuredPath(req), req.filename))
+                    continue;
+                for (const auto& dir : dirs)
+                {
+                    fs::path p = FindFileCaseInsensitive(dir, req.filename);
+                    if (IsValidSourceFile(p, req.filename))
+                    {
+                        storeSource(req, p);
+                        break;
+                    }
+                }
+            }
+        };
+
+        // Existing configured sources and release folder are discovery hints.
+        autoDiscoverFrom(runtime_root);
+        for (const auto& req : reqs)
+        {
+            const fs::path p = configuredPath(req);
+            if (IsValidSourceFile(p, req.filename))
+                autoDiscoverFrom(p.parent_path());
+        }
+        saveNow();
+
+        // Fresh original-CD path: the DOS installer keeps the installed DATA files
+        // inside DATA\INSTALL.DTA rather than exposing COMMON.FS etc. directly on
+        // the disc. Offer to import that payload once before asking for individual
+        // files. A mounted ISO works exactly like a physical CD.
+        bool missingRequired = false;
+        for (const auto& req : reqs)
+        {
+            if (!req.optional && !IsValidSourceFile(configuredPath(req), req.filename))
+            {
+                missingRequired = true;
+                break;
+            }
+        }
+
+        if (missingRequired)
+        {
+            const int importCd = wxMessageBox(
+                "Some required Spellcross game data is missing.\n\n"
+                "If you have the original Spellcross CD, or a mounted ISO image, "
+                "Spellcross can import the installed game archives directly from "
+                "DATA\\INSTALL.DTA.\n\n"
+                "Import from the original CD / mounted ISO now?\n\n"
+                "Choose No to locate the individual files manually.",
+                "Spellcross original CD", wxYES_NO | wxICON_QUESTION);
+
+            if (importCd == wxYES)
+            {
+                wxDirDialog cdDialog(nullptr,
+                    "Select the Spellcross CD root or its DATA folder",
+                    wxString(), wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+
+                if (cdDialog.ShowModal() == wxID_OK)
+                {
+                    const fs::path selected = cdDialog.GetPath().ToStdWstring();
+                    const fs::path installDta = FindInstallDtaFromCdSelection(selected);
+                    if (installDta.empty())
+                    {
+                        wxMessageBox(
+                            "INSTALL.DTA was not found.\n\n"
+                            "Select either the root of the original Spellcross CD / mounted ISO, "
+                            "or its DATA folder. Manual file selection will continue.",
+                            "Spellcross original CD", wxOK | wxICON_WARNING);
+                    }
+                    else
+                    {
+                        const fs::path localDataDir = runtime_root / "game_data" / "DATA";
+                        std::vector<fs::path> extracted;
+                        std::string importError;
+
+                        bool extractedOk = false;
+                        {
+                            wxBusyCursor busy;
+                            extractedOk = ExtractInstallDtaDataFiles(
+                                installDta, localDataDir, extracted, importError);
+                        }
+
+                        if (!extractedOk)
+                        {
+                            wxMessageBox(
+                                wxString("Reading INSTALL.DTA failed:\n\n") + wxString::FromUTF8(importError.c_str()),
+                                "Spellcross original CD", wxOK | wxICON_ERROR);
+                        }
+                        else
+                        {
+                            // These archives are CD-side resources, not part of the
+                            // installed INSTALL.DTA payload. Copy them locally when
+                            // the particular CD edition contains them so the disc is
+                            // not needed on subsequent runs.
+                            const fs::path cdDataDir = installDta.parent_path();
+                            CopyCdArchiveIfPresent(cdDataDir, localDataDir, "INFO.FS", "INFO.FS");
+                            if (!CopyCdArchiveIfPresent(cdDataDir, localDataDir, "MOVIE.FS", "MOVIE.FS"))
+                                CopyCdArchiveIfPresent(cdDataDir, localDataDir, "MOVIES.FS", "MOVIE.FS");
+                            CopyCdArchiveIfPresent(cdDataDir, localDataDir, "SPEAKER.FS", "SPEAKER.FS");
+
+                            // The imported folder now behaves like a normal installed
+                            // Spellcross DATA directory. Re-use the normal discovery
+                            // path so [FILES] and the legacy directory keys stay in one
+                            // place and remain portable/relative where possible.
+                            autoDiscoverFrom(localDataDir);
+                            if (!saveNow())
+                            {
+                                wxMessageBox(
+                                    "The imported paths could not be written to config.ini.",
+                                    "Spellcross original CD", wxOK | wxICON_ERROR);
+                                return false;
+                            }
+
+                            wxString importMessage("Imported ");
+                            const std::string importedCount = std::to_string(extracted.size());
+                            importMessage += wxString::FromUTF8(importedCount.c_str());
+                            importMessage += " installed game-data files from INSTALL.DTA.\n\n";
+                            importMessage += "Local data folder:\n";
+                            importMessage += wxString(localDataDir.wstring());
+
+                            if (!IsValidSourceFile(configuredPath(reqs[6]), reqs[6].filename))
+                            {
+                                importMessage +=
+                                    "\n\nINFO.FS was not present in the selected CD DATA folder. "
+                                    "You will be asked for it separately.";
+                            }
+                            wxMessageBox(importMessage, "Spellcross original CD", wxOK | wxICON_INFORMATION);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (const auto& req : reqs)
+        {
+            fs::path path = configuredPath(req);
+            if (IsValidSourceFile(path, req.filename))
+                continue;
+
+            const bool skipped = req.optional && req.skip_key && ini.GetBoolValue("FILES", req.skip_key, false);
+            if (skipped)
+                continue;
+
+            for (;;)
+            {
+                const wxString fileName = wxString::FromUTF8(req.filename);
+                const wxString label = wxString::FromUTF8(req.label);
+                wxString message;
+                if (req.optional)
+                {
+                    message = wxString("Optional Spellcross data file ") + fileName +
+                        " is not configured or cannot be found.\n\nIt provides " + label +
+                        ". Select the file now, or Cancel to continue without it.";
+                }
+                else
+                {
+                    message = wxString("Spellcross needs ") + fileName + " (" + label +
+                        "), but the configured file is missing or invalid.\n\nSelect the original " +
+                        fileName + " file.";
+                }
+                wxMessageBox(message, "Spellcross game data", wxOK | wxICON_INFORMATION);
+
+                wxString initialDirectory;
+                if (!path.empty())
+                    initialDirectory = wxString(path.parent_path().wstring());
+
+                wxFileDialog dlg(nullptr,
+                    wxString("Locate ") + fileName,
+                    initialDirectory,
+                    fileName,
+                    fileName + wxString("|") + fileName + "|All files (*.*)|*.*",
+                    wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+
+                if (dlg.ShowModal() != wxID_OK)
+                {
+                    if (req.optional)
+                    {
+                        ini.SetValue("FILES", req.key, "");
+                        ini.SetBoolValue("FILES", req.skip_key, true, nullptr, true);
+                        if (!saveNow())
+                            return false;
+                        break;
+                    }
+
+                    const int retry = wxMessageBox(
+                        wxString::FromUTF8(req.filename) + wxString(" is required to run Spellcross.\n\nTry again?"),
+                        "Required game data", wxYES_NO | wxICON_WARNING);
+                    if (retry == wxYES)
+                        continue;
+                    return false;
+                }
+
+                const fs::path selected = dlg.GetPath().ToStdWstring();
+                if (!IsValidSourceFile(selected, req.filename))
+                {
+                    wxMessageBox(wxString("Please select the actual ") + wxString::FromUTF8(req.filename) + " file.",
+                        "Wrong file", wxOK | wxICON_WARNING);
+                    continue;
+                }
+
+                storeSource(req, selected);
+                if (!saveNow())
+                {
+                    wxMessageBox("The selected path could not be written to config.ini.",
+                        "Startup configuration", wxOK | wxICON_ERROR);
+                    return false;
+                }
+
+                // One selection usually identifies the whole original DATA folder.
+                // Fill any sibling archives automatically, then only ask for what is
+                // genuinely still missing.
+                autoDiscoverFrom(selected.parent_path());
+                saveNow();
+                break;
+            }
+        }
+
+        // Maintain the historical directory keys for code paths that still search
+        // dynamically for videos or optional assets. These are derived, not required.
+        const fs::path commonPath = configuredPath(reqs[0]);
+        const fs::path infoPath = configuredPath(reqs[6]);
+        if (!commonPath.empty())
+            ini.SetValue("SPELCROS", "spell_path", ConfigPathValue(commonPath.parent_path(), config_path, runtime_root).c_str());
+        if (!infoPath.empty())
+            ini.SetValue("SPELCROS", "spellcd_path", ConfigPathValue(infoPath.parent_path(), config_path, runtime_root).c_str());
+
+        return saveNow();
     }
 
 } // namespace
@@ -504,6 +1237,7 @@ static bool OpenStrategicSaveFromPath(MainFrame* main, const std::filesystem::pa
     if (old && old != win)
         old->Destroy();
 
+    main->HideTacticalWindow();
     win->Show();
     win->Raise();
     return true;
@@ -543,6 +1277,7 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
     }
 
     size_t start_idx = 0;
+    MapUnit* first_deployed_player_unit = nullptr;
     for (const auto& entry : player_units)
     {
         int count = std::max(0, entry.count);
@@ -589,6 +1324,8 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             }
 
             spell_map->AssignUnitID(unit);
+            if (!first_deployed_player_unit)
+                first_deployed_player_unit = unit;
             start_idx++;
         }
     }
@@ -596,6 +1333,11 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
     spell_map->SortUnits();
     spell_map->RecalculateTacticalFormations();
     spell_map->InvalidateUnitsView();
+
+    // A strategic attack should open on the deployed Alliance force, not on
+    // the map origin or an enemy that happened to be first in the DEF unit list.
+    if (first_deployed_player_unit)
+        spell_map->SelectUnit(first_deployed_player_unit, true);
 
     return true;
 }
@@ -738,6 +1480,7 @@ void MainFrame::OnOpenLevelDef(wxCommandEvent& ev)
     // otevøi strategické UI (window si žije samo, wxWidgets ho znièí po zavøení)
     auto* win = new StrategicLevelFrame(this, lvl);
     m_strategicLevel = win;  // Store reference for mission results
+    HideTacticalWindow();
     win->Show();
     win->Raise();
 }
@@ -766,22 +1509,31 @@ bool MyApp::OnInit()
     }
 
     config_path = FindConfigPath(executable_dir, runtime_root, startup_dir).wstring();
-    if (config_path.empty())
+
+    // Empty/missing config.ini is valid for a fresh release. Load it when it
+    // contains data, otherwise start with an empty in-memory configuration and
+    // let the source wizard populate it.
+    ini.SetUnicode();
+    ini.Reset();
     {
-        wxMessageBox(string_format("No valid config.ini was found.\n\nRuntime folder:\n%ls\n\n"
-            "The file must contain a non-empty [SPELCROS] spell_path entry.",
-            runtime_root.wstring().c_str()), "Startup error", wxICON_ERROR);
-        return false;
+        std::error_code cfgEc;
+        const fs::path cfg(config_path);
+        if (fs::is_regular_file(cfg, cfgEc) && !cfgEc && fs::file_size(cfg, cfgEc) > 0 && !cfgEc)
+        {
+            if (ini.LoadFile(config_path.c_str()) != SI_OK)
+            {
+                wxMessageBox(string_format("Loading configuration failed:\n%ls", config_path.c_str()),
+                    "Startup error", wxICON_ERROR);
+                return false;
+            }
+        }
     }
 
-    // load config.ini
-    ini.SetUnicode();
-    if (ini.LoadFile(config_path.c_str()) != SI_OK)
-    {
-        wxMessageBox(string_format("Loading configuration failed:\n%ls", config_path.c_str()),
-            "Startup error", wxICON_ERROR);
+    // Resolve/repair the external Spellcross data sources on the UI thread
+    // before FormLoader starts. Required archives are requested individually;
+    // optional audio sources can be skipped and that choice is remembered.
+    if (!EnsureSpellcrossSourceConfiguration(ini, fs::path(config_path), runtime_root, executable_dir))
         return false;
-    }
 
     // --- try load Spellcross data
     FormLoader* form_loader = new FormLoader(NULL, spell_data, config_path);
@@ -793,20 +1545,36 @@ bool MyApp::OnInit()
         return(false);
     }
 
-    // --- load some map
+    // --- restore the last tactical map only when the saved path is still valid.
+    // A fresh/portable config intentionally starts without one and should land
+    // cleanly in the main menu instead of showing a bogus map-load error.
     wstring map_path = char2wstring(ini.GetValue("STATE","last_map",""));
     spell_map = new SpellMap();
-    if(spell_map->Load(map_path,spell_data))
-        wxMessageBox(string_format("Loading Spellcross map file failed with error:\n%s",spell_map->GetLastError().c_str()),"Error",wxICON_ERROR);
+    if(!map_path.empty())
+    {
+        std::error_code mapEc;
+        if(std::filesystem::is_regular_file(std::filesystem::path(map_path), mapEc) && !mapEc)
+        {
+            if(spell_map->Load(map_path,spell_data))
+                wxMessageBox(string_format("Loading Spellcross map file failed with error:\n%s",spell_map->GetLastError().c_str()),"Error",wxICON_ERROR);
+        }
+        else
+        {
+            ini.SetValue("STATE", "last_map", "");
+        }
+    }
     spell_map->SetGamma(1.3);
 
-    // sound effects/midi volumes
-    spell_data->sounds->channels->SetVolume(0.01*ini.GetLongValue("STATE","sound_volume",50));
-    spell_data->midi->SetVolume(0.01*ini.GetLongValue("STATE","music_volume",100));
+    // sound effects/midi volumes. Both subsystems remain valid in silent mode.
+    if (spell_data->sounds && spell_data->sounds->channels)
+        spell_data->sounds->channels->SetVolume(0.01*ini.GetLongValue("STATE","sound_volume",50));
+    if (spell_data->midi)
+        spell_data->midi->SetVolume(0.01*ini.GetLongValue("STATE","music_volume",100));
 
-    // play default MIDI
+    // play default MIDI (a no-op when MUSIC.FS was intentionally skipped)
     string midi_name = ini.GetValue("STATE","default_midi","");
-    spell_data->midi->Play(midi_name);
+    if (spell_data->midi)
+        spell_data->midi->Play(midi_name);
 
     // default window size
     int win_x_size = ini.GetLongValue("STATE","win_x_size",1600);
@@ -834,28 +1602,34 @@ bool MyApp::OnInit()
         frame->SetIcon(appIcon);
 
     frame->Center();
-    // show main frame
-    frame->Show(true);
+    // Start in the real main menu, not with the tactical map visible behind it.
+    // MainFrame stays alive as the application/campaign controller but is only
+    // shown when a tactical mission is actually entered.
+    frame->Show(false);
     return(true);
 }
 int MyApp::OnExit()
 {
-    // store last path
-    ini.SetValue("STATE","last_map",wstring2string(spell_map->GetTopPath()).c_str());
+    // OnInit can now legitimately stop during the first-run source wizard, so
+    // keep shutdown safe even when game objects have not been created yet.
+    if (spell_map)
+        ini.SetValue("STATE","last_map",wstring2string(spell_map->GetTopPath()).c_str());
 
     // store sound/midi volumes
-    ini.SetLongValue("STATE", "sound_volume", 100.0*spell_data->sounds->channels->GetVolume());
-    ini.SetLongValue("STATE", "music_volume", 100.0*spell_data->midi->GetVolume());
+    if (spell_data && spell_data->sounds && spell_data->sounds->channels)
+        ini.SetLongValue("STATE", "sound_volume", 100.0*spell_data->sounds->channels->GetVolume());
+    if (spell_data && spell_data->midi)
+        ini.SetLongValue("STATE", "music_volume", 100.0*spell_data->midi->GetVolume());
 
     // save INI
     if (!config_path.empty())
         ini.SaveFile(config_path.c_str());
 
-    // loose map
+    // loose map/data (both may still be null after an aborted first run)
     delete spell_map;
-
-    // loose spell data
+    spell_map = nullptr;
     delete spell_data;
+    spell_data = nullptr;
 
     return(0);
 }
@@ -1216,13 +1990,28 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
     // ESC handler via CHAR_HOOK — fires BEFORE menu accelerators,
     // so ESC is not consumed by the disabled Edit > Clear buffer accelerator.
     Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent& event) {
-        if (event.GetKeyCode() == WXK_ESCAPE
-            && !m_editor_unlocked
-            && !form_mmenu
-            && !form_unit_opts
-            && !form_message
-            && !form_video_box)
+        if (event.GetKeyCode() == WXK_ESCAPE && !m_editor_unlocked && !form_mmenu)
         {
+            // Tactical HUD overlays sit on/over the map. ESC must close the
+            // top-level overlay first instead of falling through to main menu.
+            auto queueOverlayClose = [this](int id)
+            {
+                if (canvas)
+                    wxQueueEvent(canvas, new wxCloseEvent(wxEVT_CLOSE_WINDOW, id));
+            };
+
+            if (form_map_options) { queueOverlayClose(ID_MAP_OPT_WIN); return; }
+            if (form_units_list)  { queueOverlayClose(ID_MAP_UNITS_WIN); return; }
+            if (form_minimap)     { queueOverlayClose(ID_MINIMAP_WIN); return; }
+
+            // These forms already own their keyboard/close flow; let them
+            // consume ESC rather than opening the game menu underneath them.
+            if (form_unit_opts || form_message || form_video_box)
+            {
+                event.Skip();
+                return;
+            }
+
             if (spell_map && spell_map->isGameMode())
                 spell_map->SetActiveGroup(0);
             wxCommandEvent evt;
@@ -1603,9 +2392,18 @@ void MainFrame::OnClose(wxCloseEvent& ev)
             delete form_mmenu;
             form_mmenu = NULL;
         }
-        // Return focus to canvas so ESC and other keys work
-        if(canvas)
-            canvas->SetFocus();
+
+        if (m_mainMenuReturnToTactical)
+        {
+            m_mainMenuReturnToTactical = false;
+            ShowTacticalWindow();
+        }
+        else
+        {
+            // Closing the startup/strategic-return menu must never expose the
+            // stale tactical map behind it. Treat the window close like Exit.
+            Close(true);
+        }
     }
     else
         ev.Skip();
@@ -1655,6 +2453,26 @@ bool MainFrame::LoadGameStateFromDialog()
     return true;
 }
 
+void MainFrame::ShowTacticalWindow()
+{
+    Show(true);
+    Raise();
+    if (canvas)
+        canvas->SetFocus();
+}
+
+void MainFrame::HideTacticalWindow()
+{
+    if (IsShown())
+        Hide();
+}
+
+void MainFrame::ShowMainMenuWindow()
+{
+    wxCommandEvent evt;
+    OnOpenMainMenu(evt);
+}
+
 void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
 {
     if(form_mmenu)
@@ -1663,8 +2481,15 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
     if(!canvas)
         return;
 
+    // A main menu opened from an active battle acts like a pause/menu layer and
+    // may return to that battle when closed. At startup/after strategic there
+    // is deliberately no tactical surface to fall back to.
+    m_mainMenuReturnToTactical = IsShown() && spell_map && spell_map->IsLoaded() && spell_map->isGameMode();
+
     form_mmenu = new FormMainMenu(canvas, ID_MMENU_WIN, spell_map, spell_data,
         [this](FormMainMenuAction action) { OnMainMenuAction(action); });
+
+    HideTacticalWindow();
 }
 
 static std::string FindLevelDefContainingMission(const std::string& missionStem,
@@ -1875,6 +2700,7 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                 if(def_path.empty())
                 {
                     wxMessageBox("Mission M01_01A.DEF not found.", "Main menu", wxOK | wxICON_WARNING, this);
+                    ShowMainMenuWindow();
                     break;
                 }
 
@@ -1891,6 +2717,7 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                         {
                             if (!FindWindowById(ID_VIDEO_BOX_WIN) && spell_data)
                             {
+                                ShowTacticalWindow();
                                 try {
                                     form_video_box = new FormVideoBox(
                                         canvas, ID_VIDEO_BOX_WIN, spell_data,
@@ -1904,24 +2731,35 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                 }
 
                 if(LoadMapFromDefPath(def_path.wstring(), {}))
+                {
                     SetGameModeUI(true);
+                    ShowTacticalWindow();
+                }
+                else
+                {
+                    ShowMainMenuWindow();
+                }
                 break;
             }
             case FormMainMenuAction::Continue:
             {
-                if(!spell_map || !spell_map->IsLoaded())
+                // If the main menu was opened from an already running tactical
+                // battle (ESC), Continue must resume that exact in-memory state.
+                // Reloading GetTopPath()/DEF here restarts the mission and loses
+                // the current turn/unit/event state.
+                if (m_mainMenuReturnToTactical && spell_map && spell_map->IsLoaded() && spell_map->isGameMode())
                 {
-                    wxMessageBox("No map loaded.", "Main menu", wxOK | wxICON_WARNING, this);
+                    m_mainMenuReturnToTactical = false;
+                    ShowTacticalWindow();
                     break;
                 }
-                wstring path = spell_map->GetTopPath();
-                if(path.empty())
-                {
-                    wxMessageBox("No last map path available.", "Main menu", wxOK | wxICON_WARNING, this);
-                    break;
-                }
-                if(LoadMapFromDefPath(path, {}))
-                    SetGameModeUI(true);
+
+                // Outside an ESC/pause flow there is no live tactical session to
+                // resume. Keep the menu visible rather than silently reloading a
+                // map definition and pretending that it is a continuation.
+                wxMessageBox("No paused tactical game to continue.", "Main menu",
+                    wxOK | wxICON_INFORMATION, this);
+                ShowMainMenuWindow();
                 break;
             }
             case FormMainMenuAction::LoadGame:
@@ -1941,7 +2779,10 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                     wxFD_OPEN | wxFD_FILE_MUST_EXIST
                 );
                 if (dlg.ShowModal() == wxID_CANCEL)
+                {
+                    ShowMainMenuWindow();
                     break;
+                }
 
                 std::wstring load_path = dlg.GetPath().ToStdWstring();
                 std::string ext_lower = to_lower(std::filesystem::path(load_path).extension().string());
@@ -1950,7 +2791,8 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                 {
                     // Strategic campaign save. Load the exact selected JSON and
                     // resolve LEVEL_XX.DEF from the metadata/stable save folder.
-                    (void)OpenStrategicSaveFromPath(this, std::filesystem::path(load_path));
+                    if (!OpenStrategicSaveFromPath(this, std::filesystem::path(load_path)))
+                        ShowMainMenuWindow();
                 }
                 else
                 {
@@ -1958,13 +2800,18 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                     if (!LoadTacticalGameWithCampaignContext(load_path))
                     {
                         wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()), "Load error", wxICON_ERROR | wxOK, this);
+                        ShowMainMenuWindow();
                         break;
                     }
+                    ShowTacticalWindow();
                 }
                 break;
             }
             case FormMainMenuAction::Credits:
             {
+                // Legacy video window is owned by the tactical canvas. Show its
+                // host only for the cutscene; the menu reopens afterwards.
+                ShowTacticalWindow();
                 if (!FindWindowById(ID_VIDEO_BOX_WIN) && spell_data)
                 {
                     try {
@@ -1972,12 +2819,15 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                         m_reopen_mmenu_after_video = true;
                     } catch (const std::exception&) {
                         wxMessageBox("Cannot play CREDITS.DPK (video not found).", "Credits", wxOK | wxICON_WARNING, this);
+                        HideTacticalWindow();
+                        ShowMainMenuWindow();
                     }
                 }
                 break;
             }
             case FormMainMenuAction::Intro:
             {
+                ShowTacticalWindow();
                 if (!FindWindowById(ID_VIDEO_BOX_WIN) && spell_data)
                 {
                     try {
@@ -1985,6 +2835,8 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                         m_reopen_mmenu_after_video = true;
                     } catch (const std::exception&) {
                         wxMessageBox("Cannot play INTRO.CAN (video not found).", "Intro", wxOK | wxICON_WARNING, this);
+                        HideTacticalWindow();
+                        ShowMainMenuWindow();
                     }
                 }
                 break;
@@ -2000,6 +2852,7 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                     SetGameModeUI(false);
                 else
                     UpdateMenuForGameMode();
+                ShowTacticalWindow();
                 break;
             default:
                 break;
@@ -2329,6 +3182,7 @@ void MainFrame::OpenStrategicAndLoadNext()
         // Show/Raise the current strategic level (whichever it is now).
         if (m_strategicLevel)
         {
+            HideTacticalWindow();
             m_strategicLevel->Show();
             m_strategicLevel->Raise();
         }
@@ -2465,6 +3319,7 @@ void MainFrame::OpenStrategicAndLoadNext()
             // Start fresh game mode directly (campaign progression)
             win->StartFreshGameMode(bonus_units);
 
+            HideTacticalWindow();
             win->Show();
             win->Raise();
         }
@@ -2604,9 +3459,12 @@ void MainFrame::OnHUDbuttonsMouseEnter(wxMouseEvent& event)
             btn->cb_hover();
         if(!btn->is_disabled)
         {
-            // play hover sound            
-            auto *hover_sound = new SpellSound(*spell_data->sounds->aux_samples.btn_hover);
-            hover_sound->Play(true);
+            // play hover sound when optional SAMPLES.FS is available
+            if (spell_data && spell_data->sounds && spell_data->sounds->aux_samples.btn_hover)
+            {
+                auto *hover_sound = new SpellSound(*spell_data->sounds->aux_samples.btn_hover);
+                hover_sound->Play(true);
+            }
 
             /*std::thread snd(&SpellSound::PlayAsync,hover_sound);
             snd.detach();*/
@@ -2646,8 +3504,11 @@ void MainFrame::OnHUDbuttonsClick(wxMouseEvent& event)
         // play click sound        
         if(!btn->is_press && !btn->is_disabled)
         {
-            auto* click_sound = new SpellSound(*spell_data->sounds->aux_samples.btn_end_turn);
-            click_sound->Play(true);
+            if (spell_data && spell_data->sounds && spell_data->sounds->aux_samples.btn_end_turn)
+            {
+                auto* click_sound = new SpellSound(*spell_data->sounds->aux_samples.btn_end_turn);
+                click_sound->Play(true);
+            }
         }
         // click event callback?
         if(!btn->is_press && btn->cb_press)
@@ -2670,9 +3531,98 @@ void MainFrame::OnHUDbuttonsClick(wxMouseEvent& event)
             // show map options
             form_map_options = new FormMapOptions(canvas,ID_MAP_OPT_WIN,spell_map);
         }
+        if(btn->action_id == SpellMap::HUD_ACTION_RETREAT)
+        {
+            OnTacticalRetreat();
+        }
     }
 }
 
+void MainFrame::OnTacticalRetreat()
+{
+    if (!spell_map || !spell_map->IsLoaded() || !spell_map->isGameMode())
+        return;
+
+    if (spell_map->start.empty())
+    {
+        wxMessageBox(
+            "This mission has no starting cross squares, so a safe retreat cannot be resolved.",
+            "Retreat", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    auto isStartSquare = [this](const MapXY& pos) -> bool
+    {
+        for (const auto& start : spell_map->start)
+            if (start.x == pos.x && start.y == pos.y)
+                return true;
+        return false;
+    };
+
+    std::vector<MapUnit*> retreatLosses;
+    std::map<std::string, int> lossNames;
+    for (auto* unit : spell_map->units)
+    {
+        if (!unit || !unit->unit || unit->is_enemy || unit->isDead())
+            continue;
+        if (isStartSquare(unit->coor))
+            continue;
+
+        retreatLosses.push_back(unit);
+        std::string name = !unit->name.empty() ? unit->name : std::string(unit->unit->name);
+        if (name.empty())
+            name = string_format("Unit #%d", unit->id);
+        lossNames[name]++;
+    }
+
+    wxString message =
+        "Do you really want to retreat?\n\n"
+        "Only units standing on the starting cross squares will survive.";
+
+    if (!lossNames.empty())
+    {
+        message += "\n\nUnits that will be lost:";
+        for (const auto& entry : lossNames)
+        {
+            message += "\n  - " + wxString::FromUTF8(entry.first.c_str());
+            if (entry.second > 1)
+                message += wxString::Format(" x%d", entry.second);
+        }
+    }
+    else
+    {
+        message += "\n\nAll surviving Alliance units are already on starting cross squares; "
+                   "no additional units will be lost.";
+    }
+
+    wxMessageDialog confirm(this, message, "Retreat",
+        wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+    if (confirm.ShowModal() != wxID_YES)
+        return;
+
+    // Keep retreat casualties in the tactical unit list as dead units until
+    // strategic result collection runs.  That preserves normal loss statistics
+    // and lets the existing strategic UID synchronisation remove exactly the
+    // companies that did not reach a starting cross square.
+    for (auto* unit : retreatLosses)
+    {
+        unit->man = 0;
+        unit->wounded = 0;
+        unit->action_points = 0;
+        unit->was_moved = true;
+    }
+
+    spell_map->SelectUnit(nullptr);
+    spell_map->InvalidateUnitsView();
+
+    // Use the existing mission-end/strategic return pipeline, but without the
+    // generic tactical MISSION_FAILED message.
+    if (!spell_map->RequestRetreatMissionEnd())
+        return;
+
+    if (canvas)
+        canvas->Refresh();
+}
 
 
 // on change of map layer view
@@ -4117,9 +5067,17 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
         return;
     }
 
-    // ESC opens main menu when editor is locked
+    // ESC opens the main menu only when no tactical overlay is active.
+    // Minimap / unit list / map options own ESC themselves and close first.
     if(key == WXK_ESCAPE && !m_editor_unlocked)
     {
+        if (form_unit_opts || form_message || form_video_box ||
+            form_map_options || form_minimap || form_units_list)
+        {
+            event.Skip();
+            return;
+        }
+
         if(spell_map->isGameMode())
             spell_map->SetActiveGroup(0);
         wxCommandEvent evt;

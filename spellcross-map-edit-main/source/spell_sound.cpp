@@ -132,116 +132,111 @@ SpellSounds::~SpellSounds()
     samples.clear();
 }
 
-// load sound stuff from spellcross fs data folder
-SpellSounds::SpellSounds(FSarchive *common_fs, wstring& fs_data_path, int count,std::function<void(std::string)> status_list,std::function<void(std::string)> status_item)
-{            
+// load sound stuff; SAMPLES.FS may be omitted for silent mode
+SpellSounds::SpellSounds(FSarchive *common_fs, const std::wstring& samples_fs_path, int count,std::function<void(std::string)> status_list,std::function<void(std::string)> status_item)
+{
     channels = NULL;
-    
-    // load sound.fs (samples)
-    if(status_list)
-        status_list(" - Loading SAMPLES.FS...");
-    FSarchive* samples_fs;
-    try{
-        wstring samples_fs_path = std::filesystem::path(fs_data_path) / std::filesystem::path("samples.fs");
-        samples_fs = new FSarchive(samples_fs_path);
-    }catch(const runtime_error&) {        
-        if(status_list)
-            status_list("   - failed!");
-        throw runtime_error("Loading SAMPLES.FS archive failed!");
-    }
+    aux_samples = {};
 
-    // for each samples file:
-    samples.reserve(samples_fs->Count());
-    for(int fid = 0; fid < samples_fs->Count(); fid++)
+    if(!samples_fs_path.empty())
     {
-        // get file
-        const char *name;
-        uint8_t* data;
-        int size;
-        samples_fs->GetFile(fid,&data,&size,&name);
-                
-        if(wildcmp("1-*",name))
-        {
-            // 16-bit unsigned, 11025Hz, mono: convert to signed
-            if(status_item)
-                status_item(name);
-            samples.emplace_back();
-            SpellSample *smpl = &samples.back();
-            strcpy_s(smpl->name, sizeof(smpl->name), name);
-            smpl->fs = 11025;
-            smpl->channels = 1;
-            smpl->samples = size/2;
-            smpl->data.resize(smpl->samples);
-            uint16_t *ptr = (uint16_t*)data;
-            for(int k = 0; k < smpl->samples; k++)
-                smpl->data[k] = (int16_t)(*ptr++ - (uint16_t)0x8000u);
+        if(status_list)
+            status_list(" - Loading SAMPLES.FS...");
+        FSarchive* samples_fs = NULL;
+        try{
+            samples_fs = new FSarchive(samples_fs_path);
+        }catch(const runtime_error&) {
+            if(status_list)
+                status_list("   - failed!");
+            throw runtime_error("Loading SAMPLES.FS archive failed!");
         }
-        else if(wildcmp("8*",name))
+
+        // for each samples file:
+        samples.reserve(samples_fs->Count());
+        for(int fid = 0; fid < samples_fs->Count(); fid++)
         {
-            // 8-bit unsigned, 11025Hz, mono: convert to 16bit signed mono
-            if(status_item)
-                status_item(name);
-            samples.emplace_back();
-            SpellSample* smpl = &samples.back();
-            strcpy_s(smpl->name,sizeof(smpl->name),name);
-            smpl->fs = 11025;
-            smpl->channels = 1;
-            smpl->samples = size;
-            smpl->data.resize(smpl->samples);
-            uint8_t* ptr = (uint8_t*)data;
-            for(int k = 0; k < smpl->samples; k++)
-                smpl->data[k] = (int16_t)((((uint16_t)*ptr++)<<8) - (uint16_t)0x8000u);
-        }
-        else if(wildcmp("U*",name))
-        {
-            // 8-bit unsigned, 11025Hz, mono (with RIFF WAVE header)            
-            if(status_item)
-                status_item(name);                       
-            try{
-                // try parse RIFF WAVE
-                RIFF riff(data,size);
-                // store PCM data
+            const char *name;
+            uint8_t* data;
+            int size;
+            samples_fs->GetFile(fid,&data,&size,&name);
+
+            if(wildcmp("1-*",name))
+            {
+                if(status_item) status_item(name);
+                samples.emplace_back();
+                SpellSample *smpl = &samples.back();
+                strcpy_s(smpl->name, sizeof(smpl->name), name);
+                smpl->fs = 11025;
+                smpl->channels = 1;
+                smpl->samples = size/2;
+                smpl->data.resize(smpl->samples);
+                uint16_t *ptr = (uint16_t*)data;
+                for(int k = 0; k < smpl->samples; k++)
+                    smpl->data[k] = (int16_t)(*ptr++ - (uint16_t)0x8000u);
+            }
+            else if(wildcmp("8*",name))
+            {
+                if(status_item) status_item(name);
                 samples.emplace_back();
                 SpellSample* smpl = &samples.back();
                 strcpy_s(smpl->name,sizeof(smpl->name),name);
-                smpl->channels = riff.channels;
-                smpl->fs = riff.fs;
-                smpl->samples = riff.samples;
-                riff.ConvertPCM(smpl->data);
-            }catch(const runtime_error& error) {
-                if(status_list)
-                    status_list("   - failed!");
-                throw runtime_error(string_format("Parsing sample \"%s\" failed!",name));
+                smpl->fs = 11025;
+                smpl->channels = 1;
+                smpl->samples = size;
+                smpl->data.resize(smpl->samples);
+                uint8_t* ptr = (uint8_t*)data;
+                for(int k = 0; k < smpl->samples; k++)
+                    smpl->data[k] = (int16_t)((((uint16_t)*ptr++)<<8) - (uint16_t)0x8000u);
+            }
+            else if(wildcmp("U*",name))
+            {
+                if(status_item) status_item(name);
+                try{
+                    RIFF riff(data,size);
+                    samples.emplace_back();
+                    SpellSample* smpl = &samples.back();
+                    strcpy_s(smpl->name,sizeof(smpl->name),name);
+                    smpl->channels = riff.channels;
+                    smpl->fs = riff.fs;
+                    smpl->samples = riff.samples;
+                    riff.ConvertPCM(smpl->data);
+                }catch(const runtime_error&) {
+                    if(status_list) status_list("   - failed!");
+                    delete samples_fs;
+                    throw runtime_error(string_format("Parsing sample \"%s\" failed!",name));
+                }
+            }
+            else if(wildcmp("M*",name))
+            {
+                if(status_item) status_item(name);
+                samples.emplace_back();
+                SpellSample* smpl = &samples.back();
+                strcpy_s(smpl->name,sizeof(smpl->name),name);
+                smpl->fs = 11025;
+                smpl->channels = 2;
+                smpl->samples = size/4;
+                smpl->data.resize(smpl->channels*smpl->samples);
+                uint16_t* ptr = (uint16_t*)data;
+                for(int k = 0; k < smpl->samples; k++)
+                    smpl->data[k] = (int16_t)(*ptr++ - (uint16_t)0x8000u);
             }
         }
-        else if(wildcmp("M*",name))
-        {
-            // 16-bit unsigned, 11025Hz, stereo: convert to signed
-            if(status_item)
-                status_item(name);
-            samples.emplace_back();
-            SpellSample* smpl = &samples.back();
-            strcpy_s(smpl->name,sizeof(smpl->name),name);
-            smpl->fs = 11025;
-            smpl->channels = 2;
-            smpl->samples = size/4;
-            smpl->data.resize(smpl->channels*smpl->samples);
-            uint16_t* ptr = (uint16_t*)data;
-            for(int k = 0; k < smpl->samples; k++)
-                smpl->data[k] = (int16_t)(*ptr++ - (uint16_t)0x8000u);
-        }
-    }    
-    samples.shrink_to_fit();
-    delete samples_fs;
-    
-    // init stream channels
+        samples.shrink_to_fit();
+        delete samples_fs;
+    }
+    else if(status_list)
+    {
+        status_list(" - SAMPLES.FS not configured; continuing without sound effects.");
+    }
+
+    // Keep a valid channels object even in silent mode because the rest of the
+    // game expects SpellSounds to exist. Zero channels makes playback a no-op.
     if(status_list)
-        status_list(" - Creating sound streaming channels...");
+        status_list(samples_fs_path.empty() ? " - Sound output disabled." : " - Creating sound streaming channels...");
     try{
-        channels = new SoundChannels(count);
-    }catch(const runtime_error& error) {
-        if(status_list)
-            status_list("   - failed!");
+        channels = new SoundChannels(samples_fs_path.empty() ? 0 : count);
+    }catch(const runtime_error&) {
+        if(status_list) status_list("   - failed!");
         throw runtime_error("Creating sound stream channels failed!");
     }
 
@@ -583,6 +578,7 @@ void SpellSound::SpellSoundInit()
     right_vol = 65535;
     force_loop = false;
     auto_delete = false;
+    is_playing = false;
 }
 // define movement sound (start-move-stop)
 SpellSound::SpellSound(SoundChannels* channels,SpellSoundClassFile &move_class)
@@ -873,7 +869,15 @@ void SpellSound::PlayAsync()
 
 // start playback, optional auto-object delete after playback, optional loop, optional callback function to be called every frame (time critical!)
 int SpellSound::Play(bool auto_delete, bool loop, std::function<void(void)> frame_callback, double frame_step)
-{    
+{
+    // Silent/optional-audio mode: callers can keep using the normal sound API.
+    // An empty sound is simply a successful no-op from the game's point of view.
+    if(!streams || samples.empty())
+    {
+        if(auto_delete) delete this;
+        return(1);
+    }
+
     // automatically delete object after playaback?
     this->auto_delete = auto_delete;
     force_loop = loop;

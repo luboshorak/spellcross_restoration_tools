@@ -2221,7 +2221,7 @@ int SpellMap::Load(wstring& path, SpellData* spelldata)
 		data++;
 		*pstr = '\0';
 		auto snd_ref = spelldata->sounds->GetSample(name);
-		if (!snd_ref)
+		if (!snd_ref && spelldata->sounds->GetSamplesCount() > 0)
 		{
 			last_error = string_format("Map DTA sound #1 layer references unknown sound resource name '%s'!", name);
 			if (def)
@@ -2229,7 +2229,7 @@ int SpellMap::Load(wstring& path, SpellData* spelldata)
 			Close();
 			return(1);
 		}
-		L7_list.push_back(snd_ref);
+		L7_list.push_back(snd_ref); // nullptr is valid in intentional silent mode
 		/*auto sound = new SpellSound(spelldata->sounds->channels,snd_ref);
 		sounds->list.push_back(sound);*/
 	}
@@ -2266,7 +2266,7 @@ int SpellMap::Load(wstring& path, SpellData* spelldata)
 		data++;
 		*pstr = '\0';
 		auto snd_ref = spelldata->sounds->GetSample(name);
-		if (!snd_ref)
+		if (!snd_ref && spelldata->sounds->GetSamplesCount() > 0)
 		{
 			last_error = string_format("Map DTA sound #2 layer references unknown sound resource name '%s'!", name);
 			if (def)
@@ -2274,7 +2274,7 @@ int SpellMap::Load(wstring& path, SpellData* spelldata)
 			Close();
 			return(1);
 		}
-		L8_sounds.push_back(snd_ref);
+		L8_sounds.push_back(snd_ref); // nullptr is valid in intentional silent mode
 	}
 	int L8_count = *(int32_t*)data; data += 4;
 	for (int k = 0; k < L8_count; k++)
@@ -3217,6 +3217,23 @@ bool SpellMap::ConsumeMissionEndRequest(MissionEndRequest& out)
 	return true;
 }
 
+// Retreat is an explicit player-requested mission failure.  Do not route it
+// through CheckAndTriggerMissionEnd(): that path is intended for objective/death
+// conditions and would show the normal MISSION_FAILED message before returning.
+bool SpellMap::RequestRetreatMissionEnd()
+{
+	if (!isGameMode() || m_mission_end_fired)
+		return false;
+
+	m_mission_end_fired = true;
+	m_mission_end_shown = true;
+	m_mission_end_ack = true;
+	m_mission_end_req = MissionEndRequest();
+	m_mission_end_req.success = false;
+	m_mission_end_req.pending = true;
+	return true;
+}
+
 
 // invalidate current units view map to force recalculation (actual calculation is done while rendering for now)
 void SpellMap::InvalidateUnitsView()
@@ -3512,7 +3529,9 @@ int MapSounds::InitSounds()
 			}
 		if (found)
 			continue;
-		// make new sound
+		// make new sound; null samples are expected when optional SAMPLES.FS is disabled
+		if (!snd.GetSample())
+			continue;
 		auto sound = new SpellSound(m_spell_data->sounds->channels, snd.GetSample());
 		list.push_back(sound);
 	}
@@ -8806,7 +8825,7 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 			CreateHUDbutton(gres.wm_glyph_unit_info, hud_origin, btn_right[4], buf, buf_end, buf_x_size, 0, bind(&SpellMap::OnHUDswitchUnitHUD, this), NULL);
 			CreateHUDbutton(gres.wm_glyph_info, hud_origin, btn_right[5], buf, buf_end, buf_x_size, 0, NULL, NULL);
 			CreateHUDbutton(gres.wm_glyph_options, hud_origin, btn_right[6], buf, buf_end, buf_x_size, HUD_ACTION_MAP_OPTIONS, NULL, NULL);
-			CreateHUDbutton(gres.wm_glyph_retreat, hud_origin, btn_right[7], buf, buf_end, buf_x_size, 0, NULL, NULL);
+			CreateHUDbutton(gres.wm_glyph_retreat, hud_origin, btn_right[7], buf, buf_end, buf_x_size, HUD_ACTION_RETREAT, NULL, NULL);
 		}
 
 		// cleanup leftover buttons
@@ -10804,7 +10823,7 @@ int SpellMap::Tick()
 			double left_vol;
 			double right_vol;
 			auto sound = GetRandomSound(&left_vol, &right_vol);
-			if (sound)
+			if (sound && sound->GetSample())
 			{
 				auto sound_obj = new SpellSound(spelldata->sounds->channels, sound->GetSample());
 				sound_obj->SetPanning(left_vol, right_vol);
@@ -12789,8 +12808,10 @@ int SpellMap::MissionStartEvent()
 	if (list.empty())
 		return(0);
 
-	// process all events:
-	int is_selected = false;
+	// Preserve a friendly unit already selected by the strategic launcher.
+	// Older code always selected the first MissionStart event unit, which could
+	// replace the player's deployed company with an enemy selection.
+	int is_selected = (unit_selection && !unit_selection->is_enemy && !unit_selection->isDead()) ? 1 : 0;
 	for (auto& evt : list)
 	{
 		if (evt->units.empty())
@@ -12808,9 +12829,10 @@ int SpellMap::MissionStartEvent()
 				continue;
 			}
 			unit.is_placed = true;
-			if (!is_selected)
+			if (!is_selected && !new_unit->is_enemy)
 			{
-				// select first unit, because Aliance unints in map can be only placed via events, so no valid initial selection is possible before this point
+				// Stand-alone missions may still create the first Alliance unit via
+				// MissionStart. Select that unit, but never auto-select an enemy.
 				is_selected = true;
 				SelectUnit(new_unit, true);
 			}

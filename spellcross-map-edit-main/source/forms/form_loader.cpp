@@ -155,24 +155,57 @@ void FormLoader::Loader(std::wstring config_path,SpellData* &spell_data)
 	const std::filesystem::path exe_path =
 		std::filesystem::path(::wxStandardPaths::Get().GetExecutablePath().ToStdWstring()).parent_path();
 
-	// spellcross data root path
+	// Legacy directory roots are kept as fallbacks for old configs and for
+	// dynamic resources (videos, ad-hoc archive lookup). The actual core data
+	// archives are now resolved individually from [FILES].
 	wstring spelldata_path = ResolveConfiguredPath(ini.GetValue("SPELCROS", "spell_path", ""), config_file, exe_path).wstring();
-	// spellcross cd data root path
 	wstring spellcd_path = ResolveConfiguredPath(ini.GetValue("SPELCROS", "spellcd_path", ""), config_file, exe_path).wstring();
-	// special data folder
 	wstring spec_folder = ResolveConfiguredPath(ini.GetValue("DATA", "spec_data_path", ""), config_file, exe_path).wstring();
-	// units aux data path
 	wstring units_aux_data_path = ResolveConfiguredPath(ini.GetValue("DATA", "units_aux_data_path", ""), config_file, exe_path).wstring();
 
-	UpdateList("Resolved runtime paths:");
+	auto resolveSource = [&](const char* key, const std::wstring& legacyRoot, const wchar_t* legacyName, bool optional=false) -> std::wstring
+	{
+		const char* configured = ini.GetValue("FILES", key, "");
+		if(configured && *configured)
+			return ResolveConfiguredPath(configured, config_file, exe_path).wstring();
+		if(optional)
+			return {};
+		if(!legacyRoot.empty())
+			return (std::filesystem::path(legacyRoot) / legacyName).wstring();
+		return {};
+	};
+
+	SpellDataFiles files;
+	files.data_root = spelldata_path;
+	files.cd_root = spellcd_path;
+	files.common_fs = resolveSource("common_fs", spelldata_path, L"COMMON.FS");
+	files.terrain_t11_fs = resolveSource("t11_fs", spelldata_path, L"T11.FS");
+	files.terrain_pust_fs = resolveSource("pust_fs", spelldata_path, L"PUST.FS");
+	files.terrain_devast_fs = resolveSource("devast_fs", spelldata_path, L"DEVAST.FS");
+	files.units_fsu = resolveSource("units_fsu", spelldata_path, L"UNITS.FSU");
+	files.texts_fs = resolveSource("texts_fs", spelldata_path, L"TEXTS.FS");
+	files.info_fs = resolveSource("info_fs", spellcd_path, L"INFO.FS");
+	files.samples_fs = resolveSource("samples_fs", spelldata_path, L"SAMPLES.FS", true);
+	files.music_fs = resolveSource("music_fs", spelldata_path, L"MUSIC.FS", true);
+
+	if(files.data_root.empty() && !files.common_fs.empty())
+		files.data_root = std::filesystem::path(files.common_fs).parent_path().wstring();
+	if(files.cd_root.empty() && !files.info_fs.empty())
+		files.cd_root = std::filesystem::path(files.info_fs).parent_path().wstring();
+
+	UpdateList("Resolved runtime sources:");
 	UpdateList(string_format(" - config: %ls", config_file.wstring().c_str()));
-	UpdateList(string_format(" - game data: %ls", spelldata_path.c_str()));
-	UpdateList(string_format(" - CD data: %ls", spellcd_path.c_str()));
+	UpdateList(string_format(" - COMMON.FS: %ls", files.common_fs.c_str()));
+	UpdateList(string_format(" - UNITS.FSU: %ls", files.units_fsu.c_str()));
+	UpdateList(string_format(" - TEXTS.FS: %ls", files.texts_fs.c_str()));
+	UpdateList(string_format(" - INFO.FS: %ls", files.info_fs.c_str()));
+	UpdateList(string_format(" - SAMPLES.FS: %ls", files.samples_fs.empty() ? L"<disabled>" : files.samples_fs.c_str()));
+	UpdateList(string_format(" - MUSIC.FS: %ls", files.music_fs.empty() ? L"<disabled>" : files.music_fs.c_str()));
 	UpdateList(string_format(" - program data: %ls", spec_folder.c_str()));
 
 	// try load spellcross data
 	try{
-		spell_data = new SpellData(spelldata_path,spellcd_path,spec_folder,bind(&FormLoader::UpdateList,this,placeholders::_1),bind(&FormLoader::UpdateItem,this,placeholders::_1));
+		spell_data = new SpellData(files,spec_folder,bind(&FormLoader::UpdateList,this,placeholders::_1),bind(&FormLoader::UpdateItem,this,placeholders::_1));
 	}catch(const runtime_error& error){
 		UpdateList(std::string(error.what()));
 		LoaderExit(true);

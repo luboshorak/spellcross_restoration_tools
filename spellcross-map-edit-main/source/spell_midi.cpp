@@ -49,21 +49,30 @@ int SpellMIDIfile::SaveAs(std::wstring path)
 
 
 // init MIDI engine
-SpellMIDI::SpellMIDI(std::wstring& data_path, std::function<void(std::string)> status_list, std::function<void(std::string)> status_item)
+SpellMIDI::SpellMIDI(const std::wstring& music_fs_path, std::function<void(std::string)> status_list, std::function<void(std::string)> status_item)
 {
+    m_file = NULL;
+    m_port = NULL;
+    m_player = NULL;
+    m_volume = 0.5;
+
+    if(music_fs_path.empty())
+    {
+        if(status_list)
+            status_list(" - MUSIC.FS not configured; continuing without music.");
+        return;
+    }
+
     // try to get first available midi port and open MIDI player
     if(status_list)
         status_list(" - Initiating MIDI playback engine...");
-    m_file = NULL;
     m_port = new cxxmidi::output::Default(0);
     m_player = new cxxmidi::player::PlayerAsync(m_port);
-    m_volume = 0.5;
 
     // load music.fs (MIDI)
     if(status_list)
         status_list(" - Loading MUSIC.FS...");
     FSarchive* music_fs;
-    wstring music_fs_path = std::filesystem::path(data_path) / std::filesystem::path("music.fs");
     try {
         music_fs = new FSarchive(music_fs_path,FSarchive::Options::DELZ_ALL);
     }catch(const runtime_error& error) {
@@ -122,6 +131,9 @@ void SpellMIDI::Stop()
 // load and start playback of MIDI file
 int SpellMIDI::Play(SpellMIDIfile* midi)
 {
+    if(!m_player || !m_port || !midi)
+        return(1);
+
     // stop old playback
     Stop();
 
@@ -179,9 +191,9 @@ int SpellMIDI::Play(std::wstring path)
 // set volume <0;1>
 void SpellMIDI::SetVolume(double volume)
 {
+    m_volume = volume;
     if(!m_player)
         return;
-    m_volume = volume;
     m_player->SetVolume(volume);
 }
 // get volume <0;1>

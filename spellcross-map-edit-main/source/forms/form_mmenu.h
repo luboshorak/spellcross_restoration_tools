@@ -45,6 +45,8 @@ private:
     SpellMap* m_spell_map;
     SpellData* m_spelldata;
     wxFrame* form;
+    wxWindow* m_event_parent = nullptr;
+    wxRect m_draw_rect;
     wxBitmap m_background;
     wxSize m_bg_size;
 
@@ -65,6 +67,7 @@ private:
 
     void OnClose(wxCloseEvent& ev);
     void OnPaint(wxPaintEvent& event);
+    void OnSize(wxSizeEvent& event);
     void OnMouseMove(wxMouseEvent& event);
     void OnMouseLeave(wxMouseEvent& event);
     void OnMouseClick(wxMouseEvent& event);

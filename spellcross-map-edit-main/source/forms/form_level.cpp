@@ -2112,8 +2112,8 @@ static std::filesystem::path GetStrategicStatePath(const LevelData& level);
 static std::filesystem::path FindPreviousLevelSavePath(const LevelData& currentLevel);
 
 StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& level, bool skipAutosave)
-    : wxFrame(parent, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
-        wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT),
+    : wxFrame(nullptr, wxID_ANY, "Strategic Level", wxDefaultPosition, wxSize(1390, 1050),
+        wxDEFAULT_FRAME_STYLE),
     m_main(parent),
     m_spellData(parent ? parent->spell_data : nullptr),
     m_level(level)
@@ -2161,7 +2161,7 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     BuildUI();
     TryLoadBackground();
-    CenterOnParent();
+    CentreOnScreen();
 
     // Production campaign startup: never show the old restoration/debug
     // state-selection dialog. Continue deterministically from the most relevant
@@ -2203,11 +2203,17 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
 
     Bind(wxEVT_ACTIVATE, &StrategicLevelFrame::OnActivate, this);
 
-    // Clear m_strategicLevel in parent when this window is closed/destroyed
+    // Closing the strategic layer must never expose a stale tactical map.
+    // Return to the main menu instead; MainFrame remains hidden until a real
+    // tactical mission is explicitly entered.
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& ev) {
-        if (m_main && m_main->m_strategicLevel == this)
-            m_main->m_strategicLevel = nullptr;
+        MainFrame* main = m_main;
+        const bool wasCurrentStrategic = main && main->m_strategicLevel == this;
+        if (wasCurrentStrategic)
+            main->m_strategicLevel = nullptr;
         ev.Skip(); // proceed with default close/destroy
+        if (main && wasCurrentStrategic)
+            main->CallAfter([main]() { main->ShowMainMenuWindow(); });
     });
 
 }
@@ -6519,6 +6525,8 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         win->SetOriginalStrategicUi(true);
         if (win->m_selectedTerritory >= 0)
             win->SelectTerritoryById(win->m_selectedTerritory);
+        if (m_main)
+            m_main->m_strategicLevel = win;
         win->Show();
         win->Raise();
         Close(true);
@@ -6744,6 +6752,8 @@ void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
         if (win->m_selectedTerritory >= 0)
             win->SelectTerritoryById(win->m_selectedTerritory);
 
+        if (m_main)
+            m_main->m_strategicLevel = win;
         win->Show();
         win->Raise();
 
@@ -14413,7 +14423,7 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 
     // jump directly into game mode and hide the strategic-level window (keep alive for result callback)
     m_main->SetGameModeUI(true);
-    m_main->Raise();
+    m_main->ShowTacticalWindow();
 
     Hide();
 }

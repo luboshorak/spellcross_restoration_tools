@@ -360,7 +360,7 @@ std::vector<std::string> FSarchive::GetFileNames(std::string wild)
 }
 
 // export archive content to a folder (per-archive subfolder), optionally skipping already existing files
-int FSarchive::DumpToFolder(const std::filesystem::path& folder, bool skip_existing)
+int FSarchive::DumpToFolder(const std::filesystem::path& folder, bool skip_existing, bool verify_existing)
 {
         try
         {
@@ -371,16 +371,50 @@ int FSarchive::DumpToFolder(const std::filesystem::path& folder, bool skip_exist
                 for(auto &file : m_files)
                 {
                         std::filesystem::path out_path = archive_dir / file->name;
+
                         if(skip_existing && std::filesystem::exists(out_path))
-                                continue;
+                        {
+                                if(!verify_existing)
+                                        continue;
+
+                                // Integrity-aware cache: keep an existing loose file only when it
+                                // is byte-for-byte identical to the archive member. Missing, damaged
+                                // or overwritten cache files are repaired individually.
+                                if(!file->is_loaded && LoadFile(file))
+                                        return(1);
+
+                                std::error_code ec;
+                                const auto disk_size = std::filesystem::file_size(out_path, ec);
+                                bool identical = !ec && disk_size == file->data.size();
+                                if(identical)
+                                {
+                                        std::ifstream fr(out_path, std::ios::binary);
+                                        if(!fr)
+                                                identical = false;
+                                        else
+                                        {
+                                                std::vector<uint8_t> disk(file->data.size());
+                                                if(!disk.empty())
+                                                        fr.read(reinterpret_cast<char*>(disk.data()), static_cast<std::streamsize>(disk.size()));
+                                                if(!disk.empty() && fr.gcount() != static_cast<std::streamsize>(disk.size()))
+                                                        identical = false;
+                                                if(identical)
+                                                        identical = (disk == file->data);
+                                        }
+                                }
+                                if(identical)
+                                        continue;
+                        }
 
                         if(!file->is_loaded && LoadFile(file))
                                 return(1);
 
-                        std::ofstream fw(out_path, std::ios::binary);
+                        std::ofstream fw(out_path, std::ios::binary | std::ios::trunc);
                         if(!fw)
                                 return(1);
                         fw.write(reinterpret_cast<const char*>(file->data.data()), file->data.size());
+                        if(!fw)
+                                return(1);
                 }
         }
         catch(const std::exception&)

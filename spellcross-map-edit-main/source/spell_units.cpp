@@ -1915,6 +1915,8 @@ int MapUnit::PlayHit(MapUnit* target, bool missed)
 // play report sound
 int MapUnit::PlayAction()
 {
+	if(!unit || !unit->sound_action)
+		return(1);
 	auto sound_action = new SpellSound(*unit->sound_action);
 	sound_action->Play(true);
 	return(0);
@@ -1923,6 +1925,8 @@ int MapUnit::PlayAction()
 // play level up sound
 int MapUnit::PlayLevelUp()
 {
+	if(!unit || !unit->sound_level_up)
+		return(1);
 	auto sound = new SpellSound(*unit->sound_level_up);
 	sound->Play(true);
 	return(0);

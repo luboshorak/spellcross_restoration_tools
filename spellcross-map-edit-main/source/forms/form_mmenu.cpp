@@ -227,6 +227,7 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
     m_spell_map = spell_map;
     m_spelldata = spell_data;
     m_action_cb = std::move(action_cb);
+    m_event_parent = parent;
     m_hover_index = -1;
 
     m_panel = wxBitmap();
@@ -239,14 +240,14 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
     LoadPanel();
     BuildMenuItems();
 
-    const wxSize size = m_bg_size.IsFullySpecified() ? m_bg_size : wxSize(640, 480);
-    // Increase height to provide more vertical space for the menu (adds 80px)
-    wxSize windowSize = size;
-    windowSize.y += 80;
-    wxPoint pos = { (parent->GetSize().x - windowSize.x) / 2, (parent->GetSize().y - windowSize.y) / 2 };
-
-    long style = wxDEFAULT_FRAME_STYLE & ~(wxRESIZE_BORDER | wxMAXIMIZE_BOX);
-    form = new wxFrame(parent, win_id, "Spellcross reloaded alpha", pos, windowSize, style);
+    // Match the strategic-level window footprint and scale the original
+    // 640x480 menu inside it. The frame is intentionally independent from the
+    // hidden tactical MainFrame so hiding the tactical window cannot hide the
+    // main menu with it.
+    const wxSize windowSize(1390, 1050);
+    long style = wxDEFAULT_FRAME_STYLE;
+    form = new wxFrame(nullptr, win_id, "Spellcross", wxDefaultPosition, windowSize, style);
+    form->SetMinSize(wxSize(660, 520));
     form->SetBackgroundStyle(wxBG_STYLE_PAINT);
     form->SetDoubleBuffered(true);
 
@@ -270,15 +271,17 @@ FormMainMenu::FormMainMenu(wxPanel* parent,
     form->Bind(wxEVT_MENU, &FormMainMenu::OnOptionsAudio, this, ID_MMENU_OPTIONS_AUDIO);
     form->Bind(wxEVT_MENU, &FormMainMenu::OnOptionsScreen, this, ID_MMENU_OPTIONS_SCREEN);
 
-    LayoutMenuItems(form->GetClientSize());
+    LayoutMenuItems(wxSize(640, 480));
 
     form->Bind(wxEVT_CLOSE_WINDOW, &FormMainMenu::OnClose, this);
+    form->Bind(wxEVT_SIZE, &FormMainMenu::OnSize, this);
     form->Bind(wxEVT_PAINT, &FormMainMenu::OnPaint, this);
     form->Bind(wxEVT_MOTION, &FormMainMenu::OnMouseMove, this);
     form->Bind(wxEVT_LEAVE_WINDOW, &FormMainMenu::OnMouseLeave, this);
     form->Bind(wxEVT_LEFT_UP, &FormMainMenu::OnMouseClick, this);
     form->Bind(wxEVT_KEY_DOWN, &FormMainMenu::OnKeyDown, this);
 
+    form->CentreOnScreen();
     form->Show();
 }
 
@@ -288,6 +291,7 @@ FormMainMenu::~FormMainMenu()
     {
         // Unbind all handlers so no events fire on the dead object
         form->Unbind(wxEVT_CLOSE_WINDOW, &FormMainMenu::OnClose, this);
+        form->Unbind(wxEVT_SIZE, &FormMainMenu::OnSize, this);
         form->Unbind(wxEVT_PAINT, &FormMainMenu::OnPaint, this);
         form->Unbind(wxEVT_MOTION, &FormMainMenu::OnMouseMove, this);
         form->Unbind(wxEVT_LEAVE_WINDOW, &FormMainMenu::OnMouseLeave, this);
@@ -387,33 +391,64 @@ bool FormMainMenu::LoadPanel()
 
     std::vector<unsigned char> bytes;
 
-    // Try loading from common_fs archive first (data is already decompressed by DELZ_ALL)
+    // Prefer COMMON.FS itself. SpellData opens it with DELZ_ALL, therefore
+    // *.LZ members returned here are already decoded pixel/index buffers.
     FSarchive* cfs = m_spelldata->GetCommonFS();
-    bool got = LoadBytesFromFS(cfs, "MAINM_BG.LZ", bytes);
-    if (!got)
-        got = LoadBytesFromFS(cfs, "MAINM_BG.BIN", bytes);
+    bool got = false;
+    const char* archiveNames[] = {
+        "MAINM_BG.LZ", "MAINM_BG.BIN",
+        "MAINMBG.LZ",  "MAINMBG.BIN",
+        "MAINM-BG.LZ", "MAINM-BG.BIN"
+    };
+    for (const char* name : archiveNames)
+    {
+        if (LoadBytesFromFS(cfs, name, bytes))
+        {
+            got = true;
+            break;
+        }
+    }
 
-    // Fallback: search on disk
+    // Fallback to loose/cache data. Important: temp\COMMON contains the
+    // *decoded* members written by SpellData::DumpToFolder(), but preserves the
+    // original .LZ filename. Do not blindly run LZW over such a file again.
     if (!got)
     {
         namespace fs = std::filesystem;
-        fs::path root = fs::path(m_spelldata->spell_data_root);
+        const fs::path root = fs::path(m_spelldata->spell_data_root);
+        const char* looseNames[] = {
+            "MAINM_BG.LZ", "MAINM_BG.BIN",
+            "MAINMBG.LZ",  "MAINMBG.BIN",
+            "MAINM-BG.LZ", "MAINM-BG.BIN"
+        };
 
-        fs::path lzPath = FindMenuFile(root, "MAINM_BG.LZ");
-        fs::path rawPath = FindMenuFile(root, "MAINM_BG.BIN");
-        if (!lzPath.empty())
+        fs::path found;
+        for (const char* name : looseNames)
         {
-            if (LoadFileBytes(lzPath, bytes))
+            found = FindMenuFile(root, name);
+            if (!found.empty())
+                break;
+        }
+
+        if (!found.empty() && LoadFileBytes(found, bytes))
+        {
+            got = true;
+
+            // MAINM_BG in the known releases expands to 255x272 = 69360
+            // indexed pixels. If the loose .LZ is not already that decoded
+            // payload, try LZW once.
+            const bool looksDecoded = (bytes.size() == (size_t)255 * 272) ||
+                                      (bytes.size() == (size_t)255 * 237);
+            if (!looksDecoded && to_lower(found.extension().string()) == ".lz")
             {
                 LZWexpand delz(512 * 1024);
-                std::vector<uint8_t> decoded = delz.Decode((uint8_t*)bytes.data(), (uint8_t*)bytes.data() + bytes.size());
-                bytes.assign(decoded.begin(), decoded.end());
-                got = !bytes.empty();
+                std::vector<uint8_t> decoded = delz.Decode(
+                    (uint8_t*)bytes.data(), (uint8_t*)bytes.data() + bytes.size());
+                if (!decoded.empty())
+                    bytes.assign(decoded.begin(), decoded.end());
+                else
+                    got = false;
             }
-        }
-        else if (!rawPath.empty())
-        {
-            got = LoadFileBytes(rawPath, bytes);
         }
     }
 
@@ -423,15 +458,19 @@ bool FormMainMenu::LoadPanel()
     DecodedIndexed d;
     if (!DecodeIndexedMaybeHeader(bytes, d))
     {
-        // Known Spellcross MAINM_BG
-        if (bytes.size() == (size_t)255 * 237)
+        // Known Spellcross menu-panel layouts. The common/original variant is
+        // 255x272; keep the older 255x237 fallback for other distributions.
+        if (bytes.size() == (size_t)255 * 272)
+        {
+            d.w = 255; d.h = 272; d.pixels = bytes;
+        }
+        else if (bytes.size() == (size_t)255 * 237)
         {
             d.w = 255; d.h = 237; d.pixels = bytes;
         }
         else
         {
-            // try common widths, including 255
-            if (!GuessDimsFromSize(bytes, d, {255, 510, 640, 512, 480, 400, 360, 320}))
+            if (!GuessDimsFromSize(bytes, d, {255, 272, 237, 510, 640, 512, 480, 400, 360, 320}))
                 return false;
         }
     }
@@ -533,39 +572,96 @@ void FormMainMenu::TriggerAction(int index)
 
 void FormMainMenu::OnClose(wxCloseEvent& ev)
 {
-    form->DeletePendingEvents();
-    wxPostEvent(form->GetParent(), ev);
+    if (ev.CanVeto())
+        ev.Veto();
+    if (form)
+        form->DeletePendingEvents();
+
+    // The menu is now an independent top-level frame. Forward its close event
+    // to the original canvas so MainFrame can decide whether to resume a paused
+    // tactical mission or terminate from the startup menu.
+    if (m_event_parent)
+    {
+        wxCloseEvent forwarded(wxEVT_CLOSE_WINDOW, ev.GetId());
+        wxPostEvent(m_event_parent, forwarded);
+    }
+}
+
+void FormMainMenu::OnSize(wxSizeEvent& event)
+{
+    event.Skip();
+    if (form)
+        form->Refresh(false);
 }
 
 void FormMainMenu::OnPaint(wxPaintEvent& event)
 {
     wxAutoBufferedPaintDC dc(form);
+    dc.SetBackground(*wxBLACK_BRUSH);
+    dc.Clear();
+
+    const wxSize client = form->GetClientSize();
+    if (client.x <= 0 || client.y <= 0)
+        return;
+
+    // Same crisp integer-scaling rule used by the reconstructed strategic UI.
+    // The logical menu surface is always the original 640x480.
+    constexpr int logicalW = 640;
+    constexpr int logicalH = 480;
+    double scale = std::min(
+        static_cast<double>(client.x) / logicalW,
+        static_cast<double>(client.y) / logicalH);
+    if (scale >= 1.0)
+        scale = std::max(1.0, std::floor(scale));
+
+    const int drawW = std::max(1, static_cast<int>(std::lround(logicalW * scale)));
+    const int drawH = std::max(1, static_cast<int>(std::lround(logicalH * scale)));
+    const int drawX = (client.x - drawW) / 2;
+    const int drawY = (client.y - drawH) / 2;
+    m_draw_rect = wxRect(drawX, drawY, drawW, drawH);
 
     if (m_background.IsOk())
-        dc.DrawBitmap(m_background, 0, 0, false);
-    else
     {
-        dc.SetBackground(*wxBLACK_BRUSH);
-        dc.Clear();
+        wxBitmap bg = m_background;
+        if (drawW != logicalW || drawH != logicalH)
+            bg = wxBitmap(m_background.ConvertToImage().Scale(drawW, drawH, wxIMAGE_QUALITY_NEAREST));
+        if (bg.IsOk())
+            dc.DrawBitmap(bg, drawX, drawY, false);
     }
 
-    if (m_panel.IsOk())
-        dc.DrawBitmap(m_panel, m_panel_pos.x, m_panel_pos.y, true);
+    LayoutMenuItems(wxSize(logicalW, logicalH));
 
-    const wxSize cs = form->GetClientSize();
-    LayoutMenuItems(cs);
+    if (m_panel.IsOk() && m_panel_size.x > 0 && m_panel_size.y > 0)
+    {
+        const int px = drawX + static_cast<int>(std::lround(m_panel_pos.x * scale));
+        const int py = drawY + static_cast<int>(std::lround(m_panel_pos.y * scale));
+        const int pw = std::max(1, static_cast<int>(std::lround(m_panel_size.x * scale)));
+        const int ph = std::max(1, static_cast<int>(std::lround(m_panel_size.y * scale)));
+        wxBitmap panel = m_panel;
+        if (pw != m_panel_size.x || ph != m_panel_size.y)
+            panel = wxBitmap(m_panel.ConvertToImage().Scale(pw, ph, wxIMAGE_QUALITY_NEAREST));
+        if (panel.IsOk())
+            dc.DrawBitmap(panel, px, py, true);
+    }
 
-    // hover highlight (transparent background with rounded corners)
+    // Hover rectangle is stored in logical 640x480 coordinates and transformed
+    // together with the original artwork.
     if (m_hover_index >= 0 && m_hover_index < (int)m_items.size())
     {
+        const wxRect& lr = m_items[(size_t)m_hover_index].rect;
+        wxRect r(
+            drawX + static_cast<int>(std::lround(lr.x * scale)),
+            drawY + static_cast<int>(std::lround(lr.y * scale)),
+            std::max(1, static_cast<int>(std::lround(lr.width * scale))),
+            std::max(1, static_cast<int>(std::lround(lr.height * scale))));
+
         wxGCDC gdc(dc);
         wxGraphicsContext* gc = gdc.GetGraphicsContext();
         if (gc)
         {
-            gc->SetPen(gc->CreatePen(wxGraphicsPenInfo(wxColour(200, 200, 200, 180)).Width(2)));
+            gc->SetPen(gc->CreatePen(wxGraphicsPenInfo(wxColour(200, 200, 200, 180)).Width(std::max(1.0, 2.0 * scale))));
             gc->SetBrush(gc->CreateBrush(wxBrush(wxColour(150, 150, 150, 50))));
-            const wxRect& r = m_items[(size_t)m_hover_index].rect;
-            gc->DrawRoundedRectangle(r.x, r.y, r.width, r.height, 6);
+            gc->DrawRoundedRectangle(r.x, r.y, r.width, r.height, std::max(3.0, 6.0 * scale));
         }
     }
 }
@@ -573,14 +669,23 @@ void FormMainMenu::OnPaint(wxPaintEvent& event)
 void FormMainMenu::OnMouseMove(wxMouseEvent& event)
 {
     const wxPoint p = event.GetPosition();
-
     int hit = -1;
-    for (size_t i = 0; i < m_items.size(); ++i)
+
+    if (m_draw_rect.width > 0 && m_draw_rect.height > 0 && m_draw_rect.Contains(p))
     {
-        if (m_items[i].rect.Contains(p))
+        const int lx = static_cast<int>(
+            (static_cast<long long>(p.x - m_draw_rect.x) * 640) / m_draw_rect.width);
+        const int ly = static_cast<int>(
+            (static_cast<long long>(p.y - m_draw_rect.y) * 480) / m_draw_rect.height);
+        const wxPoint logical(lx, ly);
+
+        for (size_t i = 0; i < m_items.size(); ++i)
         {
-            hit = (int)i;
-            break;
+            if (m_items[i].rect.Contains(logical))
+            {
+                hit = (int)i;
+                break;
+            }
         }
     }
 

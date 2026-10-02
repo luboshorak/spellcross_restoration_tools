@@ -130,6 +130,11 @@ public:
     // Play a cutscene video (called from Strategic Level)
     void PlayCutsceneFromStrategic(const std::string& video_entry_name);
 
+    // Window-flow helpers: only one game layer is interactable at a time.
+    void ShowMainMenuWindow();
+    void ShowTacticalWindow();
+    void HideTacticalWindow();
+
     // Message display (used by SpellMap and StrategicLevelFrame)
     void ShowMessage(SpellTextRec *message, bool is_yesno, std::function<void(bool)> exit_cb=NULL);
     bool CheckMessageState();
@@ -288,12 +293,14 @@ private:
     FormSound *form_sounds = NULL;
     FormMainMenu *form_mmenu = NULL;
     bool m_reopen_mmenu_after_video = false;
+    bool m_mainMenuReturnToTactical = false;
     
     // spellcross HUD interface stuff
     void OnPaintHUDbutton(wxPaintEvent& event);
     void OnHUDbuttonsMouseEnter(wxMouseEvent& event);
     void OnHUDbuttonsLeave(wxMouseEvent& event);
     void OnHUDbuttonsClick(wxMouseEvent& event);
+    void OnTacticalRetreat();
     vector<wxPanel*> hud_buttons;    
 
     // sub-forms IDs

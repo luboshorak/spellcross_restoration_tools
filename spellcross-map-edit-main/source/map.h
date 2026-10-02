@@ -424,6 +424,7 @@ public:
 	public:
 
 		bool ConsumeMissionEndRequest(MissionEndRequest& out);
+		bool RequestRetreatMissionEnd();
 		bool AreAllObjectivesDone() const;
 		void CheckAndTriggerMissionEnd();
 		void CheckObjectiveNotifications();
@@ -958,7 +959,8 @@ public:
 		enum{
 			HUD_ACTION_MINIMAP = 1000,
 			HUD_ACTION_UNITS,
-			HUD_ACTION_MAP_OPTIONS
+			HUD_ACTION_MAP_OPTIONS,
+			HUD_ACTION_RETREAT
 		};
 
 		MapSound* GetRandomSound(double* left=NULL,double* right=NULL);

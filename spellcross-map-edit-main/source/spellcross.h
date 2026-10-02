@@ -109,6 +109,21 @@ public:
 
 
 
+struct SpellDataFiles
+{
+	std::wstring data_root;
+	std::wstring cd_root;
+	std::wstring common_fs;
+	std::wstring terrain_t11_fs;
+	std::wstring terrain_pust_fs;
+	std::wstring terrain_devast_fs;
+	std::wstring units_fsu;
+	std::wstring texts_fs;
+	std::wstring info_fs;
+	std::wstring samples_fs; // optional; empty = silent SFX mode
+	std::wstring music_fs;   // optional; empty = silent music mode
+};
+
 class SpellData
 {
 private:
@@ -162,6 +177,7 @@ public:
 	SpellVideoResources *videos;
 
 
+	SpellData(const SpellDataFiles& files, wstring& spec_path,std::function<void(std::string)> status_list=NULL,std::function<void(std::string)> status_item=NULL);
 	SpellData(wstring& data_path,wstring& cd_data_path,wstring& spec_path,std::function<void(std::string)> status_list=NULL,std::function<void(std::string)> status_item=NULL);
 	~SpellData();	
 	Terrain* GetTerrain(const char* name);
