@@ -174,6 +174,25 @@
     <None Include="tests\inspect_scsave.py" />
     <None Include="tests\test_mission_events.py" />
     <None Include="tests\test_view_events.py" />
+    <!-- Runtime sidecar data shipped next to Spellcross.exe.  These files are
+         referenced by the strategic/game-mode code or by its documented fallback paths. -->
+    <None Include="..\data\C_NAMES.DEF"><Link>data\C_NAMES.DEF</Link></None>
+    <None Include="..\data\DEVAST.fs"><Link>data\DEVAST.fs</Link></None>
+    <None Include="..\data\PUST.fs"><Link>data\PUST.fs</Link></None>
+    <None Include="..\data\T11.FS"><Link>data\T11.FS</Link></None>
+    <None Include="..\data\font_spellcross_7pix.fnt"><Link>data\font_spellcross_7pix.fnt</Link></None>
+    <None Include="..\data\font_spellcross_14pix.fnt"><Link>data\font_spellcross_14pix.fnt</Link></None>
+    <None Include="..\data\units.fsa"><Link>data\units.fsa</Link></None>
+    <None Include="..\data\units.json"><Link>data\units.json</Link></None>
+    <None Include="..\data\menu\buy_sell.png"><Link>data\menu\buy_sell.png</Link></None>
+    <None Include="..\data\menu\hierarchy.png"><Link>data\menu\hierarchy.png</Link></None>
+    <None Include="..\data\menu\info.png"><Link>data\menu\info.png</Link></None>
+    <None Include="..\data\menu\options.png"><Link>data\menu\options.png</Link></None>
+    <None Include="..\data\menu\research.png"><Link>data\menu\research.png</Link></None>
+    <None Include="..\data\menu\resources.png"><Link>data\menu\resources.png</Link></None>
+    <None Include="..\data\menu\statistics.png"><Link>data\menu\statistics.png</Link></None>
+    <None Include="..\data\menu\strategic_map.png"><Link>data\menu\strategic_map.png</Link></None>
+    <None Include="..\data\menu\units.png"><Link>data\menu\units.png</Link></None>
     <None Include="wx\msw\blank.cur" />
     <None Include="wx\msw\bullseye.cur" />
     <None Include="wx\msw\cross.cur" />
@@ -408,6 +427,15 @@
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyBundledRuntimeData" AfterTargets="Build">
+    <ItemGroup>
+      <BundledRuntimeData Include="$(ProjectDir)..\data\C_NAMES.DEF;$(ProjectDir)..\data\DEVAST.fs;$(ProjectDir)..\data\PUST.fs;$(ProjectDir)..\data\T11.FS;$(ProjectDir)..\data\font_spellcross_7pix.fnt;$(ProjectDir)..\data\font_spellcross_14pix.fnt;$(ProjectDir)..\data\units.fsa;$(ProjectDir)..\data\units.json" />
+      <BundledRuntimeMenuData Include="$(ProjectDir)..\data\menu\*.png" />
+    </ItemGroup>
+    <MakeDir Directories="$(OutDir)data;$(OutDir)data\menu" />
+    <Copy SourceFiles="@(BundledRuntimeData)" DestinationFolder="$(OutDir)data" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(BundledRuntimeMenuData)" DestinationFolder="$(OutDir)data\menu" SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
