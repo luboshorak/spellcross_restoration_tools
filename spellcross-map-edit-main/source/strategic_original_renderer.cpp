@@ -431,6 +431,53 @@ bool StrategicOriginalRenderer::RenderStrategicMap(const AssetLoader& load,
         }
     }
 
+    // CLK stores the original territory outline pixels as 0x80 + territory id.
+    // The restored Original-UI path previously never rendered those outlines;
+    // the similar code in form_level.cpp belongs to the separate current-UI
+    // overlay and therefore had no effect here.  A shared CLK edge may be
+    // attributed to either of the two neighbouring territories, so inspect the
+    // four neighbours as well.  If either side is already conquered (Revealed),
+    // the edge is the strong black separator seen in DOS Spellcross.  Do this
+    // AFTER the red enemy hatch so the hatch cannot paint over the conquered
+    // territory boundary.
+    auto normalizedTerritory = [&](int x, int y) -> int
+    {
+        if(x < 0 || y < 0 || x >= kMapW || y >= kMapH)
+            return 0;
+        const std::uint8_t raw = territoryMask[static_cast<std::size_t>(y) * kMapW + x];
+        return raw >= 128 ? static_cast<int>(raw) - 128 : static_cast<int>(raw);
+    };
+    auto isConquered = [&](int terr) -> bool
+    {
+        return terr > 0 && static_cast<std::size_t>(terr) < state.territories.size() &&
+               state.territories[static_cast<std::size_t>(terr)] == TerritoryVisualState::Revealed;
+    };
+
+    for(int y = 0; y < kMapH; ++y)
+    {
+        for(int x = 0; x < kMapW; ++x)
+        {
+            const std::size_t p = static_cast<std::size_t>(y) * kMapW + x;
+            const std::uint8_t raw = territoryMask[p];
+            if(raw < 128)
+                continue;
+
+            const int terr = static_cast<int>(raw) - 128;
+            const bool touchesConquered = isConquered(terr) ||
+                isConquered(normalizedTerritory(x - 1, y)) ||
+                isConquered(normalizedTerritory(x + 1, y)) ||
+                isConquered(normalizedTerritory(x, y - 1)) ||
+                isConquered(normalizedTerritory(x, y + 1));
+            if(!touchesConquered)
+                continue;
+
+            const std::size_t q = (static_cast<std::size_t>(kMapY + y) * kScreenW + (kMapX + x)) * 3;
+            out.rgb[q+0] = 0;
+            out.rgb[q+1] = 0;
+            out.rgb[q+2] = 0;
+        }
+    }
+
     return true;
 }
 

@@ -54,7 +54,7 @@ class FSarchive
                 const char *GetFileName(int id);
                 std::string GetFSname(bool with_extension=true);
                 std::vector<std::string> GetFileNames(std::string wild="*");
-                int DumpToFolder(const std::filesystem::path& folder, bool skip_existing=true, bool verify_existing=false);
+                int DumpToFolder(const std::filesystem::path& folder, bool skip_existing=true, bool verify_existing=false, bool prune_stale=false);
 
 	private:			
 		

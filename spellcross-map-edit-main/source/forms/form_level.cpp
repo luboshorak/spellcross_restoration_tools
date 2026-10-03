@@ -153,6 +153,99 @@ namespace
         return utf8 ? std::string(utf8.data()) : value;
     }
 
+    enum class OriginalMissionAssetSet
+    {
+        Unknown = 0,
+        English,
+        Czech
+    };
+
+    static std::string OriginalLowerAscii(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value;
+    }
+
+    static const std::unordered_set<std::string>& OriginalCzechOnlyMissionTokens()
+    {
+        // Mission DEFs present in the supplied Czech COMMON.FS but absent from
+        // the supplied English COMMON.FS.  English is therefore a strict
+        // gameplay-content subset of Czech for these tactical missions.
+        static const std::unordered_set<std::string> tokens = {
+            "m03_02a", "m03_06a", "m03_08a", "m03_10a", "m03_11a",
+            "m04_03a", "m04_03b", "m04_03c", "m04_06a", "m04_06b",
+            "m04_06c", "m04_08a", "m04_09a", "m04_09b", "m04_13a",
+            "m04_15a", "m05_06a", "m05_06b", "m06_01a", "m06_03a",
+            "m06_05a", "m06_08a", "m06_08b", "m06_09a", "m06_09b",
+            "m06_12d", "m07_04a", "m07_04b", "m07_06a", "m07_09a",
+            "m07_10a", "m07_12a", "m08_05a", "m08_07a", "m08_07b",
+            "m08_14a", "m08_15a", "m09_03a", "m09_05a", "m09_07a",
+            "m09_09a"
+        };
+        return tokens;
+    }
+
+    static bool OriginalIsTacticalMissionDefName(const std::string& name)
+    {
+        static const std::regex missionRe(R"(^M[0-9]{2}_[0-9]{2}[A-Z]?\.DEF$)",
+            std::regex_constants::icase);
+        return std::regex_match(name, missionRe);
+    }
+
+    static OriginalMissionAssetSet OriginalDetectMissionAssetSet(SpellData* spellData)
+    {
+        if (!spellData || !spellData->GetCommonFS())
+            return OriginalMissionAssetSet::Unknown;
+
+        int missionDefCount = 0;
+        int czechOnlyPresent = 0;
+        const auto& czechOnly = OriginalCzechOnlyMissionTokens();
+        for (const auto& rawName : spellData->GetCommonFS()->GetFileNames("*.DEF"))
+        {
+            if (!OriginalIsTacticalMissionDefName(rawName))
+                continue;
+            ++missionDefCount;
+            std::string stem = OriginalLowerAscii(std::filesystem::path(rawName).stem().string());
+            if (czechOnly.count(stem) != 0)
+                ++czechOnlyPresent;
+        }
+
+        // Exact clean retail sets supplied with the project/reference data:
+        // ENG = 95 tactical mission DEFs, CZ = 136 (ENG + 41 CZ-only).
+        // Requiring the full CZ-only set avoids mislabelling partially modded
+        // data as the Czech retail set.
+        if (czechOnlyPresent == static_cast<int>(czechOnly.size()) && missionDefCount >= 136)
+            return OriginalMissionAssetSet::Czech;
+        if (czechOnlyPresent == 0 && missionDefCount == 95)
+            return OriginalMissionAssetSet::English;
+        return OriginalMissionAssetSet::Unknown;
+    }
+
+    static std::vector<std::string> OriginalFindCzechOnlyMissionsInSave(
+        const std::vector<uint8_t>& raw, const LevelData& level)
+    {
+        std::set<std::string> unique;
+        const auto& czechOnly = OriginalCzechOnlyMissionTokens();
+        for (const auto& territory : level.territories)
+        {
+            const int index = territory.id - 1;
+            if (index < 0)
+                continue;
+            const size_t off = kOriginalBigMapTerritoriesOffset +
+                static_cast<size_t>(index) * 56;
+            if (off + 56 > raw.size())
+                continue;
+
+            std::string mission = OriginalLowerAscii(OriginalReadString(raw, off + 14, 13));
+            if (mission.size() > 4 && mission.substr(mission.size() - 4) == ".def")
+                mission.resize(mission.size() - 4);
+            if (czechOnly.count(mission) != 0)
+                unique.insert(mission);
+        }
+        return std::vector<std::string>(unique.begin(), unique.end());
+    }
+
     static bool DecodeOriginalBigMapSave(const std::filesystem::path& inputPath,
         std::vector<uint8_t>& raw, std::string* error)
     {
@@ -850,19 +943,42 @@ namespace
         return lines;
     }
 
+    struct OriginalStrategicTextColours
+    {
+        // State palette matched to the original DOS strategic UI. Right-side
+        // menu/list text is bright white, headings are yellow, active/owned
+        // entries are vivid green, selected entries are red and unavailable
+        // entries are dim grey.  Resource values (money/research/turn) use
+        // their own neutral grey, while the end-turn plate remains white.
+        wxColour usable{218, 222, 211};
+        wxColour selected{243, 44, 44};
+        wxColour category{255, 247, 4};
+        wxColour active{4, 219, 4};
+        wxColour blocked{150, 150, 150};
+        wxColour statusValue{150, 150, 150};
+    };
+
+    static const OriginalStrategicTextColours& OriginalStrategicTextPalette()
+    {
+        static const OriginalStrategicTextColours colours;
+        return colours;
+    }
+
     static void OriginalDrawStrategicStatus(wxImage& image, SpellFont* font,
         int money, int research, int turn)
     {
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& white = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& grey = colours.statusValue;
         OriginalDrawSpellText(image, font, L"Peníze", 578, 17, green, 61, true);
-        OriginalDrawSpellText(image, font, wxString::Format("%d", money), 578, 31, text, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", money), 578, 31, grey, 61, true);
         OriginalDrawSpellText(image, font, L"Výzkum", 578, 47, green, 61, true);
-        OriginalDrawSpellText(image, font, wxString::Format("%d", research), 578, 61, text, 61, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", research), 578, 61, grey, 61, true);
         OriginalDrawSpellText(image, font, L"Kolo", 578, 77, green, 61, true);
-        OriginalDrawSpellText(image, font, wxString::Format("%d", turn), 578, 91, text, 61, true);
-        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, text, 60, true);
-        OriginalDrawSpellText(image, font, wxString::Format("%02d", turn), 579, 452, text, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%d", turn), 578, 91, grey, 61, true);
+        OriginalDrawSpellText(image, font, L"Kolo", 579, 436, white, 60, true);
+        OriginalDrawSpellText(image, font, wxString::Format("%02d", turn), 579, 452, white, 60, true);
     }
 
     static void OriginalDrawActionButton(wxImage& image, SpellFont* font,
@@ -878,7 +994,7 @@ namespace
             return;
         if (font)
         {
-            const wxColour fg = enabled ? wxColour(0, 242, 0) : wxColour(90, 112, 90);
+            const wxColour fg = enabled ? OriginalStrategicTextPalette().active : wxColour(90, 112, 90);
             OriginalDrawSpellText(image, font, label, x, y + 7, fg, 70, true);
         }
     }
@@ -2929,10 +3045,11 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxColour listBg(24, 61, 26);
         const wxColour grid(31, 76, 32);
         const wxColour frame(135, 132, 120);
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
-        const wxColour heading(232, 232, 0);
-        const wxColour dim(126, 132, 118);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& heading = colours.category;
+        const wxColour& dim = colours.blocked;
         const wxColour cooldown(132, 72, 72);
         const wxRect mapListViewport(kOriginalListX, kOriginalListY, kOriginalListW, kOriginalListH);
 
@@ -2957,8 +3074,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const int maxScroll = std::max(0, totalRows - visibleUnitRows);
         m_originalUnitScroll = std::clamp(m_originalUnitScroll, 0, maxScroll);
 
-        const wxColour selectedRed(242, 0, 0);
-        OriginalDrawSpellText(image, font, L"Speci\u00E1ln\u00ED", 420, 8, text, 132, true);
+        const wxColour& selectedRed = colours.selected;
+        OriginalDrawSpellText(image, font, L"Speci\u00E1ln\u00ED", 420, 8, heading, 132, true);
         OriginalDrawSpellText(image, font, L"Vyber v\u0161echny", 423, 27, text);
         OriginalDrawSpellText(image, font, L"Odzna\u010D v\u0161echny", 423, 42, text);
 
@@ -3043,14 +3160,18 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxString briefing = OriginalCleanBriefing(m_originalBriefingText);
         if (!briefing.empty())
         {
-            const auto lines = OriginalWrapText(font, briefing, 356, 8);
-            const int fh = std::max(1, font->GetHeight());
-            const int blockH = static_cast<int>(lines.size()) * fh;
-            int y = 323 + std::max(0, (130 - blockH) / 2);
+            // STRMAP.QH: briefing area = 23,326,370x130.  The DOS screen
+            // top-aligns the paragraph instead of vertically centring it; at
+            // the native 14 px line pitch this leaves room for nine lines.
+            constexpr int briefingTextY = 329;
+            constexpr int briefingLinePitch = 14;
+            constexpr int briefingMaxLines = 9;
+            const auto lines = OriginalWrapText(font, briefing, 356, briefingMaxLines);
+            int y = briefingTextY;
             for (const auto& line : lines)
             {
                 OriginalDrawSpellText(image, font, line, 22, y, text, 374, true);
-                y += fh;
+                y += briefingLinePitch;
             }
         }
         else
@@ -3066,10 +3187,11 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxColour listBg(24, 61, 26);
         const wxColour grid(31, 76, 32);
         const wxColour frame(135, 132, 120);
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
-        const wxColour heading(232, 232, 0);
-        const wxColour dim(126, 132, 118);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& heading = colours.category;
+        const wxColour& dim = colours.blocked;
 
         // STRHIER.QH defines the hierarchy roster as a 467 px tall area. The
         // map screen uses a shorter centre list, but hierarchy extends almost
@@ -3121,7 +3243,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             if (selectedPoolUnit)
                 OriginalFillRect(image, 421, rowY, 129, 13, wxColour(35, 84, 29));
             OriginalDrawSpellTextClipped(image, font, GetUnitDisplayName(m_playerUnits[static_cast<size_t>(pIdx)].unit_id),
-                424, rowY + std::max(0, (14 - unitTextH) / 2), selectedPoolUnit ? heading : text,
+                424, rowY + std::max(0, (14 - unitTextH) / 2), selectedPoolUnit ? colours.selected : text,
                 hierarchyListViewport, 126);
             ++unitRows;
         }
@@ -3141,7 +3263,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             if (selectedPoolCommander)
                 OriginalFillRect(image, 421, cy, 129, 13, wxColour(35, 84, 29));
             const wxString label = GetRankAbbrev(commander.rank) + " " + wxString::FromUTF8(commander.name);
-            OriginalDrawSpellTextClipped(image, font, label, 424, cy, selectedPoolCommander ? heading : text,
+            OriginalDrawSpellTextClipped(image, font, label, 424, cy, selectedPoolCommander ? colours.selected : text,
                 hierarchyListViewport, 126);
             cy += 14;
             ++cmdRows;
@@ -3282,10 +3404,12 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // These are sampled directly from the original 640x480 unit-management
         // screenshot.  The previous pass used the brighter map-screen colours,
         // which made this page look much newer than the DOS original.
-        const wxColour text(150, 150, 150);
-        const wxColour green(4, 219, 4);
-        const wxColour yellow(231, 227, 5);
-        const wxColour dim(77, 77, 77);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& yellow = colours.category;
+        const wxColour& selectedText = colours.selected;
+        const wxColour& dim = colours.blocked;
         const wxColour warn(232, 150, 72);
         const wxColour listBg(32, 60, 20);
         const wxColour listGrid(40, 77, 32);
@@ -3593,24 +3717,71 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const int y = optionY + vr * optionRowH;
             if (r.heading)
             {
-                OriginalDrawSpellTextClipped(image, font, r.label, 423, y + 1, text, unitsOptionContent, 129, true);
+                // DOS Spellcross uses the same yellow + black-shadow treatment
+                // for list category headings here as on BUY/RESEARCH/INFO.
+                OriginalDrawSpellTextClipped(image, font, r.label, 423, y + 1, yellow, unitsOptionContent, 129, true);
                 continue;
             }
 
             bool installed = false;
             bool pending = false;
-            if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) && r.upgradeId >= 0)
+            bool usable = true;
+            const UnitInstanceState* state = (m_unitsSelectedUnit >= 0 &&
+                m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()))
+                ? &m_unitStates[static_cast<size_t>(m_unitsSelectedUnit)] : nullptr;
+
+            if (r.upgradeId >= 0)
             {
-                const auto& state = m_unitStates[m_unitsSelectedUnit];
-                installed = std::find(state.upgrades.begin(), state.upgrades.end(), r.upgradeId) != state.upgrades.end();
-                for (int slot = 0; slot < 3; ++slot)
-                    pending = pending || state.pending_upgrade_id[slot] == r.upgradeId;
+                const auto defIt = m_upgradeDefs.find(r.upgradeId);
+                if (state)
+                {
+                    installed = std::find(state->upgrades.begin(), state->upgrades.end(), r.upgradeId) != state->upgrades.end();
+                    for (int slot = 0; slot < 3; ++slot)
+                        pending = pending || state->pending_upgrade_id[slot] == r.upgradeId;
+
+                    bool categoryBusy = false;
+                    if (defIt != m_upgradeDefs.end() && defIt->second.kind != UpgradeDefRec::Unknown)
+                    {
+                        const int slot = static_cast<int>(defIt->second.kind) - 1;
+                        if (slot >= 0 && slot < 3)
+                            categoryBusy = state->pending_upgrade_id[slot] >= 0 &&
+                                state->pending_upgrade_id[slot] != r.upgradeId;
+                    }
+                    const int cost = GetTechUpgradeCost(r.upgradeId);
+                    const int time = GetTechUpgradeTime(r.upgradeId);
+                    usable = state->pending_kind == 0 && !installed && !pending && !categoryBusy &&
+                        cost >= 0 && time > 0 && m_money >= cost;
+                }
+                else
+                {
+                    usable = false;
+                }
             }
+            else if (r.rearmUnitId >= 0)
+            {
+                if (state && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
+                {
+                    const bool techBusy = state->pending_upgrade_id[0] >= 0 ||
+                        state->pending_upgrade_id[1] >= 0 || state->pending_upgrade_id[2] >= 0;
+                    const int cost = GetUpgradeCost(m_playerUnits[static_cast<size_t>(m_unitsSelectedUnit)].unit_id, r.rearmUnitId);
+                    const int time = GetUpgradeTime(r.rearmUnitId);
+                    usable = state->cooldown_turns <= 0 && state->pending_kind == 0 && !techBusy &&
+                        cost >= 0 && time > 0 && m_money >= cost;
+                }
+                else
+                {
+                    usable = false;
+                }
+            }
+
             const bool chosen = (r.upgradeId >= 0 && m_unitsSelectedUpgrade == r.upgradeId &&
                 m_unitsSelectedRearmUnitId <= 0) ||
                 (r.rearmUnitId >= 0 && m_unitsSelectedRearmUnitId == r.rearmUnitId);
+
+            const wxColour& rowColour = chosen ? selectedText
+                : ((installed || pending) ? green : (usable ? text : dim));
             OriginalDrawSpellTextClipped(image, font, r.label, 426, y + 1,
-                chosen ? yellow : (pending ? warn : (installed ? green : text)), unitsOptionContent, 123);
+                rowColour, unitsOptionContent, 123);
         }
 
 
@@ -3681,10 +3852,13 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                 for (int i = 0; i < RECRUIT_QUALITY_COUNT; ++i)
                 {
                     const int y = 356 + i * 19;
+                    const int choiceCost = GetRecruitCost(m_unitsSelectedUnit, i);
+                    const bool choiceUsable = !hasCooldown && u.health < 100 &&
+                        choiceCost > 0 && m_money >= choiceCost;
                     if (i == q)
                         OriginalFillRect(image, 350, y - 2, 216, 16, selectedBand);
                     OriginalDrawSpellText(image, font, labels[i], 353, y,
-                        i == q ? wxColour(35, 35, 35) : text, 210, true);
+                        i == q ? wxColour(35, 35, 35) : (choiceUsable ? text : dim), 210, true);
                 }
                 actionCost = GetRecruitCost(m_unitsSelectedUnit, q);
                 actionTime = GetRecruitTime(q);
@@ -3840,11 +4014,12 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         m_originalStrategicScreen == OriginalStrategicScreen::Buy)
     {
         SpellFont* font = m_spellData->font;
-        const wxColour text(150, 150, 150);
-        const wxColour green(4, 219, 4);
-        const wxColour yellow(231, 227, 5);
-        const wxColour selected(232, 48, 40);
-        const wxColour dim(77, 77, 77);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& yellow = colours.category;
+        const wxColour& selected = colours.selected;
+        const wxColour& dim = colours.blocked;
         const wxColour listBg(32, 60, 20);
         const wxColour listGrid(40, 77, 32);
         const wxColour listFrame(77, 77, 77);
@@ -4070,11 +4245,12 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         m_originalStrategicScreen == OriginalStrategicScreen::Research)
     {
         SpellFont* font = m_spellData->font;
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
-        const wxColour yellow(232, 232, 0);
-        const wxColour red(242, 48, 40);
-        const wxColour dim(126, 132, 118);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& yellow = colours.category;
+        const wxColour& red = colours.selected;
+        const wxColour& dim = colours.blocked;
         const wxColour done(76, 132, 76);
         const wxColour progress(232, 74, 67);
         EnsureResearchLoaded();
@@ -4157,7 +4333,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                     OriginalFillRect(image, listX + 1, y + 5, 4, 4, green);
                     OriginalFillRect(image, listX + 2, y + 4, 2, 6, green);
                 }
-                OriginalDrawSpellTextClipped(image, font, row.label, listX + 7, y, selected ? red : text, researchListViewport, 122);
+                const bool activeProject = row.index == m_researchActiveIndex;
+                const wxColour& rowColour = selected ? red : (activeProject ? green : text);
+                OriginalDrawSpellTextClipped(image, font, row.label, listX + 7, y, rowColour, researchListViewport, 122);
             }
         }
 
@@ -4264,10 +4442,11 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         m_originalStrategicScreen == OriginalStrategicScreen::Info)
     {
         SpellFont* font = m_spellData->font;
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
-        const wxColour yellow(232, 232, 0);
-        const wxColour red(242, 48, 40);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& yellow = colours.category;
+        const wxColour& red = colours.selected;
         EnsureResearchLoaded();
 
         // INFO uses the same live list backing as RESEARCH. VMI_FULL only
@@ -4352,8 +4531,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         m_originalStrategicScreen == OriginalStrategicScreen::Resources)
     {
         SpellFont* font = m_spellData->font;
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
         const wxColour dark(8, 35, 9);
         const wxColour border(0, 215, 0);
 
@@ -4538,9 +4718,10 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         m_originalStrategicScreen == OriginalStrategicScreen::Stats)
     {
         SpellFont* font = m_spellData->font;
-        const wxColour text(218, 222, 211);
-        const wxColour green(0, 242, 0);
-        const wxColour dim(150, 150, 145);
+        const auto& colours = OriginalStrategicTextPalette();
+        const wxColour& text = colours.usable;
+        const wxColour& green = colours.active;
+        const wxColour& dim = colours.blocked;
 
         // Native geometry comes from the original COMMON.FS/STRSTAT.QH:
         //   132,38,362,146  Overall Game statistics
@@ -4834,7 +5015,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                     dc.DrawBitmap(wxBitmap(plateImage), slotX, slotY, true);
             }
 
-            wxBitmap icon = OriginalDesaturateBitmap(LoadMenuIcon(m_spellData, icons[i]));
+            wxBitmap icon = LoadMenuIcon(m_spellData, icons[i]);
             if (!icon.IsOk())
                 continue;
             const int x = slotX + (37 - icon.GetWidth()) / 2;
@@ -11406,15 +11587,20 @@ bool StrategicLevelFrame::AssignUnitToHierarchySlot(const std::string& unitSlotI
         return false;
     }
 
+    // Only the numbered battalion unit slots are real placements. The
+    // commander assignment slots reference one of those same units and may
+    // therefore legitimately carry the same UID.
     for (const auto& other : m_hierarchySlots)
     {
-        if (other.id == unitSlotId || other.type != "unit")
+        const bool physicalSlot = other.type == "unit" &&
+            other.id.rfind("battalion_", 0) == 0 &&
+            other.id.find("_unit_") != std::string::npos;
+        if (other.id == unitSlotId || !physicalSlot)
             continue;
         if (other.unit_uid != 0 && other.unit_uid == unitUid)
         {
             wxMessageBox(
-                "This exact unit instance is already assigned elsewhere in the hierarchy.\n\n"
-                "Pick a different unit (note the [#id] in the list).",
+                "This exact unit instance is already assigned elsewhere in the hierarchy.",
                 "Hierarchy", wxOK | wxICON_INFORMATION, this);
             return false;
         }
@@ -11654,11 +11840,40 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
         }
     }
 
-    const auto items = GetRosterPickItems();
+    // The picker should only offer roster units that are genuinely free.
+    // Higher-level commander assignment slots (battalion_X_commander_unit,
+    // regiment_X_unit, brigade_X_unit) merely reference a company already
+    // placed in a battalion and therefore must not count as a second use.
+    auto isPhysicalHierarchyUnitSlot = [](const HierarchySlot& hs) {
+        return hs.type == "unit" &&
+            hs.id.rfind("battalion_", 0) == 0 &&
+            hs.id.find("_unit_") != std::string::npos;
+    };
+
+    std::set<uint32_t> assignedUnitUids;
+    for (const auto& hs : m_hierarchySlots)
+    {
+        if (hs.id == unitSlotId || !isPhysicalHierarchyUnitSlot(hs))
+            continue;
+        if (hs.unit_uid != 0)
+            assignedUnitUids.insert(hs.unit_uid);
+    }
+
+    const auto allItems = GetRosterPickItems();
+    std::vector<RosterPickItem> items;
+    items.reserve(allItems.size());
+    for (const auto& item : allItems)
+    {
+        // Keep the unit already occupying this slot visible so editing a filled
+        // slot is stable; everything assigned to another physical slot is hidden.
+        if (item.uid == slot.unit_uid || assignedUnitUids.count(item.uid) == 0)
+            items.push_back(item);
+    }
+
     wxArrayString choices;
     choices.Add("<none>");
-    for (const auto& it : items)
-        choices.Add(it.label);
+    for (const auto& item : items)
+        choices.Add(item.label);
 
     int sel = 0;
     if (slot.unit_uid != 0)
@@ -11716,18 +11931,17 @@ void StrategicLevelFrame::ChooseUnitForHierarchySlot(const std::string& unitSlot
     if (uid == 0 || display.empty())
         return;
 
-    // Enforce uniqueness by UID across hierarchy (but do NOT remove from roster).
+    // Safety net: a physical company may occupy only one actual battalion
+    // unit slot. Commander-host assignment slots are references to an already
+    // placed company and intentionally share the same UID.
     for (const auto& other : m_hierarchySlots)
     {
-        if (other.id == unitSlotId)
-            continue;
-        if (other.type != "unit")
+        if (other.id == unitSlotId || !isPhysicalHierarchyUnitSlot(other))
             continue;
         if (other.unit_uid != 0 && other.unit_uid == uid)
         {
             wxMessageBox(
-                "This exact unit instance is already assigned elsewhere in the hierarchy.\n\n"
-                "Pick a different unit (note the [#id] in the list).",
+                "This exact unit instance is already assigned elsewhere in the hierarchy.",
                 "Hierarchy",
                 wxOK | wxICON_INFORMATION,
                 this);
@@ -16116,6 +16330,37 @@ bool StrategicLevelFrame::LoadOriginalBigMapSaveFromPath(
         return false;
     }
 
+    // Czech retail data contains 41 tactical mission DEFs which do not exist
+    // in the English release.  BIG_MAP.SAV does not store a language/version
+    // flag, so compatibility is determined from the mission tokens actually
+    // present in the save.  Czech assets can load both content sets; the clean
+    // English set must reject a save as soon as it requires a Czech-only mission.
+    const OriginalMissionAssetSet assetSet = OriginalDetectMissionAssetSet(m_spellData);
+    const std::vector<std::string> czechOnlySaveMissions =
+        OriginalFindCzechOnlyMissionsInSave(raw, m_level);
+    if (assetSet == OriginalMissionAssetSet::English && !czechOnlySaveMissions.empty())
+    {
+        if (warning)
+        {
+            std::ostringstream ss;
+            ss << "This BIG_MAP.SAV requires tactical missions from the Czech Spellcross data set, "
+               << "but the currently loaded COMMON.FS is the English version.\n\n"
+               << "The English release contains fewer missions and cannot continue this save reliably. "
+               << "Load the Czech game assets and try again.\n\n"
+               << "Czech-only mission" << (czechOnlySaveMissions.size() == 1 ? ": " : "s: ");
+            const size_t limit = std::min<size_t>(czechOnlySaveMissions.size(), 8);
+            for (size_t i = 0; i < limit; ++i)
+            {
+                if (i) ss << ", ";
+                ss << czechOnlySaveMissions[i];
+            }
+            if (czechOnlySaveMissions.size() > limit)
+                ss << ", ...";
+            *warning = ss.str();
+        }
+        return false;
+    }
+
     m_gameModeEnabled = true;
     m_turn = std::max(1, static_cast<int>(OriginalReadI16(raw, kOriginalBigMapRoundOffset)));
     m_money = OriginalReadI32(raw, kOriginalBigMapMoneyOffset);
@@ -18108,6 +18353,14 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                     {
                         return (t > 0 && t < (int)m_visibleTerritory.size() && m_visibleTerritory[t] != 0);
                     };
+                std::vector<uint8_t> ownedLookup(static_cast<size_t>(std::max(0, maxId)) + 1u, 0);
+                for (int ownedTid : m_ownedTerritories)
+                    if (ownedTid > 0 && ownedTid <= maxId)
+                        ownedLookup[static_cast<size_t>(ownedTid)] = 1;
+                auto isOwnedTid = [&](int t) -> bool
+                    {
+                        return t > 0 && t <= maxId && ownedLookup[static_cast<size_t>(t)] != 0;
+                    };
 
                 for (int py = 0; py < bh; ++py)
                 {
@@ -18130,13 +18383,15 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                         if (tid <= 0) continue;
 
                         const bool isVis = isVisibleTid(tid);
-                        const bool isOwned = (std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), tid) != m_ownedTerritories.end());
+                        const bool isOwned = isOwnedTid(tid);
                         const bool isHover = (m_hoverTerritory == tid);
 
-                        // If this is a border pixel and it borders any UNKNOWN (non-visible) territory,
-                        // we must "block" the baked border even if the border pixel belongs to a visible territory.
-                        bool borderToUnknown = false;
-                        if (m_gameModeEnabled && isBorder && isVis)
+                        // Border pixels in CLK may be attributed to either side of a
+                        // shared edge.  Inspect the four neighbours as well, otherwise
+                        // parts of an owned territory outline disappear depending on
+                        // which territory id the original CLK happened to store there.
+                        int tL = 0, tR = 0, tU = 0, tD = 0;
+                        if (isBorder)
                         {
                             auto nt = [&](int nx, int ny) -> int
                                 {
@@ -18145,12 +18400,20 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                                     if (ni >= m_clkValues.size()) return 0;
                                     return decodeTid(m_clkValues[ni]);
                                 };
+                            tL = nt(cx - 1, cy);
+                            tR = nt(cx + 1, cy);
+                            tU = nt(cx, cy - 1);
+                            tD = nt(cx, cy + 1);
+                        }
+                        const bool borderTouchesOwned = isBorder &&
+                            (isOwned || isOwnedTid(tL) || isOwnedTid(tR) || isOwnedTid(tU) || isOwnedTid(tD));
 
-                            const int tL = nt(cx - 1, cy);
-                            const int tR = nt(cx + 1, cy);
-                            const int tU = nt(cx, cy - 1);
-                            const int tD = nt(cx, cy + 1);
-
+                        // Unknown edges are still fogged for non-owned territory,
+                        // but conquered territory outlines remain black exactly as in
+                        // the DOS strategic map.
+                        bool borderToUnknown = false;
+                        if (m_gameModeEnabled && isBorder && isVis && !borderTouchesOwned)
+                        {
                             auto unknownOther = [&](int t) -> bool
                                 {
                                     if (t == 0) return true;      // outside any territory (background)
@@ -18169,13 +18432,20 @@ void StrategicLevelFrame::OnMapPaint(wxPaintEvent& ev)
                         const unsigned char fogInteriorA = 180;
                         const unsigned char fogBorderA = 160;
 
-                        // 1) Draw borders ONLY where both sides are visible (never towards unknown)
-                        if (isBorder && isVis && !borderToUnknown)
+                        // 1) Conquered territory boundaries are always the strong black
+                        //    separators visible in the original strategic map.
+                        if (borderTouchesOwned)
+                        {
+                            r = 8; g = 8; b = 8;
+                            a = 255;
+                        }
+                        // 2) Other borders remain visible only when both sides are known.
+                        else if (isBorder && isVis && !borderToUnknown)
                         {
                             r = 20; g = 20; b = 20;
                             a = 255;
                         }
-                        // 2) Border that touches unknown -> hide it (do nothing, or gently fog it)
+                        // 3) Border that touches unknown -> gently fog it.
                         else if (borderToUnknown)
                         {
                             // Pokud už nemáš baked borders, můžeš klidně nechat a=0.

@@ -380,7 +380,7 @@ SpellData::SpellData(const SpellDataFiles& files,wstring& spec_path,std::functio
 	// export COMMON.FS to temp folder (append-only)
 	if(status_list)
 		status_list("Exporting COMMON.FS to temp cache...");
-	if(common_fs->DumpToFolder(temp_root, true, true))
+	if(common_fs->DumpToFolder(temp_root, true, true, true))
 	{
 		this->~SpellData();
 		if(status_list)
@@ -459,10 +459,16 @@ SpellData::SpellData(const SpellDataFiles& files,wstring& spec_path,std::functio
 	}
 	std::memcpy(&map_pal[224][0],data,size);
 
-	// Strategic interface uses its own palette. STRATEGY.PAL supplies the full
-	// fallback, while the stone frame and VM_* controls use the shared 0..127
-	// range from _SHARED1.PAL (the original game assembles its screen palettes
-	// from these chunks).
+	// Strategic interface palette is assembled from the same three banks as
+	// the original DOS screens:
+	//   0..127   = _SHARED1.PAL (common strategic chrome)
+	//   128..191 = STRATEGY.PAL (page/general bank)
+	//   192..255 = BIG_MAP.PAL (stone/buttons and VM_* toolbar glyphs)
+	//
+	// The last bank matters for VM_*.ICO specifically: their foreground uses
+	// palette index 196 and their encoded black shadow is remapped to 254.
+	// In BIG_MAP.PAL those are light grey/white and black respectively. Leaving
+	// STRATEGY.PAL in this bank makes the same original icons render blue/grey.
 	if(common_fs->GetFile("STRATEGY.PAL", &data, &size) || size != 256*3)
 	{
 		// Older/incomplete data sets may not contain it. Preserve functionality,
@@ -477,6 +483,8 @@ SpellData::SpellData(const SpellDataFiles& files,wstring& spec_path,std::functio
 	}
 	if(!common_fs->GetFile("_SHARED1.PAL", &data, &size) && size == 128*3)
 		std::memcpy(&strategy_pal[0][0], data, size);
+	if(!common_fs->GetFile("BIG_MAP.PAL", &data, &size) && size == 64*3)
+		std::memcpy(&strategy_pal[192][0], data, size);
 	// load CURSOR.PAL palette chunk for maps - ###todo: not sure where to place this
 	/*if(common_fs->GetFile("CURSOR.PAL",&data,&size) || size != 6*3)
 	{
@@ -535,7 +543,7 @@ SpellData::SpellData(const SpellDataFiles& files,wstring& spec_path,std::functio
 		// export terrain FS to temp folder (append-only)
 		if(status_list)
 			status_list("   - caching terrain data to temp...");
-		if(terrain_fs->DumpToFolder(temp_root, true, true))
+		if(terrain_fs->DumpToFolder(temp_root, true, true, true))
 		{
 			this->~SpellData();
 			if(status_list)

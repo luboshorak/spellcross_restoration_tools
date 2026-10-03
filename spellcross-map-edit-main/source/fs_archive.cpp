@@ -14,6 +14,8 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
+#include <set>
+#include <cctype>
 
 using namespace std;
 
@@ -360,13 +362,44 @@ std::vector<std::string> FSarchive::GetFileNames(std::string wild)
 }
 
 // export archive content to a folder (per-archive subfolder), optionally skipping already existing files
-int FSarchive::DumpToFolder(const std::filesystem::path& folder, bool skip_existing, bool verify_existing)
+int FSarchive::DumpToFolder(const std::filesystem::path& folder, bool skip_existing, bool verify_existing, bool prune_stale)
 {
         try
         {
                 std::filesystem::create_directories(folder);
                 std::filesystem::path archive_dir = folder / GetFSname(false);
                 std::filesystem::create_directories(archive_dir);
+
+                // temp/<archive> is a cache mirror, not an overlay.  When the
+                // user switches game-data versions/languages, files which were
+                // present in the previous FS but are absent from the current FS
+                // must not survive and later be mistaken for valid mission DEFs.
+                if(prune_stale)
+                {
+                        auto upper_ascii = [](std::string s) {
+                                for(char& ch : s)
+                                        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                                return s;
+                        };
+                        std::set<std::string> archive_names;
+                        for(const auto& file : m_files)
+                                archive_names.insert(upper_ascii(file->name));
+
+                        std::error_code dir_ec;
+                        for(const auto& entry : std::filesystem::directory_iterator(archive_dir, dir_ec))
+                        {
+                                if(dir_ec)
+                                        break;
+                                if(!entry.is_regular_file())
+                                        continue;
+                                const std::string disk_name = entry.path().filename().string();
+                                if(archive_names.find(upper_ascii(disk_name)) == archive_names.end())
+                                {
+                                        std::error_code rm_ec;
+                                        std::filesystem::remove(entry.path(), rm_ec);
+                                }
+                        }
+                }
 
                 for(auto &file : m_files)
                 {

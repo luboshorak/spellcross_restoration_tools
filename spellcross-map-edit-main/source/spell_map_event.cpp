@@ -805,14 +805,11 @@ int SpellMapEvents::AddSpecialEvent(SpellData *data, SpellDEF* def, SpellDefCmd*
 			auto text = data->texts->GetText(text_name);
 			if(!text)
 			{
-				last_error = string_format("Text '%s' in command '%s' not found in loded resources!",text_name.c_str(),evcmd->full_command.c_str());
-				delete event_data;
-				if(is_new_event)
-				{
-					events.pop_back();
-					delete evt;
-				}
-				return(1);
+				// EventText is presentation-only. A mismatched language pack or
+				// an old/custom mission DEF may reference a text record absent
+				// from the currently loaded TEXTS.FS. Keep the tactical mission
+				// playable and continue with the event's gameplay commands.
+				continue;
 			}
 			evt->texts.emplace_back(text);
 		}
