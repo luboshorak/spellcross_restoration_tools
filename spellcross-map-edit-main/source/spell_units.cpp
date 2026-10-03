@@ -1049,6 +1049,11 @@ MapUnit::MapUnit(SpellMap *map)
 	formation_level = 0;
 	formation_attack_bonus = 0;
 	formation_defence_bonus = 0;
+	upgrade_move_bonus = 0;
+	upgrade_defence_bonus = 0;
+	upgrade_attack_bonus = 0;
+	upgrade_attack_count_bonus = 0;
+	upgrade_range_bonus = 0;
 	// dig in
 	dig_level = 0;
 	dig_turns = 0;
@@ -1295,7 +1300,7 @@ int MapUnit::GetMaxAP()
 
 	// experience bonuses
 	auto bonus = unit->bonuses->GetBonus(experience_level);
-	ap += bonus->move*unit->apw;
+	ap += (bonus->move + upgrade_move_bonus) * unit->apw;
 
 	return(ap);
 }
@@ -1354,7 +1359,7 @@ int MapUnit::GetMaxFireCount()
 	
 	// add bonus
 	auto bonus = unit->bonuses->GetBonus(experience_level);
-	basic_fires += bonus->attack_count;
+	basic_fires += bonus->attack_count + upgrade_attack_count_bonus;
 	
 	return(basic_fires);
 }
@@ -1375,7 +1380,7 @@ int MapUnit::GetWalkAP()
 {
 	int move_range = unit->apw;
 	auto bonus = unit->bonuses->GetBonus(experience_level);
-	move_range += bonus->move;	
+	move_range += bonus->move + upgrade_move_bonus;
 	return(GetMaxAP()/(move_range-1));
 }
 
@@ -1971,6 +1976,7 @@ int MapUnit::GetAttack(MapUnit::TARGET_TYPE target)
 	auto bonus = unit->bonuses->GetBonus(experience_level);
 	attack += bonus->attack;
 	attack += formation_attack_bonus;
+	attack += upgrade_attack_bonus;
 		
 	return(attack);
 }
@@ -1986,6 +1992,7 @@ int MapUnit::GetDefence()
 	// add experience + active strategic-formation bonuses.
 	defence += unit->bonuses->GetBonus(experience_level)->defence;
 	defence += formation_defence_bonus;
+	defence += upgrade_defence_bonus;
 	return(defence);
 }
 

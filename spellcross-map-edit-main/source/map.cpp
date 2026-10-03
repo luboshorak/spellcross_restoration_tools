@@ -140,7 +140,7 @@ namespace
 namespace scsave
 {
 	static constexpr uint32_t MAGIC = 0x56435353; // 'SSCV'
-	static constexpr uint32_t VERSION = 3;
+	static constexpr uint32_t VERSION = 4;
 
 	template<typename T>
 	inline void write(std::ostream& os, const T& v)
@@ -268,6 +268,12 @@ static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, Spe
 	// v3: persistent hierarchy membership + commander-host level mask.
 	scsave::write(os, (int32_t)u->formation_id);
 	scsave::write(os, (uint8_t)u->formation_commander_mask);
+	// v4: installed technology modifiers from strategic UPGRADES.DEF.
+	scsave::write(os, (int32_t)u->upgrade_move_bonus);
+	scsave::write(os, (int32_t)u->upgrade_defence_bonus);
+	scsave::write(os, (int32_t)u->upgrade_attack_bonus);
+	scsave::write(os, (int32_t)u->upgrade_attack_count_bonus);
+	scsave::write(os, (int32_t)u->upgrade_range_bonus);
 
 	scsave::write_string(os, std::string(u->name));
 
@@ -299,6 +305,11 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	int32_t formation_defence_bonus = 0;
 	int32_t formation_id = 0;
 	uint8_t formation_commander_mask = 0;
+	int32_t upgrade_move_bonus = 0;
+	int32_t upgrade_defence_bonus = 0;
+	int32_t upgrade_attack_bonus = 0;
+	int32_t upgrade_attack_count_bonus = 0;
+	int32_t upgrade_range_bonus = 0;
 	std::string name;
 
 	if (!scsave::read(is, id) || !scsave::read(is, type_id)) return false;
@@ -333,6 +344,14 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 		formation_id = commander_id;
 		if (is_commander)
 			formation_commander_mask = formation_level >= 3 ? 0x04 : formation_level == 2 ? 0x02 : 0x01;
+	}
+	if (version >= 4)
+	{
+		if (!scsave::read(is, upgrade_move_bonus) ||
+			!scsave::read(is, upgrade_defence_bonus) ||
+			!scsave::read(is, upgrade_attack_bonus) ||
+			!scsave::read(is, upgrade_attack_count_bonus) ||
+			!scsave::read(is, upgrade_range_bonus)) return false;
 	}
 
 	if (!scsave::read_string(is, name)) return false;
@@ -381,6 +400,11 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	u->formation_level = formation_level;
 	u->formation_attack_bonus = formation_attack_bonus;
 	u->formation_defence_bonus = formation_defence_bonus;
+	u->upgrade_move_bonus = upgrade_move_bonus;
+	u->upgrade_defence_bonus = upgrade_defence_bonus;
+	u->upgrade_attack_bonus = upgrade_attack_bonus;
+	u->upgrade_attack_count_bonus = upgrade_attack_count_bonus;
+	u->upgrade_range_bonus = upgrade_range_bonus;
 
 	// Pvodn kd (chybn):
 	// std::memset(u->name, 0, sizeof(u->name));
@@ -7409,7 +7433,7 @@ bool SpellMap::EnemyTurnStep()
 			// prefer high-value targets: artillery, long-range units
 			if (u->unit->isIndirectFire())
 				score += 8.0;
-			if (u->unit->fire_range >= 6)
+			if (u->GetFireRange() >= 6)
 				score += 4.0;
 
 			// prefer threatening targets (high attack values)
@@ -8097,7 +8121,7 @@ void SpellMap::CheckReactionFire(MapUnit* enemy_unit)
 
 		// range check: player unit must have the enemy within fire range
 		double dist = player->coor.Distance(enemy_unit->coor);
-		if (dist > (double)player->unit->fire_range)
+		if (dist > (double)player->GetFireRange())
 			continue;
 
 		// indirect fire minimum range
@@ -9911,7 +9935,7 @@ void SpellMap::ViewRange::Worker()
 		int is_radar = false;
 		int ref_view;
 		if (is_fire)
-			ref_view = target->unit->fire_range;
+			ref_view = target->GetFireRange();
 		else
 			ref_view = target->unit->sdir;
 		if (is_fire && ref_view < 1)

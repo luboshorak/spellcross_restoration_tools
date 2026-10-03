@@ -138,6 +138,12 @@ struct LevelData {
         int formation_level = 0;          // 0=none, 1=battalion, 2=regiment, 3=brigade
         int formation_attack_bonus = 0;   // original FORMACIE.DEF bonus
         int formation_defence_bonus = 0;  // original FORMACIE.DEF bonus
+        // Installed strategic technology modifiers from UPGRADES.DEF.
+        int upgrade_move_bonus = 0;
+        int upgrade_defence_bonus = 0;
+        int upgrade_attack_bonus = 0;
+        int upgrade_attack_count_bonus = 0;
+        int upgrade_range_bonus = 0;
         uint8_t formation_commander_mask = 0; // bit0=battalion, bit1=regiment, bit2=brigade commander hosted here
         bool carries_commander = false;   // compatibility/convenience: formation_commander_mask != 0
     };    std::vector<PlayerUnitAdd> start_units;

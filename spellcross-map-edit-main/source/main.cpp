@@ -1357,6 +1357,11 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             unit->formation_level = entry.formation_level;
             unit->formation_attack_bonus = entry.formation_attack_bonus;
             unit->formation_defence_bonus = entry.formation_defence_bonus;
+            unit->upgrade_move_bonus = entry.upgrade_move_bonus;
+            unit->upgrade_defence_bonus = entry.upgrade_defence_bonus;
+            unit->upgrade_attack_bonus = entry.upgrade_attack_bonus;
+            unit->upgrade_attack_count_bonus = entry.upgrade_attack_count_bonus;
+            unit->upgrade_range_bonus = entry.upgrade_range_bonus;
             unit->ResetAP();
             // entry.health is percentage (0-100), convert to actual man count based on unit_rec->cnt
             if (entry.health > 0 && entry.health <= 100)

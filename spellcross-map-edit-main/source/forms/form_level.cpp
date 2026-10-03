@@ -47,9 +47,12 @@ namespace
 
     // Restored strategic-map logical layout (original 640x480 screen coordinates).
     constexpr int kOriginalListX = 418;
-    constexpr int kOriginalListY = 6;
-    constexpr int kOriginalListW = 136;
-    constexpr int kOriginalListH = 426;
+    constexpr int kOriginalListY = 8;
+    constexpr int kOriginalListW = 135;
+    constexpr int kOriginalListH = 420;
+
+    // Native SB_BG* scrollbars begin at x=553 in the original 640x480 framebuffer.
+    constexpr int kOriginalRightScrollbarX = 553;
     constexpr int kOriginalUnitRowsY = 83;
     constexpr int kOriginalUnitRowH = 14;
     constexpr int kOriginalVisibleRows = 24;
@@ -634,84 +637,36 @@ namespace
         return y + std::max(0, (h - fh) / 2);
     }
 
-    static void OriginalDrawStrategicListGrid(wxImage& image, int x, int y, int w, int h)
+    static void OriginalDrawSpellText(wxImage& image, SpellFont* font, const wxString& text,
+        int x, int y, const wxColour& fg, int boxWidth, bool centered, SpellFont::FontAlign align);
+
+    struct OriginalStrategicScrollbarGeometry
     {
-        // The research browser and complex-info browser use the same native
-        // green CRT/grid backing. Keep this in one helper so strategic lists
-        // cannot slowly drift apart as individual screens are restored.
-        if (w <= 0 || h <= 0)
-            return;
+        int x = kOriginalRightScrollbarX;
+        int y = 6;
+        int h = 426;
+        static constexpr int width = 22;
+        static constexpr int buttonH = 28;
 
-        const wxColour listBg(32, 74, 28);
-        const wxColour grid(42, 90, 38);
-        const wxColour frame(135, 132, 120);
-        const wxColour frameShadow(40, 40, 34);
+        int trackY() const { return y + buttonH; }
+        int trackH() const { return std::max(1, h - buttonH * 2); }
+        int downY() const { return y + h - buttonH; }
 
-        OriginalFillRect(image, x, y, w, h, listBg);
-        OriginalVLine(image, x - 2, y, y + h - 1, frame);
-        OriginalVLine(image, x - 1, y, y + h - 1, frameShadow);
-        OriginalVLine(image, x + w, y, y + h - 1, frame);
-        OriginalHLine(image, x - 2, x + w + 20, y, frame);
-        OriginalHLine(image, x - 2, x + w + 20, y + h - 1, frame);
-
-        for (int gx = x + 2; gx < x + w; gx += 18)
-            OriginalVLine(image, gx, y + 1, y + h - 2, grid);
-        for (int gy = y + 2; gy < y + h - 1; gy += 18)
-            OriginalHLine(image, x + 1, x + w - 1, gy, grid);
-    }
-
-    static void OriginalDrawScrollButton(wxImage& image, int x, int y, bool up, bool enabled = true)
-    {
-        // 22x28 native strategic scrollbar button. Drawn procedurally so the
-        // restored UI does not depend on wx child controls or resource state.
-        const wxColour outer(92, 88, 80);
-        const wxColour inner(enabled ? 45 : 38, enabled ? 45 : 38, enabled ? 42 : 38);
-        const wxColour hi(enabled ? 176 : 92, enabled ? 170 : 92, enabled ? 158 : 88);
-        const wxColour lo(24, 23, 22);
-        const wxColour arrow(enabled ? 188 : 92, enabled ? 184 : 92, enabled ? 174 : 88);
-
-        OriginalFillRect(image, x, y, 22, 28, outer);
-        OriginalFillRect(image, x + 2, y + 2, 18, 24, inner);
-        OriginalHLine(image, x + 2, x + 19, y + 2, hi);
-        OriginalVLine(image, x + 2, y + 2, y + 25, hi);
-        OriginalHLine(image, x + 2, x + 19, y + 25, lo);
-        OriginalVLine(image, x + 19, y + 2, y + 25, lo);
-
-        const int cy = y + 13;
-        for (int r = 0; r < 6; ++r)
+        bool HitUp(int px, int py) const
         {
-            const int yy = up ? (cy + 3 - r) : (cy - 3 + r);
-            const int half = r;
-            OriginalHLine(image, x + 10 - half, x + 10 + half, yy, arrow);
+            return px >= x && px < x + width && py >= y && py < y + buttonH;
         }
-    }
+        bool HitDown(int px, int py) const
+        {
+            return px >= x && px < x + width && py >= downY() && py < y + h;
+        }
+    };
 
-    static void OriginalDrawScrollTrack(wxImage& image, int x, int y, int h, int position, int maxPosition,
-        int visibleRows, int totalRows)
+    static int OriginalScrollbarArrowDelta(const OriginalStrategicScrollbarGeometry& g, int px, int py)
     {
-        if (h <= 0)
-            return;
-        const wxColour track(22, 35, 22);
-        const wxColour edge(107, 104, 96);
-        const wxColour thumb(112, 108, 100);
-        const wxColour thumbHi(190, 184, 170);
-        const wxColour thumbLo(42, 40, 37);
-        OriginalFillRect(image, x, y, 22, h, track);
-        OriginalVLine(image, x, y, y + h - 1, edge);
-        OriginalVLine(image, x + 21, y, y + h - 1, edge);
-
-        if (maxPosition <= 0 || totalRows <= 0)
-            return;
-        const int innerY = y + 2;
-        const int innerH = std::max(1, h - 4);
-        const int thumbH = std::max(16, innerH * std::max(1, visibleRows) / std::max(visibleRows, totalRows));
-        const int travel = std::max(0, innerH - thumbH);
-        const int thumbY = innerY + (travel * std::clamp(position, 0, maxPosition)) / maxPosition;
-        OriginalFillRect(image, x + 3, thumbY, 16, thumbH, thumb);
-        OriginalHLine(image, x + 3, x + 18, thumbY, thumbHi);
-        OriginalVLine(image, x + 3, thumbY, thumbY + thumbH - 1, thumbHi);
-        OriginalHLine(image, x + 3, x + 18, thumbY + thumbH - 1, thumbLo);
-        OriginalVLine(image, x + 18, thumbY, thumbY + thumbH - 1, thumbLo);
+        if (g.HitUp(px, py)) return -1;
+        if (g.HitDown(px, py)) return 1;
+        return 0;
     }
 
     static int OriginalTextWidth(SpellFont* font, const wxString& text)
@@ -771,6 +726,77 @@ namespace
                 }
             }
         }
+    }
+
+    static void OriginalDrawSpellTextClipped(wxImage& image, SpellFont* font, const wxString& text,
+        int x, int y, const wxColour& fg, const wxRect& clipRect,
+        int boxWidth = 0, bool centered = false,
+        SpellFont::FontAlign align = SpellFont::LEFT)
+    {
+        if (!image.IsOk() || !font || text.empty() || clipRect.width <= 0 || clipRect.height <= 0)
+            return;
+
+        int tx = x;
+        if (centered && boxWidth > 0)
+            tx = x + std::max(0, (boxWidth - OriginalTextWidth(font, text)) / 2);
+
+        std::vector<uint8_t> mask(static_cast<size_t>(image.GetWidth()) * image.GetHeight(), 0);
+        font->Render(mask.data(), mask.data() + mask.size(), image.GetWidth(), tx, y,
+            text.ToStdWstring(), 2, 1, SpellFont::RIGHT_DOWN, align);
+
+        unsigned char* rgb = image.GetData();
+        if (!rgb)
+            return;
+
+        const int fh = std::max(1, font->GetHeight());
+        const int textX0 = boxWidth > 0 ? x : tx - 2;
+        const int textX1 = boxWidth > 0 ? x + boxWidth
+            : tx + std::max(8, OriginalTextWidth(font, text)) + 4;
+        const int clipX0 = std::max(0, clipRect.x);
+        const int clipY0 = std::max(0, clipRect.y);
+        const int clipX1 = std::min(image.GetWidth(), clipRect.x + clipRect.width);
+        const int clipY1 = std::min(image.GetHeight(), clipRect.y + clipRect.height);
+        const int x0 = std::max(clipX0, textX0);
+        const int x1 = std::min(clipX1, textX1);
+        const int y0 = std::max(clipY0, y - 1);
+        const int y1 = std::min(clipY1, y + fh + 2);
+
+        for (int yy = y0; yy < y1; ++yy)
+        {
+            for (int xx = x0; xx < x1; ++xx)
+            {
+                const uint8_t m = mask[static_cast<size_t>(yy) * image.GetWidth() + xx];
+                if (!m)
+                    continue;
+                const size_t q = (static_cast<size_t>(yy) * image.GetWidth() + xx) * 3u;
+                if (m == 1)
+                {
+                    rgb[q + 0] = 0;
+                    rgb[q + 1] = 0;
+                    rgb[q + 2] = 0;
+                }
+                else
+                {
+                    rgb[q + 0] = fg.Red();
+                    rgb[q + 1] = fg.Green();
+                    rgb[q + 2] = fg.Blue();
+                }
+            }
+        }
+    }
+
+    static int OriginalStrategicListVisibleRows(SpellFont* font, const wxRect& viewport,
+        int firstTextY, int rowH)
+    {
+        if (!font || rowH <= 0 || viewport.height <= 0)
+            return 0;
+        const int glyphBottomPad = 2;
+        const int textH = std::max(1, font->GetHeight()) + glyphBottomPad;
+        const int bottom = viewport.y + viewport.height;
+        int rows = 0;
+        for (int y = firstTextY; y + textH <= bottom; y += rowH)
+            ++rows;
+        return std::max(0, rows);
     }
 
     static wxString OriginalCleanBriefing(wxString text)
@@ -840,64 +866,33 @@ namespace
     }
 
     static void OriginalDrawActionButton(wxImage& image, SpellFont* font,
-        int x, int y, int w, int h, const wxString& label, bool enabled)
+        const StrategicOriginalRenderer::AssetLoader& load, const OriginalUiPalette& pal,
+        int x, int y, const wxString& label, bool enabled, bool hovered = false)
     {
-        const wxColour bg = enabled ? wxColour(18, 70, 22) : wxColour(22, 46, 22);
-        const wxColour hi(78, 124, 78);
-        const wxColour lo(10, 22, 10);
-        const wxColour fg = enabled ? wxColour(0, 242, 0) : wxColour(90, 112, 90);
-        OriginalFillRect(image, x, y, w, h, bg);
-        OriginalHLine(image, x, x + w - 1, y, hi);
-        OriginalVLine(image, x, y, y + h - 1, hi);
-        OriginalHLine(image, x, x + w - 1, y + h - 1, lo);
-        OriginalVLine(image, x + w - 1, y, y + h - 1, lo);
-        // faint internal grid like the original green buttons
-        const wxColour grid(26, 92, 30);
-        for (int gx = x + 3; gx < x + w - 2; gx += 18)
-            OriginalVLine(image, gx, y + 2, y + h - 3, grid);
-        for (int gy = y + 3; gy < y + h - 2; gy += 18)
-            OriginalHLine(image, x + 2, x + w - 3, gy, grid);
+        // BIGMB__*.BTN is the actual 70x28 DOS strategic action button.
+        // Never synthesize the frame/grid: only the caption is dynamic.
+        const char* asset = !enabled ? "BIGMB__D.BTN"
+            : (hovered ? "BIGMB__A.BTN" : "BIGMB__N.BTN");
+        const wxImage plate = OriginalLoadIcoLike(load, asset, pal);
+        if (!plate.IsOk() || !OriginalBlitImage(image, plate, x, y))
+            return;
         if (font)
-            OriginalDrawSpellText(image, font, label, x, y + std::max(0, (h - std::max(1, font->GetHeight())) / 2) - 1, fg, w, true);
+        {
+            const wxColour fg = enabled ? wxColour(0, 242, 0) : wxColour(90, 112, 90);
+            OriginalDrawSpellText(image, font, label, x, y + 7, fg, 70, true);
+        }
     }
 
     static void OriginalDrawOptionsButton(wxImage& image, SpellFont* font,
+        const StrategicOriginalRenderer::AssetLoader& load, const OriginalUiPalette& pal,
         const OriginalUiRect& r, const wxString& label, bool enabled)
     {
-        // Strategic OPTIONS save/load/exit buttons are live overlays; the
-        // surrounding metal/panel is already in OPTIONS.LZ.  Draw the button
-        // inside its measured runtime rectangle instead of treating the whole
-        // STROPT parent region as a text box.
-        const wxColour outer(enabled ? 18 : 18, enabled ? 58 : 38, enabled ? 18 : 18);
-        const wxColour inner(enabled ? 14 : 18, enabled ? 48 : 34, enabled ? 14 : 18);
-        const wxColour hi(enabled ? 44 : 32, enabled ? 92 : 54, enabled ? 38 : 28);
-        const wxColour lo(6, 20, 6);
-        const wxColour grid(enabled ? 22 : 20, enabled ? 70 : 44, enabled ? 22 : 20);
-        const wxColour fg = enabled ? wxColour(0, 242, 0) : wxColour(82, 104, 82);
-
-        OriginalFillRect(image, r.x, r.y, r.w, r.h, outer);
-        OriginalHLine(image, r.x, r.x + r.w - 1, r.y, hi);
-        OriginalVLine(image, r.x, r.y, r.y + r.h - 1, hi);
-        OriginalHLine(image, r.x, r.x + r.w - 1, r.y + r.h - 1, lo);
-        OriginalVLine(image, r.x + r.w - 1, r.y, r.y + r.h - 1, lo);
-
-        const int ix = r.x + 4;
-        const int iy = r.y + 3;
-        const int iw = std::max(1, r.w - 8);
-        const int ih = std::max(1, r.h - 6);
-        OriginalFillRect(image, ix, iy, iw, ih, inner);
-        OriginalHLine(image, ix, ix + iw - 1, iy, grid);
-        OriginalVLine(image, ix, iy, iy + ih - 1, grid);
-        OriginalHLine(image, ix, ix + iw - 1, iy + ih - 1, lo);
-        OriginalVLine(image, ix + iw - 1, iy, iy + ih - 1, lo);
-        for (int gx = ix + 7; gx < ix + iw - 1; gx += 10)
-            OriginalVLine(image, gx, iy + 1, iy + ih - 2, grid);
-        for (int gy = iy + 7; gy < iy + ih - 1; gy += 10)
-            OriginalHLine(image, ix + 1, ix + iw - 2, gy, grid);
-
-        if (font)
-            OriginalDrawSpellText(image, font, label, r.x,
-                OriginalCenteredTextY(font, r.y, r.h), fg, r.w, true);
+        // The save/load columns are 75 px wide wells; the original button is
+        // BIGMB 70x28 centred inside them. Exit is a 71x29 well and uses the
+        // same original sprite.
+        const int x = r.x + std::max(0, (r.w - 70) / 2);
+        const int y = r.y + std::max(0, (r.h - 28) / 2);
+        OriginalDrawActionButton(image, font, load, pal, x, y, label, enabled);
     }
 
     static bool OriginalDrawUnitPortrait(wxImage& image, SpellGraphicItem* glyph,
@@ -2939,28 +2934,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const wxColour heading(232, 232, 0);
         const wxColour dim(126, 132, 118);
         const wxColour cooldown(132, 72, 72);
+        const wxRect mapListViewport(kOriginalListX, kOriginalListY, kOriginalListW, kOriginalListH);
 
         // Central mission-unit panel (original game builds this dynamically).
-        OriginalFillRect(image, kOriginalListX, kOriginalListY,
-            kOriginalListW, kOriginalListH, listBg);
-        OriginalVLine(image, kOriginalListX - 2, kOriginalListY,
-            kOriginalListY + kOriginalListH - 1, frame);
-        OriginalVLine(image, kOriginalListX + kOriginalListW,
-            kOriginalListY, kOriginalListY + kOriginalListH - 1, frame);
-
-        // Subtle grid under the rows, matching the DOS list surface.
-        for (int x = kOriginalListX + 2; x < kOriginalListX + kOriginalListW; x += 18)
-            OriginalVLine(image, x, 56, 431, grid);
-        for (int y = 56; y < 432; y += 18)
-            OriginalHLine(image, kOriginalListX + 1, kOriginalListX + kOriginalListW - 1, y, grid);
-
-        // Scrollbar and thumb. Mouse wheel drives this in the restored view.
-        OriginalFillRect(image, 556, 6, 18, 426, wxColour(74, 72, 66));
-        OriginalFillRect(image, 558, 23, 14, 391, wxColour(26, 39, 25));
-        OriginalHLine(image, 556, 573, 21, wxColour(182, 178, 166));
-        OriginalHLine(image, 556, 573, 415, wxColour(182, 178, 166));
-        OriginalDrawSpellText(image, font, "^", 557, 7, text, 16, true);
-        OriginalDrawSpellText(image, font, "v", 557, 416, text, 16, true);
 
         // Ensure one UID per rendered unit instance, shared with the current UI.
         int totalRows = 0;
@@ -2980,16 +2956,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const int visibleUnitRows = std::max(1, (432 - unitRowsY) / kOriginalUnitRowH);
         const int maxScroll = std::max(0, totalRows - visibleUnitRows);
         m_originalUnitScroll = std::clamp(m_originalUnitScroll, 0, maxScroll);
-        if (maxScroll > 0)
-        {
-            const int trackY = 25;
-            const int trackH = 387;
-            const int thumbH = std::max(18, trackH * visibleUnitRows / std::max(visibleUnitRows, totalRows));
-            const int thumbY = trackY + (trackH - thumbH) * m_originalUnitScroll / maxScroll;
-            OriginalFillRect(image, 559, thumbY, 12, thumbH, wxColour(116, 114, 104));
-            OriginalHLine(image, 559, 570, thumbY, wxColour(206, 202, 190));
-            OriginalHLine(image, 559, 570, thumbY + thumbH - 1, wxColour(40, 39, 36));
-        }
 
         const wxColour selectedRed(242, 0, 0);
         OriginalDrawSpellText(image, font, L"Speci\u00E1ln\u00ED", 420, 8, text, 132, true);
@@ -3005,8 +2971,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                 continue;
             const wxString label = GetRankAbbrev(it->rank) + " " + wxString::FromUTF8(it->name);
             const bool selectedCommander = m_selectedCommandersForMission.count(commanderUid) != 0;
-            OriginalDrawSpellText(image, font, label, 423, specialY,
-                selectedCommander ? selectedRed : text, 130);
+            OriginalDrawSpellTextClipped(image, font, label, 423, specialY,
+                selectedCommander ? selectedRed : text, mapListViewport, 130);
             specialY += kOriginalUnitRowH;
         }
 
@@ -3030,9 +2996,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                     label = "*" + label;
                 if (onCooldown && pIdx < m_unitStates.size())
                     label += wxString::Format("  -%dT", m_unitStates[pIdx].cooldown_turns);
-                OriginalDrawSpellText(image, font, label, 423,
+                OriginalDrawSpellTextClipped(image, font, label, 423,
                     unitRowsY + drawn * kOriginalUnitRowH,
-                    onCooldown ? cooldown : (selected ? selectedRed : text), 130);
+                    onCooldown ? cooldown : (selected ? selectedRed : text), mapListViewport, 130);
                 ++drawn;
             }
         }
@@ -3045,19 +3011,13 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // black boxes around Attack/Cancel in the reconstructed screen.
         auto drawActionButton = [&](int x, int hoverIndex, const wxString& caption, bool enabled)
         {
-            bool nativeDrawn = false;
-            if (haveNativeUiPal)
-            {
-                const char* asset = !enabled ? "BIGMB__D.BTN"
-                    : (m_originalActionHover == hoverIndex ? "BIGMB__A.BTN" : "BIGMB__N.BTN");
-                wxImage plate = OriginalLoadIcoLike(loader, asset, nativeUiPal);
-                nativeDrawn = OriginalBlitImage(image, plate, x, kOriginalAttackDrawY);
-            }
-            if (!nativeDrawn)
-            {
-                OriginalFillRect(image, x, kOriginalAttackDrawY, kOriginalButtonW, 28,
-                    enabled ? wxColour(13, 51, 10) : wxColour(22, 34, 20));
-            }
+            if (!haveNativeUiPal)
+                return;
+            const char* asset = !enabled ? "BIGMB__D.BTN"
+                : (m_originalActionHover == hoverIndex ? "BIGMB__A.BTN" : "BIGMB__N.BTN");
+            const wxImage plate = OriginalLoadIcoLike(loader, asset, nativeUiPal);
+            if (!plate.IsOk() || !OriginalBlitImage(image, plate, x, kOriginalAttackDrawY))
+                return;
             OriginalDrawSpellText(image, font, caption, x, kOriginalAttackDrawY + 7,
                 enabled ? text : dim, kOriginalButtonW, true);
         };
@@ -3114,21 +3074,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // STRHIER.QH defines the hierarchy roster as a 467 px tall area. The
         // map screen uses a shorter centre list, but hierarchy extends almost
         // to the bottom chrome; using the map height here caused the black gap.
-        constexpr int hierarchyListH = 468;
-        OriginalFillRect(image, kOriginalListX, kOriginalListY,
-            kOriginalListW, hierarchyListH, listBg);
-        OriginalVLine(image, kOriginalListX - 2, kOriginalListY,
-            kOriginalListY + hierarchyListH - 1, frame);
-        OriginalVLine(image, kOriginalListX - 1, kOriginalListY,
-            kOriginalListY + hierarchyListH - 1, wxColour(40, 40, 34));
-        OriginalVLine(image, kOriginalListX + kOriginalListW,
-            kOriginalListY, kOriginalListY + hierarchyListH - 1, frame);
-        OriginalHLine(image, kOriginalListX - 2, 574, kOriginalListY, frame);
-        OriginalHLine(image, kOriginalListX - 2, 574, kOriginalListY + hierarchyListH - 1, frame);
-        for (int x = kOriginalListX + 2; x < kOriginalListX + kOriginalListW; x += 18)
-            OriginalVLine(image, x, 8, 473, grid);
-        for (int y = 8; y < 474; y += 18)
-            OriginalHLine(image, kOriginalListX + 1, kOriginalListX + kOriginalListW - 1, y, grid);
+        const wxRect hierarchyListViewport(416, 10, 137, 467); // STRHIER.QH
 
         // Native list scrollbar. The old branch had only the list contents; the
         // original game also has dedicated up/down buttons and a narrow track.
@@ -3157,10 +3103,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         const int hierarchyMaxScroll = std::max(0, static_cast<int>(hierarchyFlatUnits.size()) - maxUnitRows);
         m_originalHierarchyUnitScroll = std::clamp(m_originalHierarchyUnitScroll, 0, hierarchyMaxScroll);
 
-        OriginalDrawScrollButton(image, 553, 6, true, hierarchyMaxScroll > 0);
-        OriginalDrawScrollButton(image, 553, 446, false, hierarchyMaxScroll > 0);
-        OriginalDrawScrollTrack(image, 553, 34, 412, m_originalHierarchyUnitScroll, hierarchyMaxScroll,
-            maxUnitRows, static_cast<int>(hierarchyFlatUnits.size()));
 
         OriginalDrawSpellText(image, font, L"Jednotky", 420, 12, heading, 132, true);
         const int unitTextH = std::max(1, font->GetHeight());
@@ -3178,8 +3120,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                 poolRow.uid != 0 && poolRow.uid == m_originalHierarchySelectedUnitUid;
             if (selectedPoolUnit)
                 OriginalFillRect(image, 421, rowY, 129, 13, wxColour(35, 84, 29));
-            OriginalDrawSpellText(image, font, GetUnitDisplayName(m_playerUnits[static_cast<size_t>(pIdx)].unit_id),
-                424, rowY + std::max(0, (14 - unitTextH) / 2), selectedPoolUnit ? heading : text, 126);
+            OriginalDrawSpellTextClipped(image, font, GetUnitDisplayName(m_playerUnits[static_cast<size_t>(pIdx)].unit_id),
+                424, rowY + std::max(0, (14 - unitTextH) / 2), selectedPoolUnit ? heading : text,
+                hierarchyListViewport, 126);
             ++unitRows;
         }
         if (hierarchyFlatUnits.empty())
@@ -3198,7 +3141,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             if (selectedPoolCommander)
                 OriginalFillRect(image, 421, cy, 129, 13, wxColour(35, 84, 29));
             const wxString label = GetRankAbbrev(commander.rank) + " " + wxString::FromUTF8(commander.name);
-            OriginalDrawSpellText(image, font, label, 424, cy, selectedPoolCommander ? heading : text, 126);
+            OriginalDrawSpellTextClipped(image, font, label, 424, cy, selectedPoolCommander ? heading : text,
+                hierarchyListViewport, 126);
             cy += 14;
             ++cmdRows;
         }
@@ -3315,17 +3259,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             }
         }
 
-        // Native lower-right page selector.
-        const wxRect partButton(323, 439, 72, 28);
-        OriginalFillRect(image, partButton.x, partButton.y, partButton.width, partButton.height,
-            wxColour(13, 51, 10));
-        OriginalHLine(image, partButton.x, partButton.GetRight(), partButton.y, wxColour(38, 94, 33));
-        OriginalVLine(image, partButton.x, partButton.y, partButton.GetBottom(), wxColour(38, 94, 33));
-        OriginalHLine(image, partButton.x, partButton.GetRight(), partButton.GetBottom(), wxColour(3, 17, 3));
-        OriginalVLine(image, partButton.GetRight(), partButton.y, partButton.GetBottom(), wxColour(3, 17, 3));
-        OriginalDrawSpellText(image, font,
-            wxString::Format(L"\u010C\u00E1st %d", m_originalHierarchyPage),
-            partButton.x, partButton.y + 7, green, partButton.width, true);
+        // Native lower-right page selector: original BIGMB 70x28 sprite.
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 323, 439,
+            wxString::Format(L"\u010C\u00E1st %d", m_originalHierarchyPage), true);
 
         // Common original status panel values.
         OriginalDrawSpellText(image, font, L"Pen\u00EDze", 578, 17, green, 61, true);
@@ -3386,15 +3322,29 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             else                         coreUnits.push_back(static_cast<int>(i));
         }
 
-        constexpr int rosterY = 11;
+        // STRUPG.QH explicitly defines the separated lower block as the list
+        // of support units and states that support units may be upgraded in the
+        // same way as core units.  Do not hide them from the restored VMU
+        // screen; the previous pass confused a text-clipping problem with a
+        // roster-semantics problem.
+
+        // STRUPG.QH gives the semantic roster regions, but NOT the physical
+        // cell geometry.  The cell positions below are measured from the
+        // original UNITS.LZ (406x464), which is composited at screen (6,8).
+        // Both core and support rosters use the original 146x17 VMU_SLCT
+        // cell with a 152 px column pitch and a 19 px row pitch.  The support
+        // block contains 8 rows per column (16 support cells total).
+        constexpr int rosterY = 11;            // UNITS.LZ y=3  + screen y=8
         constexpr int rosterRowH = 19;
         constexpr int coreRowsPerColumn = 16;
-        constexpr int supportY = 331;
-        constexpr int supportRowsPerColumn = 7;
-        constexpr int rosterColumnPitch = 152;
-        constexpr int slotX0 = 15;
-        constexpr int textX0 = 30;
-        constexpr int hpX0 = 37;
+        constexpr int coreX0 = 15;              // UNITS.LZ x=9  + screen x=6
+        constexpr int coreColumnPitch = 152;
+        constexpr int coreSlotWidth = 146;
+        constexpr int supportY = 320;           // UNITS.LZ y=312 + screen y=8
+        constexpr int supportRowsPerColumn = 8;
+        constexpr int supportX0 = 15;
+        constexpr int supportColumnPitch = 152;
+        constexpr int supportSlotWidth = 146;
 
         // Original selected-unit overlay. VMU_SLCT is 146x17 and, crucially,
         // contains a deliberate gap in its top edge where the HP bar lives.
@@ -3407,7 +3357,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             loader("VMU_SLCT.LZ", vmuSelectPlate) &&
             vmuSelectPlate.size() >= 146u * 17u;
 
-        auto drawRosterUnit = [&](int pIdx, int col, int row, int yBase)
+        auto drawRosterUnit = [&](int pIdx, int col, int row, int xBase, int columnPitch, int slotWidth, int yBase)
         {
             if (pIdx < 0 || pIdx >= static_cast<int>(m_playerUnits.size()))
                 return;
@@ -3416,9 +3366,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             if (pIdx < static_cast<int>(m_unitStates.size()) && !m_unitStates[pIdx].custom_name.empty())
                 name = wxString::FromUTF8(m_unitStates[pIdx].custom_name);
 
-            const int xSlot = slotX0 + col * rosterColumnPitch;
-            const int xText = textX0 + col * rosterColumnPitch;
-            const int xHp = hpX0 + col * rosterColumnPitch;
+            const int xSlot = xBase + col * columnPitch;
+            const int xText = xSlot + 15;
+            const int xHp = xSlot + 22;
             const int y = yBase + row * rosterRowH;
             const int ty = OriginalCenteredTextY(font, y, 17) + 1;
             const bool selected = pIdx == m_unitsSelectedUnit;
@@ -3435,7 +3385,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                         for (int sx = 0; sx < 146; ++sx)
                         {
                             const std::uint8_t idx = vmuSelectPlate[static_cast<size_t>(sy) * 146u + static_cast<size_t>(sx)];
-                            if (idx == 0)
+                            if (idx == 0 || sx >= slotWidth)
                                 continue;
                             const int dx = xSlot + sx;
                             const int dy = y + sy;
@@ -3453,10 +3403,11 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                     // Fallback only if the original asset is unavailable. Leave
                     // the HP-bar segment open, matching VMU_SLCT's geometry.
                     OriginalHLine(image, xSlot, xHp - 2, y + 1, green);
-                    OriginalHLine(image, xHp + 28, xSlot + 145, y + 1, green);
-                    OriginalHLine(image, xSlot, xSlot + 145, y + 16, green);
+                    const int slotRight = xSlot + slotWidth - 1;
+                    OriginalHLine(image, xHp + 28, slotRight, y + 1, green);
+                    OriginalHLine(image, xSlot, slotRight, y + 16, green);
                     OriginalVLine(image, xSlot, y, y + 16, green);
-                    OriginalVLine(image, xSlot + 145, y, y + 16, green);
+                    OriginalVLine(image, slotRight, y, y + 16, green);
                 }
             }
 
@@ -3466,7 +3417,38 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             if (hpBar > 0)
                 OriginalHLine(image, xHp, xHp + hpBar, y, green);
 
-            OriginalDrawSpellText(image, font, name, xText, ty, text, 118);
+            // Keep roster labels strictly inside their physical VMU slot.
+            // The font renderer adds a one-pixel shadow around glyphs, so merely
+            // limiting the text width is not enough: long/custom support names
+            // can otherwise paint over the slot frame above/below. Render to a
+            // temporary copy and copy back only the slot interior.
+            {
+                wxImage clipped = image.Copy();
+                OriginalDrawSpellText(clipped, font, name, xText, ty, text,
+                    (xSlot + 144) - xText);
+
+                const int clipLeft = xSlot + 2;
+                const int clipRight = xSlot + 143;
+                const int clipTop = y + 2;
+                const int clipBottom = y + 15;
+                unsigned char* dst = image.GetData();
+                const unsigned char* src = clipped.GetData();
+                if (dst && src)
+                {
+                    const int iw = image.GetWidth();
+                    const int ih = image.GetHeight();
+                    for (int yy = std::max(0, clipTop); yy <= std::min(ih - 1, clipBottom); ++yy)
+                    {
+                        const int x0 = std::max(0, clipLeft);
+                        const int x1 = std::min(iw - 1, clipRight);
+                        if (x1 < x0) continue;
+                        const size_t off = (static_cast<size_t>(yy) * static_cast<size_t>(iw) +
+                            static_cast<size_t>(x0)) * 3u;
+                        const size_t bytes = static_cast<size_t>(x1 - x0 + 1) * 3u;
+                        std::copy(src + off, src + off + bytes, dst + off);
+                    }
+                }
+            }
 
             if (pIdx < static_cast<int>(m_unitStates.size()) && m_unitStates[pIdx].cooldown_turns > 0)
             {
@@ -3482,17 +3464,19 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         {
             const int col = slot / coreRowsPerColumn;
             const int row = slot % coreRowsPerColumn;
-            drawRosterUnit(coreUnits[static_cast<size_t>(slot)], col, row, rosterY);
+            drawRosterUnit(coreUnits[static_cast<size_t>(slot)], col, row,
+                coreX0, coreColumnPitch, coreSlotWidth, rosterY);
         }
 
-        // Support companies: same two-column scheme in the separated lower
-        // block. They may be repaired/upgraded but never enter the hierarchy
-        // and are discarded when moving to the next strategic LEVEL.
-        for (int slot = 0; slot < static_cast<int>(supportUnits.size()) && slot < 14; ++slot)
+        // Support companies: the original UNITS.LZ contains 2x8 physical
+        // cells in the lower roster.  Keep the same clipping as the core cells
+        // so long/custom names never bleed through the surrounding frame.
+        for (int slot = 0; slot < static_cast<int>(supportUnits.size()) && slot < 16; ++slot)
         {
             const int col = slot / supportRowsPerColumn;
             const int row = slot % supportRowsPerColumn;
-            drawRosterUnit(supportUnits[static_cast<size_t>(slot)], col, row, supportY);
+            drawRosterUnit(supportUnits[static_cast<size_t>(slot)], col, row,
+                supportX0, supportColumnPitch, supportSlotWidth, supportY);
         }
 
         // -----------------------------------------------------------------
@@ -3537,16 +3521,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // lower info panel; putting them here was the largest visual mismatch
         // in Stage 4.x.
         // -----------------------------------------------------------------
-        OriginalFillRect(image, 418, 6, 135, 281, listBg);
-        OriginalVLine(image, 416, 6, 286, listFrame);
-        OriginalVLine(image, 417, 6, 286, wxColour(40, 40, 34));
-        OriginalVLine(image, 553, 6, 286, listFrame);
-        OriginalHLine(image, 416, 574, 6, listFrame);
-        OriginalHLine(image, 416, 574, 286, listFrame);
-        for (int x = 420; x < 553; x += 18)
-            OriginalVLine(image, x, 8, 286, listGrid);
-        for (int y = 8; y < 287; y += 18)
-            OriginalHLine(image, 419, 552, y, listGrid);
 
         struct UnitOptionRow
         {
@@ -3603,8 +3577,10 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
         constexpr int optionRowH = 14;
         constexpr int optionY = 8;
-        constexpr int optionBottom = 258;
-        const int visibleOptionRows = std::max(1, (optionBottom - optionY) / optionRowH);
+        // Reserve the native bottom-arrow band; only fully visible glyph rows
+        // are eligible for content.
+        const wxRect unitsOptionContent(418, 6, 135, 253);
+        const int visibleOptionRows = std::max(1, OriginalStrategicListVisibleRows(font, unitsOptionContent, optionY, optionRowH));
         const int maxOptionScroll = std::max(0, static_cast<int>(optionRows.size()) - visibleOptionRows);
         m_originalUnitsOptionScroll = std::clamp(m_originalUnitsOptionScroll, 0, maxOptionScroll);
 
@@ -3617,27 +3593,26 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const int y = optionY + vr * optionRowH;
             if (r.heading)
             {
-                OriginalDrawSpellText(image, font, r.label, 423, y + 1, text, 129, true);
+                OriginalDrawSpellTextClipped(image, font, r.label, 423, y + 1, text, unitsOptionContent, 129, true);
                 continue;
             }
 
             bool installed = false;
+            bool pending = false;
             if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()) && r.upgradeId >= 0)
             {
-                const auto& owned = m_unitStates[m_unitsSelectedUnit].upgrades;
-                installed = std::find(owned.begin(), owned.end(), r.upgradeId) != owned.end();
+                const auto& state = m_unitStates[m_unitsSelectedUnit];
+                installed = std::find(state.upgrades.begin(), state.upgrades.end(), r.upgradeId) != state.upgrades.end();
+                for (int slot = 0; slot < 3; ++slot)
+                    pending = pending || state.pending_upgrade_id[slot] == r.upgradeId;
             }
             const bool chosen = (r.upgradeId >= 0 && m_unitsSelectedUpgrade == r.upgradeId &&
                 m_unitsSelectedRearmUnitId <= 0) ||
                 (r.rearmUnitId >= 0 && m_unitsSelectedRearmUnitId == r.rearmUnitId);
-            OriginalDrawSpellText(image, font, r.label, 426, y + 1,
-                chosen ? yellow : (installed ? green : text), 123);
+            OriginalDrawSpellTextClipped(image, font, r.label, 426, y + 1,
+                chosen ? yellow : (pending ? warn : (installed ? green : text)), unitsOptionContent, 123);
         }
 
-        OriginalDrawScrollButton(image, 553, 6, true, maxOptionScroll > 0);
-        OriginalDrawScrollButton(image, 553, 259, false, maxOptionScroll > 0);
-        OriginalDrawScrollTrack(image, 553, 34, 225, m_originalUnitsOptionScroll,
-            maxOptionScroll, visibleOptionRows, static_cast<int>(optionRows.size()));
 
         // -----------------------------------------------------------------
         // LARGE LOWER INFO/ACTION PANEL
@@ -3720,6 +3695,46 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                 OriginalDrawSpellText(image, font, wxString::Format(L"Stav: %d/%d", curHp, maxHp), 356, 320, text, 205);
                 OriginalDrawSpellText(image, font, wxString::Format(L"\u00DArove\u0148: %d   XP: %d", lvl, xp), 356, 336, text, 205);
 
+                wxString installedEngine = L"-";
+                wxString installedWeapon = L"-";
+                wxString installedArmor = L"-";
+                if (m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()))
+                {
+                    for (int installedId : m_unitStates[m_unitsSelectedUnit].upgrades)
+                    {
+                        const auto itInstalled = m_upgradeDefs.find(installedId);
+                        if (itInstalled == m_upgradeDefs.end())
+                            continue;
+                        wxString installedName = itInstalled->second.title;
+                        if (installedName.empty())
+                        {
+                            for (const auto& r : m_researchDb)
+                                if (r.data == installedId && !r.title.empty()) { installedName = r.title; break; }
+                        }
+                        if (installedName.empty()) installedName = wxString::Format(L"#%d", installedId);
+                        if (itInstalled->second.kind == UpgradeDefRec::Engine) installedEngine = installedName;
+                        else if (itInstalled->second.kind == UpgradeDefRec::Weapon) installedWeapon = installedName;
+                        else if (itInstalled->second.kind == UpgradeDefRec::Armor) installedArmor = installedName;
+                    }
+                }
+                auto appendPending = [&](int slot, wxString& label)
+                {
+                    if (m_unitsSelectedUnit >= static_cast<int>(m_unitStates.size())) return;
+                    const auto& state = m_unitStates[m_unitsSelectedUnit];
+                    const int id = state.pending_upgrade_id[slot];
+                    if (id < 0) return;
+                    wxString name = wxString::Format(L"#%d", id);
+                    const auto itp = m_upgradeDefs.find(id);
+                    if (itp != m_upgradeDefs.end() && !itp->second.title.empty()) name = itp->second.title;
+                    label += wxString::Format(L" -> %s (%d)", name, state.pending_upgrade_turns[slot]);
+                };
+                appendPending(0, installedEngine);
+                appendPending(1, installedWeapon);
+                appendPending(2, installedArmor);
+                OriginalDrawSpellText(image, font, wxString(L"Motor: ") + installedEngine, 353, 351, green, 210);
+                OriginalDrawSpellText(image, font, wxString(L"Zbraň: ") + installedWeapon, 353, 364, green, 210);
+                OriginalDrawSpellText(image, font, wxString(L"Obrana: ") + installedArmor, 353, 377, green, 210);
+
                 const bool hasUpgradeChoice = m_unitsSelectedUpgrade >= 0 && m_unitsSelectedRearmUnitId <= 0;
                 const bool hasRearmChoice = m_unitsSelectedRearmUnitId > 0;
                 if (hasUpgradeChoice)
@@ -3731,39 +3746,64 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                         for (const auto& r : m_researchDb)
                             if (r.data == m_unitsSelectedUpgrade && !r.title.empty()) { label = r.title; break; }
                     if (label.empty()) label = wxString::Format(L"Vylep\u0161en\u00ED #%d", m_unitsSelectedUpgrade);
-                    OriginalFillRect(image, 350, 367, 216, 16, selectedBand);
-                    OriginalDrawSpellText(image, font, label, 353, 369, wxColour(35,35,35), 210, true);
+                    OriginalFillRect(image, 350, 391, 216, 16, selectedBand);
+                    OriginalDrawSpellText(image, font, label, 353, 393, wxColour(35,35,35), 210, true);
+                    if (it != m_upgradeDefs.end())
+                    {
+                        wxString effects;
+                        auto addEffect = [&](const wxString& n, int v) {
+                            if (!v) return;
+                            if (!effects.empty()) effects += L"  ";
+                            effects += n + wxString::Format(L" %+d", v);
+                        };
+                        addEffect(L"Pohyb", it->second.move);
+                        addEffect(L"Obrana", it->second.defence);
+                        addEffect(L"Útok", it->second.attack);
+                        addEffect(L"Útoky", it->second.attackCount);
+                        addEffect(L"Dostřel", it->second.range);
+                        if (!effects.empty())
+                            OriginalDrawSpellText(image, font, effects, 353, 410, dim, 210, true);
+                    }
                     actionCost = GetTechUpgradeCost(m_unitsSelectedUpgrade);
                     actionTime = GetTechUpgradeTime(m_unitsSelectedUpgrade);
                     bool alreadyInstalled = false;
+                    bool categoryBusy = false;
+                    bool exclusiveBusy = false;
                     if (m_unitsSelectedUnit < static_cast<int>(m_unitStates.size()))
                     {
-                        const auto& installed = m_unitStates[m_unitsSelectedUnit].upgrades;
-                        alreadyInstalled = std::find(installed.begin(), installed.end(), m_unitsSelectedUpgrade) != installed.end();
+                        const auto& state = m_unitStates[m_unitsSelectedUnit];
+                        alreadyInstalled = std::find(state.upgrades.begin(), state.upgrades.end(), m_unitsSelectedUpgrade) != state.upgrades.end();
+                        exclusiveBusy = state.pending_kind != 0;
+                        if (it != m_upgradeDefs.end() && it->second.kind != UpgradeDefRec::Unknown)
+                        {
+                            const int slot = static_cast<int>(it->second.kind) - 1;
+                            if (slot >= 0 && slot < 3) categoryBusy = state.pending_upgrade_id[slot] >= 0;
+                        }
                     }
-                    actionEnabled = !hasCooldown && !alreadyInstalled && m_money >= actionCost;
+                    actionEnabled = !exclusiveBusy && !alreadyInstalled && !categoryBusy &&
+                        actionCost >= 0 && actionTime > 0 && m_money >= actionCost;
                 }
                 else if (hasRearmChoice)
                 {
-                    OriginalFillRect(image, 350, 367, 216, 16, selectedBand);
+                    OriginalFillRect(image, 350, 391, 216, 16, selectedBand);
                     OriginalDrawSpellText(image, font, wxString(L"Nov\u00FD typ: ") + GetUnitDisplayName(m_unitsSelectedRearmUnitId),
-                        353, 369, wxColour(35,35,35), 210, true);
+                        353, 393, wxColour(35,35,35), 210, true);
                     OriginalDrawSpellText(image, font, L"P\u0159ezbrojen\u00ED sn\u00ED\u017E\u00ED XP a odstran\u00ED vylep\u0161en\u00ED.",
-                        353, 389, dim, 210, true);
+                        353, 410, dim, 210, true);
                     actionCost = GetUpgradeCost(u.unit_id, m_unitsSelectedRearmUnitId);
                     actionTime = GetUpgradeTime(m_unitsSelectedRearmUnitId);
                     actionEnabled = !hasCooldown && actionCost >= 0 && m_money >= actionCost;
                 }
                 else
                 {
-                    OriginalDrawSpellText(image, font, L"Vyber vylep\u0161en\u00ED nebo nov\u00FD typ", 353, 370, dim, 210, true);
+                    OriginalDrawSpellText(image, font, L"Vyber vylep\u0161en\u00ED nebo nov\u00FD typ", 353, 397, dim, 210, true);
                 }
             }
 
             if (hasCooldown)
                 OriginalDrawSpellText(image, font,
                     wxString::Format(L"Nedostupná: %d kol", m_unitStates[m_unitsSelectedUnit].cooldown_turns),
-                    350, 408, warn, 216, true);
+                    350, 423, warn, 216, true);
         }
         else
         {
@@ -3772,8 +3812,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
         const bool canDisband = m_unitsSelectedUnit >= 0 && !hasCooldown;
         // Dynamic buttons sit around the native VMU_LST1 time/cost plate.
-        OriginalDrawActionButton(image, font, 348, 442, 69, 26, L"Propustit", canDisband);
-        OriginalDrawActionButton(image, font, 496, 442, 69, 26, L"OK", actionEnabled);
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 347, 438, L"Propustit", canDisband);
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 495, 438, L"OK", actionEnabled);
 
         // Time / cost text belongs inside the original VMU_LST1 inset.
         OriginalDrawSpellText(image, font, L"Čas:", 424, 439, text, 28);
@@ -3881,16 +3921,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // -------------------------------------------------------------
         // UPPER RIGHT: original categorized purchase list.
         // -------------------------------------------------------------
-        OriginalFillRect(image, 418, 6, 135, 281, listBg);
-        OriginalVLine(image, 416, 6, 286, listFrame);
-        OriginalVLine(image, 417, 6, 286, wxColour(40, 40, 34));
-        OriginalVLine(image, 553, 6, 286, listFrame);
-        OriginalHLine(image, 416, 574, 6, listFrame);
-        OriginalHLine(image, 416, 574, 286, listFrame);
-        for (int x = 420; x < 553; x += 18)
-            OriginalVLine(image, x, 8, 286, listGrid);
-        for (int y = 8; y < 287; y += 18)
-            OriginalHLine(image, 419, 552, y, listGrid);
 
         const auto buyRows = BuildOriginalBuyRows();
         bool selectedUnitPresent = false;
@@ -3909,7 +3939,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
         constexpr int buyListY = 10;
         constexpr int buyListRowH = 14;
-        constexpr int buyVisibleRows = 20;
+        const wxRect buyListViewport(418, 6, 135, 281);
+        const int buyVisibleRows = OriginalStrategicListVisibleRows(font, buyListViewport, buyListY, buyListRowH);
         const int buyMaxScroll = std::max(0, static_cast<int>(buyRows.size()) - buyVisibleRows);
         m_originalBuyListScroll = std::clamp(m_originalBuyListScroll, 0, buyMaxScroll);
 
@@ -3924,20 +3955,16 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const int y = buyListY + visible * buyListRowH;
             if (row.kind == OriginalBuyRowKind::Heading)
             {
-                OriginalDrawSpellText(image, font, row.label, 420, y, yellow, 132, true);
+                OriginalDrawSpellTextClipped(image, font, row.label, 420, y, yellow, buyListViewport, 132, true);
                 continue;
             }
             const bool isSelected =
                 (row.kind == OriginalBuyRowKind::Unit && row.id == m_originalBuySelectedUnitId) ||
                 (row.kind == OriginalBuyRowKind::Commander && row.id == m_originalBuySelectedCommander);
-            OriginalDrawSpellText(image, font, row.label, 424, y,
-                isSelected ? selected : (row.enabled ? text : dim), 126);
+            OriginalDrawSpellTextClipped(image, font, row.label, 424, y,
+                isSelected ? selected : (row.enabled ? text : dim), buyListViewport, 126);
         }
 
-        OriginalDrawScrollButton(image, 553, 6, true, buyMaxScroll > 0);
-        OriginalDrawScrollButton(image, 553, 259, false, buyMaxScroll > 0);
-        OriginalDrawScrollTrack(image, 553, 34, 225, m_originalBuyListScroll,
-            buyMaxScroll, buyVisibleRows, static_cast<int>(buyRows.size()));
 
         // -------------------------------------------------------------
         // LOWER RIGHT: selected unit/commander information and purchase.
@@ -4016,18 +4043,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             actionEnabled = static_cast<int>(m_playerCommanders.size()) < maxCommanders;
         }
 
-        auto drawBuyButton = [&](bool enabled)
-        {
-            constexpr int x = 496, y = 442, w = 69, h = 26;
-            OriginalFillRect(image, x, y, w, h, enabled ? buttonBg : buttonOff);
-            OriginalHLine(image, x, x + w - 1, y, enabled ? edgeHi : wxColour(57,61,54));
-            OriginalVLine(image, x, y, y + h - 1, enabled ? edgeHi : wxColour(57,61,54));
-            OriginalHLine(image, x, x + w - 1, y + h - 1, edgeLo);
-            OriginalVLine(image, x + w - 1, y, y + h - 1, edgeLo);
-            OriginalDrawSpellText(image, font, L"Koupit", x, 448,
-                enabled ? green : dim, w, true);
-        };
-        drawBuyButton(actionEnabled);
+        OriginalDrawActionButton(image, font, loader, nativeUiPal,
+            495, 438, L"Koupit", actionEnabled);
 
         OriginalDrawSpellText(image, font, L"\u010Cas:", 423, 438, text, 38);
         OriginalDrawSpellText(image, font,
@@ -4067,11 +4084,10 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // the game. Stage 6 left that area black, which is why the restored
         // research screen looked visibly broken. Recreate the native green
         // grid/list frame before painting the dynamic rows.
-        constexpr int researchListX = 418;
-        constexpr int researchListY = 6;
+        constexpr int researchListX = 417;
+        constexpr int researchListY = 12;
         constexpr int researchListW = 136;
-        constexpr int researchListH = 460;
-        OriginalDrawStrategicListGrid(image, researchListX, researchListY, researchListW, researchListH);
+        constexpr int researchListH = 464; // STRRSR.QH
 
         auto groupLabel = [](const wxString& g) -> wxString {
             if (g == "Global") return L"Globální";
@@ -4095,7 +4111,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             rows.push_back({false, i, it.title});
         }
 
-        constexpr int listX = 421, listY = 12, rowH = 14, visibleRows = 31;
+        constexpr int listX = 421, listY = 12, rowH = 14;
+        const wxRect researchListViewport(researchListX, researchListY, researchListW, researchListH);
+        const int visibleRows = OriginalStrategicListVisibleRows(font, researchListViewport, listY, rowH);
         const int maxScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
         int selectedRow = -1;
         for (int ri = 0; ri < static_cast<int>(rows.size()); ++ri)
@@ -4122,7 +4140,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const RRow& row = rows[static_cast<size_t>(ri)];
             const int y = listY + vr * rowH;
             if (row.heading)
-                OriginalDrawSpellText(image, font, row.label, listX, y, yellow, 130, true);
+                OriginalDrawSpellTextClipped(image, font, row.label, listX, y, yellow, researchListViewport, 130, true);
             else
             {
                 const bool selected = row.index == m_researchBrowseIndex;
@@ -4139,7 +4157,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
                     OriginalFillRect(image, listX + 1, y + 5, 4, 4, green);
                     OriginalFillRect(image, listX + 2, y + 4, 2, 6, green);
                 }
-                OriginalDrawSpellText(image, font, row.label, listX + 7, y, selected ? red : text, 122);
+                OriginalDrawSpellTextClipped(image, font, row.label, listX + 7, y, selected ? red : text, researchListViewport, 122);
             }
         }
 
@@ -4236,13 +4254,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             canConfirm = IsResearchAvailable(cand);
         }
         // COMMON.FS tooltip geometry: STOP 305,227,69x28; OK 305,438,69x28.
-        OriginalDrawActionButton(image, font, 305, 227, 69, 28, L"STOP", researchRunning);
-        OriginalDrawActionButton(image, font, 305, 438, 69, 28, L"OK", canConfirm);
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 304, 224, L"STOP", researchRunning);
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 304, 436, L"OK", canConfirm);
 
-        OriginalDrawScrollButton(image, 553, 6, true, maxScroll > 0);
-        OriginalDrawScrollButton(image, 553, 426, false, maxScroll > 0);
-        OriginalDrawScrollTrack(image, 553, 34, 392, m_originalResearchListScroll, maxScroll,
-            visibleRows, static_cast<int>(rows.size()));
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
 
@@ -4258,11 +4272,10 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
         // INFO uses the same live list backing as RESEARCH. VMI_FULL only
         // supplies the metal silhouette, so the CRT/grid must be painted here.
-        constexpr int infoListX = 418;
-        constexpr int infoListY = 6;
+        constexpr int infoListX = 417;
+        constexpr int infoListY = 7;
         constexpr int infoListW = 136;
-        constexpr int infoListH = 460;
-        OriginalDrawStrategicListGrid(image, infoListX, infoListY, infoListW, infoListH);
+        constexpr int infoListH = 467; // STRINFO.QH
 
         auto groupLabel = [](const wxString& g) -> wxString {
             if (g == "Global") return L"Globální";
@@ -4288,7 +4301,9 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         if (m_infoBrowseIndex < 0)
             for (const auto& row : rows) if (!row.heading) { m_infoBrowseIndex = row.index; break; }
 
-        constexpr int listY = 12, rowH = 14, visibleRows = 31;
+        constexpr int listY = 12, rowH = 14;
+        const wxRect infoListViewport(infoListX, infoListY, infoListW, infoListH);
+        const int visibleRows = OriginalStrategicListVisibleRows(font, infoListViewport, listY, rowH);
         const int maxListScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
         m_originalInfoListScroll = std::clamp(m_originalInfoListScroll, 0, maxListScroll);
         for (int vr = 0; vr < visibleRows; ++vr)
@@ -4298,10 +4313,10 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const auto& row = rows[static_cast<size_t>(ri)];
             const int y = listY + vr * rowH;
             if (row.heading)
-                OriginalDrawSpellText(image, font, row.label, 421, y, yellow, 132, true);
+                OriginalDrawSpellTextClipped(image, font, row.label, 421, y, yellow, infoListViewport, 132, true);
             else
-                OriginalDrawSpellText(image, font, row.label, 424, y,
-                    row.index == m_infoBrowseIndex ? red : text, 128);
+                OriginalDrawSpellTextClipped(image, font, row.label, 424, y,
+                    row.index == m_infoBrowseIndex ? red : text, infoListViewport, 128);
         }
 
         wxString body;
@@ -4325,15 +4340,11 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         // The native INFO controls are actual green grid buttons inside the
         // metal recess, not bare labels. Their text is vertically centred in
         // the live button face (the previous hard-coded y=444 sat too high).
-        OriginalDrawActionButton(image, font, 196, 443, 70, 25, L"Dolů",
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 197, 438, L"Dolů",
             m_originalInfoTextScroll < maxTextScroll);
-        OriginalDrawActionButton(image, font, 286, 443, 70, 25, L"Nahoru",
+        OriginalDrawActionButton(image, font, loader, nativeUiPal, 284, 438, L"Nahoru",
             m_originalInfoTextScroll > 0);
 
-        OriginalDrawScrollButton(image, 553, 6, true, maxListScroll > 0);
-        OriginalDrawScrollButton(image, 553, 426, false, maxListScroll > 0);
-        OriginalDrawScrollTrack(image, 553, 34, 392, m_originalInfoListScroll, maxListScroll,
-            visibleRows, static_cast<int>(rows.size()));
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
 
@@ -4669,8 +4680,8 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             const auto path = GetStrategicSaveSlotPath(m_level, slot);
             std::error_code ec;
             const bool exists = std::filesystem::exists(path, ec);
-            OriginalDrawOptionsButton(image, font, loadButton, L"Load", exists);
-            OriginalDrawOptionsButton(image, font, saveButton, L"Save", true);
+            OriginalDrawOptionsButton(image, font, loader, nativeUiPal, loadButton, L"Load", exists);
+            OriginalDrawOptionsButton(image, font, loader, nativeUiPal, saveButton, L"Save", true);
 
             wxString slotText = L"-= EMPTY =-";
             if (exists)
@@ -4740,7 +4751,7 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
 
         // STROPT.QH #3 is the 113x41 active Exit region; the visible live
         // button inside it is the original 71x29 rectangle at 346,440.
-        OriginalDrawOptionsButton(image, font, kOptExitButton, L"Exit", true);
+        OriginalDrawOptionsButton(image, font, loader, nativeUiPal, kOptExitButton, L"Exit", true);
 
         OriginalDrawStrategicStatus(image, font, m_money, m_research, m_turn);
     }
@@ -5000,23 +5011,25 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             }
         }
 
-        // Native hierarchy roster scrollbar. It scrolls the permanent-unit
-        // pool while commanders remain in their dedicated lower section.
-        if (lx >= 553 && lx < 575 && ((ly >= 6 && ly < 34) || (ly >= 446 && ly < 474)))
+        // Shared strategic scrollbar: same geometry and arrow direction as MAP.
         {
-            int totalUnitRows = 0;
-            for (size_t i = 0; i < m_playerUnits.size(); ++i)
-                if (!IsTemporaryUnitIndex(i))
-                    ++totalUnitRows;
-            const int maxScroll = std::max(0, totalUnitRows - 18);
-            if (maxScroll > 0)
+            const OriginalStrategicScrollbarGeometry g{kOriginalRightScrollbarX, 5, 472};
+            const int delta = OriginalScrollbarArrowDelta(g, lx, ly);
+            if (delta != 0)
             {
-                const int delta = (ly < 34) ? -1 : 1;
-                m_originalHierarchyUnitScroll = std::clamp(
-                    m_originalHierarchyUnitScroll + delta, 0, maxScroll);
-                refreshRestored();
+                int totalUnitRows = 0;
+                for (size_t i = 0; i < m_playerUnits.size(); ++i)
+                    if (!IsTemporaryUnitIndex(i))
+                        ++totalUnitRows;
+                const int maxScroll = std::max(0, totalUnitRows - 18);
+                if (maxScroll > 0)
+                {
+                    m_originalHierarchyUnitScroll = std::clamp(
+                        m_originalHierarchyUnitScroll + delta, 0, maxScroll);
+                    refreshRestored();
+                }
+                return;
             }
-            return;
         }
 
         // Clicking the native right-hand pools now selects a concrete unit or
@@ -5211,9 +5224,12 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             }
         }
 
-        // Permanent/core and support rosters use the same two-column layout
-        // as UNITS.LZ. Each visible cell maps to exactly one strategic company.
-        if (lx >= 8 && lx <= 313)
+        // The native VMU screen has both pools: permanent/core companies in
+        // the upper 2x16 grid and support companies in the lower 2x8 grid.
+        // These hit cells follow the physical UNITS.LZ / VMU_SLCT geometry,
+        // not the broader semantic rectangles from STRUPG.QH.
+        if ((lx >= 15 && lx < 313 && ly >= 11 && ly < 315) ||
+            (lx >= 15 && lx < 313 && ly >= 320 && ly < 470))
         {
             std::vector<int> coreUnits;
             std::vector<int> supportUnits;
@@ -5224,24 +5240,39 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             }
 
             int pickedIndex = -1;
-            const int col = (lx >= 168) ? 1 : 0;
-            if (ly >= 10 && ly < 10 + 16 * 19)
+            if (ly >= 11 && ly < 315 && lx >= 15 && lx < 313)
             {
-                const int row = (ly - 10) / 19;
+                const int col = (lx >= 167) ? 1 : 0;
+                const int cellX = 15 + col * 152;
+                const int row = (ly - 11) / 19;
+                const int cellY = 11 + row * 19;
                 const int slot = col * 16 + row;
-                if (slot >= 0 && slot < static_cast<int>(coreUnits.size()))
+                if (row >= 0 && row < 16 && lx >= cellX && lx < cellX + 146 &&
+                    ly >= cellY && ly < cellY + 17 &&
+                    slot < static_cast<int>(coreUnits.size()))
                     pickedIndex = coreUnits[static_cast<size_t>(slot)];
             }
-            else if (ly >= 331 && ly < 331 + 7 * 19)
+            else if (ly >= 320 && ly < 470 && lx >= 15 && lx < 313)
             {
-                const int row = (ly - 331) / 19;
-                const int slot = col * 7 + row;
-                if (slot >= 0 && slot < static_cast<int>(supportUnits.size()))
+                const int col = (lx >= 167) ? 1 : 0;
+                const int cellX = 15 + col * 152;
+                const int row = (ly - 320) / 19;
+                const int cellY = 320 + row * 19;
+                const int slot = col * 8 + row;
+                if (row >= 0 && row < 8 && lx >= cellX && lx < cellX + 146 &&
+                    ly >= cellY && ly < cellY + 17 &&
+                    slot < static_cast<int>(supportUnits.size()))
                     pickedIndex = supportUnits[static_cast<size_t>(slot)];
             }
 
             if (pickedIndex >= 0)
             {
+                if (static_cast<size_t>(pickedIndex) < m_unitStates.size() &&
+                    CancelPendingUnitOperation(static_cast<size_t>(pickedIndex), true))
+                {
+                    refreshRestored();
+                    return;
+                }
                 m_unitsSelectedUnit = pickedIndex;
                 if (m_unitsCurrentTab == UNITS_TAB_RECRUIT &&
                     (m_unitsSelectedUpgrade < 0 || m_unitsSelectedUpgrade >= RECRUIT_QUALITY_COUNT))
@@ -5277,6 +5308,43 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
             m_originalUnitsOptionScroll = 0;
             refreshRestored();
             return;
+        }
+
+        // Upper-right option list uses the same MAP-style scrollbar and hit logic.
+        if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
+        {
+            const OriginalStrategicScrollbarGeometry g{kOriginalRightScrollbarX, 5, 287};
+            const int delta = OriginalScrollbarArrowDelta(g, lx, ly);
+            if (delta != 0)
+            {
+                EnsureUpgradeDefsLoaded();
+                EnsureResearchLoaded();
+                const auto& scrollUnit = m_playerUnits[static_cast<size_t>(m_unitsSelectedUnit)];
+                const auto upgrades = GetAvailableUpgradesForUnit(scrollUnit.unit_id);
+                int rows = 3;
+                for (int id : upgrades)
+                {
+                    const auto it = m_upgradeDefs.find(id);
+                    if (it != m_upgradeDefs.end() && it->second.kind != UpgradeDefRec::Unknown)
+                        ++rows;
+                }
+                if (m_unitsCurrentTab == UNITS_TAB_UPGRADE)
+                {
+                    const auto rearm = GetAvailableUnitTypesForUpgrade(scrollUnit.unit_id);
+                    if (!rearm.empty()) rows += 1 + static_cast<int>(rearm.size());
+                }
+                const wxRect unitsOptionContent(418, 6, 135, 253);
+                const int visible = std::max(1, OriginalStrategicListVisibleRows(
+                    m_spellData ? m_spellData->font : nullptr, unitsOptionContent, 8, 14));
+                const int maxScroll = std::max(0, rows - visible);
+                if (maxScroll > 0)
+                {
+                    m_originalUnitsOptionScroll = std::clamp(
+                        m_originalUnitsOptionScroll + delta, 0, maxScroll);
+                    refreshRestored();
+                }
+                return;
+            }
         }
 
         if (m_unitsSelectedUnit >= 0 && m_unitsSelectedUnit < static_cast<int>(m_playerUnits.size()))
@@ -5319,7 +5387,9 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                     targets.push_back({-1,-1});
                     for (int id : rearm) targets.push_back({-1,id});
                 }
-                const int visible = std::max(1, (258 - 8) / 14);
+                const wxRect unitsOptionContent(418, 6, 135, 253);
+                const int visible = std::max(1, OriginalStrategicListVisibleRows(
+                    m_spellData ? m_spellData->font : nullptr, unitsOptionContent, 8, 14));
                 const int maxScroll = std::max(0, static_cast<int>(targets.size()) - visible);
                 m_originalUnitsOptionScroll = std::clamp(m_originalUnitsOptionScroll, 0, maxScroll);
                 const int idx = m_originalUnitsOptionScroll + (ly - 8) / 14;
@@ -5432,22 +5502,25 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
         const auto buyRows = BuildOriginalBuyRows();
         constexpr int buyListY = 10;
         constexpr int buyListRowH = 14;
-        constexpr int buyVisibleRows = 20;
+        const wxRect buyListViewport(418, 6, 135, 281);
+        const int buyVisibleRows = OriginalStrategicListVisibleRows(m_spellData ? m_spellData->font : nullptr, buyListViewport, buyListY, buyListRowH);
         const int buyMaxScroll = std::max(0, static_cast<int>(buyRows.size()) - buyVisibleRows);
         m_originalBuyListScroll = std::clamp(m_originalBuyListScroll, 0, buyMaxScroll);
 
-        // Native upper-right list scrollbar buttons.
-        if (lx >= 553 && lx < 575 &&
-            ((ly >= 6 && ly < 34) || (ly >= 259 && ly < 287)))
+        // Shared MAP-style scrollbar buttons.
         {
-            if (buyMaxScroll > 0)
+            const OriginalStrategicScrollbarGeometry g{kOriginalRightScrollbarX, 5, 287};
+            const int delta = OriginalScrollbarArrowDelta(g, lx, ly);
+            if (delta != 0)
             {
-                const int delta = (ly < 34) ? -1 : 1;
-                m_originalBuyListScroll = std::clamp(
-                    m_originalBuyListScroll + delta, 0, buyMaxScroll);
-                refreshRestored();
+                if (buyMaxScroll > 0)
+                {
+                    m_originalBuyListScroll = std::clamp(
+                        m_originalBuyListScroll + delta, 0, buyMaxScroll);
+                    refreshRestored();
+                }
+                return;
             }
-            return;
         }
 
         // Select an available unit/commander. Headings and blank separators are
@@ -5606,8 +5679,12 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 }
                 rows.push_back({false, i});
             }
-            constexpr int rowY = 12, rowH = 14, visibleRows = 32;
-            if (lx >= 418 && lx < 553 && ly >= rowY && ly < rowY + visibleRows * rowH)
+            constexpr int rowY = 12, rowH = 14;
+            const wxRect researchListViewport(417, 12, 136, 464);
+            const int visibleRows = OriginalStrategicListVisibleRows(
+                m_spellData ? m_spellData->font : nullptr, researchListViewport, rowY, rowH);
+            if (lx >= researchListViewport.x && lx < researchListViewport.x + researchListViewport.width &&
+                ly >= rowY && ly < std::min(researchListViewport.y + researchListViewport.height, rowY + visibleRows * rowH))
             {
                 const int ri = m_originalResearchListScroll + (ly - rowY) / rowH;
                 if (ri >= 0 && ri < static_cast<int>(rows.size()) && !rows[static_cast<size_t>(ri)].heading)
@@ -5619,17 +5696,21 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 }
                 return;
             }
-            // Native upper-right list scrollbar buttons.
+            // Shared MAP-style list scrollbar.
             const int maxScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
-            if (lx >= 553 && lx < 575 && ((ly >= 6 && ly < 34) || (ly >= 426 && ly < 454)))
             {
-                if (maxScroll > 0)
+                const OriginalStrategicScrollbarGeometry g{kOriginalRightScrollbarX, 5, 472};
+                const int delta = OriginalScrollbarArrowDelta(g, lx, ly);
+                if (delta != 0)
                 {
-                    const int delta = (ly < 34) ? -1 : 1;
-                    m_originalResearchListScroll = std::clamp(m_originalResearchListScroll + delta, 0, maxScroll);
-                    refreshRestored();
+                    if (maxScroll > 0)
+                    {
+                        m_originalResearchListScroll = std::clamp(
+                            m_originalResearchListScroll + delta, 0, maxScroll);
+                        refreshRestored();
+                    }
+                    return;
                 }
-                return;
             }
             if (wxRect(305, 227, 69, 28).Contains(lx, ly))
             {
@@ -5678,8 +5759,12 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 }
                 rows.push_back({false, i});
             }
-            constexpr int rowY = 12, rowH = 14, visibleRows = 31;
-            if (lx >= 418 && lx < 553 && ly >= rowY && ly < rowY + visibleRows * rowH)
+            constexpr int rowY = 12, rowH = 14;
+            const wxRect infoListViewport(417, 7, 136, 467);
+            const int visibleRows = OriginalStrategicListVisibleRows(
+                m_spellData ? m_spellData->font : nullptr, infoListViewport, rowY, rowH);
+            if (lx >= infoListViewport.x && lx < infoListViewport.x + infoListViewport.width &&
+                ly >= rowY && ly < std::min(infoListViewport.y + infoListViewport.height, rowY + visibleRows * rowH))
             {
                 const int ri = m_originalInfoListScroll + (ly - rowY) / rowH;
                 if (ri >= 0 && ri < static_cast<int>(rows.size()) && !rows[static_cast<size_t>(ri)].heading)
@@ -5691,16 +5776,19 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 return;
             }
             const int maxListScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
-            if (lx >= 553 && lx < 575 && ((ly >= 6 && ly < 34) || (ly >= 426 && ly < 454)))
             {
-                if (maxListScroll > 0)
+                const OriginalStrategicScrollbarGeometry g{kOriginalRightScrollbarX, 5, 472};
+                const int delta = OriginalScrollbarArrowDelta(g, lx, ly);
+                if (delta != 0)
                 {
-                    const int delta = (ly < 34) ? -1 : 1;
-                    m_originalInfoListScroll = std::clamp(
-                        m_originalInfoListScroll + delta, 0, maxListScroll);
-                    refreshRestored();
+                    if (maxListScroll > 0)
+                    {
+                        m_originalInfoListScroll = std::clamp(
+                            m_originalInfoListScroll + delta, 0, maxListScroll);
+                        refreshRestored();
+                    }
+                    return;
                 }
-                return;
             }
             if (wxRect(190, 438, 82, 34).Contains(lx, ly))
             {
@@ -5889,6 +5977,26 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
 
         // Statistics is informational; toolbar and end-turn are its only controls.
         return;
+    }
+
+    // MAP list uses the same clickable scrollbar as every other strategic list.
+    {
+        const OriginalStrategicScrollbarGeometry g{kOriginalRightScrollbarX, 5, 429};
+        const int delta = OriginalScrollbarArrowDelta(g, lx, ly);
+        if (delta != 0)
+        {
+            const int totalRows = static_cast<int>(m_rosterRowUids.size());
+            const int unitRowsY = kOriginalUnitRowsY +
+                static_cast<int>(GetActiveFormationCommanderUids().size()) * kOriginalUnitRowH;
+            const int visibleRows = std::max(1, (432 - unitRowsY) / kOriginalUnitRowH);
+            const int maxScroll = std::max(0, totalRows - visibleRows);
+            if (maxScroll > 0)
+            {
+                m_originalUnitScroll = std::clamp(m_originalUnitScroll + delta, 0, maxScroll);
+                refreshRestored();
+            }
+            return;
+        }
     }
 
     // Mission-unit controls in the original centre list.
@@ -6208,7 +6316,9 @@ void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
                 const auto rearm = GetAvailableUnitTypesForUpgrade(u.unit_id);
                 if (!rearm.empty()) rows += 1 + static_cast<int>(rearm.size());
             }
-            const int visible = std::max(1, (258 - 8) / 14);
+            const wxRect unitsOptionContent(418, 6, 135, 253);
+            const int visible = std::max(1, OriginalStrategicListVisibleRows(
+                m_spellData ? m_spellData->font : nullptr, unitsOptionContent, 8, 14));
             const int maxScroll = std::max(0, rows - visible);
             if (maxScroll > 0)
             {
@@ -6219,7 +6329,7 @@ void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
             return;
         }
 
-        // Both permanent (2x16) and support (2x7) company pools are fixed
+        // Both permanent (2x16) and support (2x8) company pools are fixed
         // native grids with no roster scrollbar. Only the upper-right upgrade
         // list scrolls on this screen.
         ev.Skip();
@@ -6234,7 +6344,9 @@ void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
             return;
         }
         const auto rows = BuildOriginalBuyRows();
-        constexpr int visibleRows = 20;
+        const wxRect buyListViewport(418, 6, 135, 281);
+        const int visibleRows = OriginalStrategicListVisibleRows(
+            m_spellData ? m_spellData->font : nullptr, buyListViewport, 10, 14);
         const int maxScroll = std::max(0, static_cast<int>(rows.size()) - visibleRows);
         if (maxScroll <= 0)
             return;
@@ -6260,7 +6372,9 @@ void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
                 if (it.group != lastGroup) { lastGroup = it.group; if (!lastGroup.empty()) ++rows; }
                 ++rows;
             }
-            constexpr int visibleRows = 31;
+            const wxRect researchListViewport(417, 12, 136, 464);
+            const int visibleRows = OriginalStrategicListVisibleRows(
+                m_spellData ? m_spellData->font : nullptr, researchListViewport, 12, 14);
             const int maxScroll = std::max(0, rows - visibleRows);
             if (maxScroll > 0)
             {
@@ -6331,7 +6445,10 @@ void StrategicLevelFrame::OnOriginalStrategicMouseWheel(wxMouseEvent& ev)
                 if (it.group != lastGroup) { lastGroup = it.group; if (!lastGroup.empty()) ++rows; }
                 ++rows;
             }
-            const int maxScroll = std::max(0, rows - 31);
+            const wxRect infoListViewport(417, 7, 136, 467);
+            const int visibleRows = OriginalStrategicListVisibleRows(
+                m_spellData ? m_spellData->font : nullptr, infoListViewport, 12, 14);
+            const int maxScroll = std::max(0, rows - visibleRows);
             if (maxScroll > 0)
             {
                 m_originalInfoListScroll = std::clamp(m_originalInfoListScroll - steps * 3, 0, maxScroll);
@@ -7379,7 +7496,7 @@ std::vector<StrategicLevelFrame::OriginalBuyRow> StrategicLevelFrame::BuildOrigi
     return result;
 }
 
-bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
+bool StrategicLevelFrame::EnsureUpgradeDefsLoaded() const
 {
     if (m_upgradeDefsLoaded)
         return true;
@@ -7409,22 +7526,57 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
         }
     }
 
-    if (defPath.empty())
+    std::string content;
+    fs::path commonDir;
+    if (!defPath.empty())
     {
-        m_upgradeDefsLoaded = true;
-        return false;
+        std::ifstream f(defPath, std::ios::binary);
+        if (f)
+        {
+            content.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            commonDir = defPath.parent_path();
+        }
     }
 
-    std::ifstream f(defPath);
-    if (!f)
-    {
-        m_upgradeDefsLoaded = true;
-        return false;
-    }
-
-    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    // Clean installs normally keep COMMON data packed in COMMON.FS. Research
+    // already reads directly from the archive; upgrades must do the same or
+    // SuitableTypes() disappears and compatibility becomes meaningless.
     if (content.empty())
     {
+        std::vector<fs::path> archives;
+        if (m_spellData)
+        {
+            if (!m_spellData->data_path.empty())
+                archives.emplace_back(fs::path(m_spellData->data_path) / L"COMMON.FS");
+            if (!m_spellData->cd_data_path.empty())
+                archives.emplace_back(fs::path(m_spellData->cd_data_path) / L"COMMON.FS");
+        }
+        archives.emplace_back(base / L"COMMON.FS");
+        archives.emplace_back(fs::current_path(ec) / L"COMMON.FS");
+
+        for (const auto& archivePath : archives)
+        {
+            if (archivePath.empty() || !fs::exists(archivePath, ec) || fs::is_directory(archivePath, ec))
+                continue;
+            try
+            {
+                FSarchive arc(archivePath.wstring(), FSarchive::Options::NONE);
+                uint8_t* data = nullptr;
+                int size = 0;
+                if (arc.GetFile("UPGRADES.DEF", &data, &size) == 0 && data && size > 0)
+                {
+                    content.assign(reinterpret_cast<const char*>(data), static_cast<size_t>(size));
+                    break;
+                }
+            }
+            catch (...) {}
+        }
+    }
+
+    if (content.empty())
+    {
+        // Fail closed: without the original SuitableTypes table, offer no
+        // technology instead of inventing compatibility.
         m_upgradeDefsLoaded = true;
         return false;
     }
@@ -7482,12 +7634,27 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
         static const std::regex rxTime(R"(UpgradeTime\s*\(\s*(\d+)\s*\))");
         static const std::regex rxTypes(R"(SuitableTypes\s*\(\s*([^)]+)\s*\))");
         static const std::regex rxFlags(R"(Flags\s*\(\s*(\w+)\s*\))");
+        static const std::regex rxMove(R"(Move\s*\(\s*(-?\d+)\s*\))");
+        static const std::regex rxDefence(R"(Defence\s*\(\s*(-?\d+)\s*\))");
+        static const std::regex rxAttack(R"(Attack\s*\(\s*(-?\d+)\s*\))");
+        static const std::regex rxAttackPt(R"(AttackPT\s*\(\s*(-?\d+)\s*\))");
+        static const std::regex rxRange(R"(Range\s*\(\s*(-?\d+)\s*\))");
 
         if (std::regex_search(line, m, rxPrice))
             cur.price = std::stoi(m[1].str());
 
         if (std::regex_search(line, m, rxTime))
             cur.time = std::stoi(m[1].str());
+        if (std::regex_search(line, m, rxMove))
+            cur.move = std::stoi(m[1].str());
+        if (std::regex_search(line, m, rxDefence))
+            cur.defence = std::stoi(m[1].str());
+        if (std::regex_search(line, m, rxAttackPt))
+            cur.attackCount = std::stoi(m[1].str());
+        else if (std::regex_search(line, m, rxAttack))
+            cur.attack = std::stoi(m[1].str());
+        if (std::regex_search(line, m, rxRange))
+            cur.range = std::stoi(m[1].str());
 
         if (std::regex_search(line, m, rxFlags))
         {
@@ -7523,8 +7690,9 @@ bool StrategicLevelFrame::EnsureUpgradeDefsLoaded()
     // the Czech table because the restored UI uses the original CP895 font.
     for (const char* titleFile : { "UPGRADES.CZ", "UPGRADES.ENG" })
     {
-        const fs::path tp = defPath.parent_path() / titleFile;
-        std::ifstream tf(tp, std::ios::binary);
+        const fs::path tp = commonDir.empty() ? fs::path() : (commonDir / titleFile);
+        std::ifstream tf;
+        if (!tp.empty()) tf.open(tp, std::ios::binary);
         if (!tf)
             continue;
         std::string line;
@@ -8672,6 +8840,8 @@ void StrategicLevelFrame::BuildUnitsPage()
     m_unitsRoster->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
         // ItemData stores the original m_playerUnits index (not the expanded row index)
         m_unitsSelectedUnit = (int)m_unitsRoster->GetItemData(ev.GetIndex());
+        if (m_unitsSelectedUnit >= 0 && static_cast<size_t>(m_unitsSelectedUnit) < m_unitStates.size())
+            CancelPendingUnitOperation(static_cast<size_t>(m_unitsSelectedUnit), true);
         m_unitsSelectedRearmUnitId = -1;
 
         // Default selection for recruit quality.
@@ -8697,6 +8867,8 @@ void StrategicLevelFrame::BuildUnitsPage()
 
     m_unitsTempRoster->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent& ev) {
         m_unitsSelectedUnit = static_cast<int>(m_unitsTempRoster->GetItemData(ev.GetIndex()));
+        if (m_unitsSelectedUnit >= 0 && static_cast<size_t>(m_unitsSelectedUnit) < m_unitStates.size())
+            CancelPendingUnitOperation(static_cast<size_t>(m_unitsSelectedUnit), true);
         m_unitsSelectedRearmUnitId = -1;
         m_unitsSelectedUpgrade = (m_unitsCurrentTab == UNITS_TAB_RECRUIT) ? 1 : -1;
         RefreshUnitsShopList();
@@ -9293,11 +9465,27 @@ void StrategicLevelFrame::RefreshUnitsInfo(int unitIndex)
         info += wxString::Format("Experience: %d (Level %d)\n", xp, lvl);
     }
 
-    // Cooldown
+    // Cooldown / pending modification
     if (unitIndex < (int)m_unitStates.size() && m_unitStates[unitIndex].cooldown_turns > 0)
     {
-        info += wxString::Format("Status: Unavailable for %d turns\n",
-            m_unitStates[unitIndex].cooldown_turns);
+        const auto& st = m_unitStates[unitIndex];
+        info += wxString::Format("Status: Unavailable for %d turns\n", st.cooldown_turns);
+        if (st.pending_kind != 0)
+        {
+            const char* what = st.pending_kind == 1 ? "Recruitment" : st.pending_kind == 2 ? "Upgrade" : "Re-arm";
+            info += "Pending: " + wxString::FromUTF8(what);
+            if (st.pending_cancelable) info += " (click unit to cancel this turn)";
+            info += "\n";
+        }
+        const char* pendingNames[3] = { "Engine", "Weapon", "Armour" };
+        for (int slot = 0; slot < 3; ++slot)
+        {
+            if (st.pending_upgrade_id[slot] < 0) continue;
+            info += wxString::Format("Pending %s: #%d (%d turns)",
+                pendingNames[slot], st.pending_upgrade_id[slot], st.pending_upgrade_turns[slot]);
+            if (st.pending_upgrade_cancelable[slot]) info += " (cancelable this turn)";
+            info += "\n";
+        }
     }
     else
     {
@@ -9338,11 +9526,11 @@ void StrategicLevelFrame::RefreshUnitsInfo(int unitIndex)
             wxString upgLabel = "--default--";
             const bool restoredUnits = m_originalStrategicUi &&
                 m_originalStrategicScreen == OriginalStrategicScreen::Units;
-            if (m_unitsSelectedUpgrade > 0 &&
+            if (m_unitsSelectedUpgrade >= 0 &&
                 ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
             {
                 for (const auto& r : m_researchDb) {
-                    if (r.id == m_unitsSelectedUpgrade) { upgLabel = r.title; break; }
+                    if (r.data == m_unitsSelectedUpgrade) { upgLabel = r.title; break; }
                 }
             }
             m_unitsUpgradeValue->SetLabel(upgLabel);
@@ -9446,47 +9634,48 @@ void StrategicLevelFrame::RefreshUnitsActionButton()
         break;
 
     case UNITS_TAB_UPGRADE:
-        if (hasCooldown)
-        {
-            m_btnUnitsAction->Enable(false);
-            if (m_unitsTimeLabel) m_unitsTimeLabel->SetLabel("Time: -");
-            if (m_unitsCostLabel) m_unitsCostLabel->SetLabel("Cost: -");
-        }
-        else
-        {
-            // Two possible actions:
-            // 1) apply selected tech upgrade (m_unitsSelectedUpgrade holds upgradeId)
-            // 2) re-arm to selected unit type from m_unitsUpgradeChoice
-            bool can = false;
-            int cost = 0;
-            int time = 0;
+    {
+        bool can = false;
+        int cost = -1;
+        int time = -1;
+        const auto& st = m_unitStates[m_unitsSelectedUnit];
 
-            // Tech upgrade takes precedence if user selected one.
-            const bool restoredUnits = m_originalStrategicUi &&
-                m_originalStrategicScreen == OriginalStrategicScreen::Units;
-            if (m_unitsSelectedUpgrade > 0 &&
-                ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
+        const bool restoredUnits = m_originalStrategicUi &&
+            m_originalStrategicScreen == OriginalStrategicScreen::Units;
+        if (m_unitsSelectedUpgrade >= 0 &&
+            ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
+        {
+            const int upgId = m_unitsSelectedUpgrade;
+            cost = GetTechUpgradeCost(upgId);
+            time = GetTechUpgradeTime(upgId);
+            const bool installed = std::find(st.upgrades.begin(), st.upgrades.end(), upgId) != st.upgrades.end();
+            bool categoryBusy = false;
+            const auto defIt = m_upgradeDefs.find(upgId);
+            if (defIt != m_upgradeDefs.end() && defIt->second.kind != UpgradeDefRec::Unknown)
             {
-                int upgId = m_unitsSelectedUpgrade;
-                // Tech upgrades use price/time from UPGRADES.DEF
-                cost = GetTechUpgradeCost(upgId);
-                time = GetTechUpgradeTime(upgId);
-                can = (m_money >= cost);
+                const int slot = static_cast<int>(defIt->second.kind) - 1;
+                if (slot >= 0 && slot < 3)
+                    categoryBusy = st.pending_upgrade_id[slot] >= 0;
             }
-            else if (m_unitsSelectedRearmUnitId > 0)
-            {
-                int toUnitId = m_unitsSelectedRearmUnitId;
-                // Re-arm uses cost_upgrade from units.json
-                cost = GetUpgradeCost(u.unit_id, toUnitId);
-                time = GetUpgradeTime(toUnitId);
-                can = (cost >= 0 && m_money >= cost);  // allow cost 0 for same-tier re-arm
-            }
-
-            m_btnUnitsAction->Enable(can);
-            m_unitsTimeLabel->SetLabel(time > 0 ? wxString::Format(wxS("Time: %d"), time) : wxString(wxS("Time: -")));
-            m_unitsCostLabel->SetLabel(cost >= 0 ? wxString::Format(wxS("Cost: %d"), cost) : wxString(wxS("Cost: -")));
+            // Only recruit/re-arm blocks tech-upgrade ordering. Existing tech
+            // work in another category may run in parallel.
+            can = (st.pending_kind == 0 && cost >= 0 && time > 0 && !installed &&
+                !categoryBusy && m_money >= cost);
         }
+        else if (m_unitsSelectedRearmUnitId > 0)
+        {
+            const bool techBusy = st.pending_upgrade_id[0] >= 0 ||
+                st.pending_upgrade_id[1] >= 0 || st.pending_upgrade_id[2] >= 0;
+            cost = GetUpgradeCost(u.unit_id, m_unitsSelectedRearmUnitId);
+            time = GetUpgradeTime(m_unitsSelectedRearmUnitId);
+            can = (!hasCooldown && !techBusy && cost >= 0 && m_money >= cost);
+        }
+
+        m_btnUnitsAction->Enable(can);
+        m_unitsTimeLabel->SetLabel(time > 0 ? wxString::Format(wxS("Time: %d"), time) : wxString(wxS("Time: -")));
+        m_unitsCostLabel->SetLabel(cost >= 0 ? wxString::Format(wxS("Cost: %d"), cost) : wxString(wxS("Cost: -")));
         break;
+    }
 
     case UNITS_TAB_INFO:
         // OK acts as "close"
@@ -9541,9 +9730,15 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
         m_unitStates.push_back(state);
     }
 
-    // Block actions while on cooldown
+    // Recruitment and re-arm are exclusive operations.  Tech upgrades are
+    // different in the original: engine, weapon and armour may be ordered in
+    // parallel, so an upgrade-only cooldown must not block another category.
     if (m_unitStates[m_unitsSelectedUnit].cooldown_turns > 0 && m_unitsCurrentTab != UNITS_TAB_INFO)
-        return;
+    {
+        const auto& st = m_unitStates[m_unitsSelectedUnit];
+        if (m_unitsCurrentTab != UNITS_TAB_UPGRADE || st.pending_kind != 0)
+            return;
+    }
 
     switch (m_unitsCurrentTab)
     {
@@ -9564,22 +9759,14 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
             return;
         }
 
-        // Experience impact: Rookie reduces XP most, Veteran moderately, Elite keeps XP.
-        const int missing = 100 - u.health;
-        const double kLossFactor[RECRUIT_QUALITY_COUNT] = { 1.0, 0.5, 0.0 };
-
-        int& xp = m_unitStates[m_unitsSelectedUnit].experience;
-        int xpLoss = (int)std::lround((double)xp * (double)missing / 100.0 * kLossFactor[q]);
-        if (xpLoss < 0) xpLoss = 0;
-        if (xpLoss > xp) xpLoss = xp;
-
-        xp -= xpLoss;
-        m_unitStates[m_unitsSelectedUnit].level = GetUnitExperienceLevel(u.unit_id, xp);
-
-        // Restore to full strength, set cooldown.
-        u.health = 100;
-        m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
-
+        // The original keeps recruitment pending until its timer expires.
+        // During the purchase turn it can still be cancelled from the roster.
+        auto& st = m_unitStates[m_unitsSelectedUnit];
+        st.pending_kind = 1;
+        st.pending_value = q;
+        st.pending_cost = cost;
+        st.pending_cancelable = true;
+        st.cooldown_turns = time;
         m_money -= cost;
     }
     break;
@@ -9593,10 +9780,14 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
         // Option 1: tech upgrade selected
         const bool restoredUnits = m_originalStrategicUi &&
             m_originalStrategicScreen == OriginalStrategicScreen::Units;
-        if (m_unitsSelectedUpgrade > 0 &&
+        if (m_unitsSelectedUpgrade >= 0 &&
             ((m_unitsShopList && m_unitsShopList->GetSelectedItemCount() > 0) || restoredUnits))
         {
             const int upgId = m_unitsSelectedUpgrade;
+
+            const auto legalUpgrades = GetAvailableUpgradesForUnit(u.unit_id);
+            if (std::find(legalUpgrades.begin(), legalUpgrades.end(), upgId) == legalUpgrades.end())
+                return;
 
             // Use price/time from UPGRADES.DEF
             const int cost = GetTechUpgradeCost(upgId);
@@ -9620,18 +9811,28 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
                 return;
             }
             const auto newDef = m_upgradeDefs.find(upgId);
-            if (newDef != m_upgradeDefs.end() && newDef->second.kind != UpgradeDefRec::Unknown)
-            {
-                ups.erase(std::remove_if(ups.begin(), ups.end(), [&](int installedId) {
-                    const auto itInstalled = m_upgradeDefs.find(installedId);
-                    return itInstalled != m_upgradeDefs.end() &&
-                        itInstalled->second.kind == newDef->second.kind;
-                    }), ups.end());
-            }
+            if (newDef == m_upgradeDefs.end() || newDef->second.kind == UpgradeDefRec::Unknown)
+                return;
 
+            // STRUPG.QH explicitly allows one or more upgrades at one time.
+            // Keep one independent pending timer for Engine / Weapon / Armour.
+            // The unit lockout is the maximum remaining timer, never their sum.
+            auto& st = m_unitStates[m_unitsSelectedUnit];
+            const int slot = static_cast<int>(newDef->second.kind) - 1;
+            if (slot < 0 || slot >= 3)
+                return;
+            if (st.pending_upgrade_id[slot] >= 0)
+            {
+                wxMessageBox("An upgrade in this category is already being installed.",
+                    "Upgrade", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            st.pending_upgrade_id[slot] = upgId;
+            st.pending_upgrade_turns[slot] = time;
+            st.pending_upgrade_cost[slot] = cost;
+            st.pending_upgrade_cancelable[slot] = true;
+            st.cooldown_turns = std::max(st.cooldown_turns, time);
             m_money -= cost;
-            ups.push_back(upgId);
-            m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
             break;
         }
 
@@ -9640,6 +9841,15 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
             return;
 
         int toUnitId = m_unitsSelectedRearmUnitId;
+
+        auto& rearmState = m_unitStates[m_unitsSelectedUnit];
+        if (rearmState.pending_upgrade_id[0] >= 0 || rearmState.pending_upgrade_id[1] >= 0 ||
+            rearmState.pending_upgrade_id[2] >= 0)
+            return;
+
+        const auto legalRearms = GetAvailableUnitTypesForUpgrade(u.unit_id);
+        if (std::find(legalRearms.begin(), legalRearms.end(), toUnitId) == legalRearms.end())
+            return;
 
         // Re-arm uses cost_upgrade from units.json
         int cost = GetUpgradeCost(u.unit_id, toUnitId);
@@ -9663,41 +9873,15 @@ void StrategicLevelFrame::OnUnitsAction(wxCommandEvent&)
         if (result != wxYES)
             return;
 
+        // Original BIG_MAP.SAV stores the current type and pending re-arm type
+        // separately. Apply the type swap only when the timer completes.
+        auto& st = m_unitStates[m_unitsSelectedUnit];
+        st.pending_kind = 3;
+        st.pending_value = toUnitId;
+        st.pending_cost = cost;
+        st.pending_cancelable = true;
+        st.cooldown_turns = time;
         m_money -= cost;
-
-        // Re-arm: change unit type, drop all installed upgrades, reduce experience moderately.
-        u.unit_id = toUnitId;
-        m_unitStates[m_unitsSelectedUnit].upgrades.clear();
-
-        // Hierarchy slots store the visible company label as well as the UID.
-        // Keep an already assigned company in the same formation, but refresh
-        // its label to the newly re-armed type immediately.
-        const uint32_t rearmedUid = m_unitStates[m_unitsSelectedUnit].uid;
-        wxString rearmedDisplay = GetUnitDisplayName(toUnitId);
-        if (!m_unitStates[m_unitsSelectedUnit].custom_name.empty())
-            rearmedDisplay = wxString::FromUTF8(m_unitStates[m_unitsSelectedUnit].custom_name);
-        for (auto& hs : m_hierarchySlots)
-        {
-            if (hs.type == "unit" && hs.unit_uid == rearmedUid)
-            {
-                hs.unit_display = rearmedDisplay;
-                if (hs.label)
-                    hs.label->SetLabel(rearmedDisplay);
-            }
-            if (hs.type == "commander" && hs.assigned_unit_uid == rearmedUid)
-            {
-                hs.assigned_unit_display = rearmedDisplay;
-                UpdateCommanderHierarchyLabel(hs.id);
-            }
-        }
-
-        int& xp = m_unitStates[m_unitsSelectedUnit].experience;
-        int xpLoss = xp / 5; // -20%
-        xp -= xpLoss;
-        if (xp < 0) xp = 0;
-        m_unitStates[m_unitsSelectedUnit].level = GetUnitExperienceLevel(u.unit_id, xp);
-
-        m_unitStates[m_unitsSelectedUnit].cooldown_turns = time;
     }
     break;
 
@@ -9781,12 +9965,174 @@ void StrategicLevelFrame::OnUnitsDisband(wxCommandEvent&)
         m_unitsLblMoneyValue->SetLabel(wxString::Format("%d", m_money));
 }
 
+void StrategicLevelFrame::CompletePendingUnitOperation(size_t unitIndex)
+{
+    if (unitIndex >= m_unitStates.size() || unitIndex >= m_playerUnits.size())
+        return;
+
+    auto& st = m_unitStates[unitIndex];
+    auto& u = m_playerUnits[unitIndex];
+    if (st.pending_kind == 1)
+    {
+        const int q = std::clamp(st.pending_value, 0, RECRUIT_QUALITY_COUNT - 1);
+        const int missing = 100 - std::clamp(u.health, 0, 100);
+        const double kLossFactor[RECRUIT_QUALITY_COUNT] = { 1.0, 0.5, 0.0 };
+        int xpLoss = (int)std::lround((double)st.experience * (double)missing / 100.0 * kLossFactor[q]);
+        xpLoss = std::clamp(xpLoss, 0, st.experience);
+        st.experience -= xpLoss;
+        st.level = GetUnitExperienceLevel(u.unit_id, st.experience);
+        u.health = 100;
+    }
+    else if (st.pending_kind == 2)
+    {
+        EnsureUpgradeDefsLoaded();
+        const int upgId = st.pending_value;
+        const auto newDef = m_upgradeDefs.find(upgId);
+        if (newDef != m_upgradeDefs.end())
+        {
+            st.upgrades.erase(std::remove_if(st.upgrades.begin(), st.upgrades.end(), [&](int installedId) {
+                const auto itInstalled = m_upgradeDefs.find(installedId);
+                return itInstalled != m_upgradeDefs.end() &&
+                    itInstalled->second.kind == newDef->second.kind;
+                }), st.upgrades.end());
+            if (std::find(st.upgrades.begin(), st.upgrades.end(), upgId) == st.upgrades.end())
+                st.upgrades.push_back(upgId);
+        }
+    }
+    else if (st.pending_kind == 3)
+    {
+        const int toUnitId = st.pending_value;
+        if (toUnitId >= 0)
+        {
+            u.unit_id = toUnitId;
+            st.upgrades.clear();
+            st.experience = std::max(0, st.experience - st.experience / 5);
+            st.level = GetUnitExperienceLevel(u.unit_id, st.experience);
+
+            const uint32_t rearmedUid = st.uid;
+            wxString display = GetUnitDisplayName(toUnitId);
+            if (!st.custom_name.empty()) display = wxString::FromUTF8(st.custom_name);
+            for (auto& hs : m_hierarchySlots)
+            {
+                if (hs.type == "unit" && hs.unit_uid == rearmedUid)
+                {
+                    hs.unit_display = display;
+                    if (hs.label) hs.label->SetLabel(display);
+                }
+                if (hs.type == "commander" && hs.assigned_unit_uid == rearmedUid)
+                {
+                    hs.assigned_unit_display = display;
+                    UpdateCommanderHierarchyLabel(hs.id);
+                }
+            }
+        }
+    }
+
+    st.pending_kind = 0;
+    st.pending_value = -1;
+    st.pending_cost = 0;
+    st.pending_cancelable = false;
+}
+
+bool StrategicLevelFrame::CancelPendingUnitOperation(size_t unitIndex, bool askConfirmation)
+{
+    if (unitIndex >= m_unitStates.size()) return false;
+    auto& st = m_unitStates[unitIndex];
+
+    bool canCancel = st.pending_kind != 0 && st.pending_cancelable;
+    for (int slot = 0; slot < 3; ++slot)
+        canCancel = canCancel || (st.pending_upgrade_id[slot] >= 0 && st.pending_upgrade_cancelable[slot]);
+    if (!canCancel) return false;
+
+    if (askConfirmation)
+    {
+        const int r = wxMessageBox(L"Zrušit úpravy objednané v tomto kole a vrátit peníze?",
+            L"Úprava jednotky", wxYES_NO | wxICON_QUESTION, this);
+        if (r != wxYES) return false;
+    }
+
+    if (st.pending_kind != 0 && st.pending_cancelable)
+    {
+        m_money += std::max(0, st.pending_cost);
+        st.pending_kind = 0;
+        st.pending_value = -1;
+        st.pending_cost = 0;
+        st.pending_cancelable = false;
+    }
+    for (int slot = 0; slot < 3; ++slot)
+    {
+        if (st.pending_upgrade_id[slot] >= 0 && st.pending_upgrade_cancelable[slot])
+        {
+            m_money += std::max(0, st.pending_upgrade_cost[slot]);
+            st.pending_upgrade_id[slot] = -1;
+            st.pending_upgrade_turns[slot] = 0;
+            st.pending_upgrade_cost[slot] = 0;
+            st.pending_upgrade_cancelable[slot] = false;
+        }
+    }
+
+    int remaining = (st.pending_kind != 0) ? st.cooldown_turns : 0;
+    for (int slot = 0; slot < 3; ++slot)
+        remaining = std::max(remaining, st.pending_upgrade_turns[slot]);
+    st.cooldown_turns = remaining;
+
+    SaveStrategicState();
+    RefreshUI();
+    return true;
+}
+
 void StrategicLevelFrame::ApplyUnitsCooldownTick()
 {
-    for (auto& state : m_unitStates)
+    for (size_t i = 0; i < m_unitStates.size(); ++i)
     {
-        if (state.cooldown_turns > 0)
-            state.cooldown_turns--;
+        auto& st = m_unitStates[i];
+
+        // Recruitment / re-arm (and legacy single-upgrade saves) remain one
+        // exclusive operation using cooldown_turns. New tech upgrades use the
+        // three independent category timers below.
+        if (st.pending_kind != 0)
+        {
+            st.pending_cancelable = false;
+            if (st.cooldown_turns > 0)
+                --st.cooldown_turns;
+            if (st.cooldown_turns == 0)
+                CompletePendingUnitOperation(i);
+            continue;
+        }
+
+        EnsureUpgradeDefsLoaded();
+        for (int slot = 0; slot < 3; ++slot)
+        {
+            if (st.pending_upgrade_id[slot] < 0)
+                continue;
+            st.pending_upgrade_cancelable[slot] = false;
+            if (st.pending_upgrade_turns[slot] > 0)
+                --st.pending_upgrade_turns[slot];
+            if (st.pending_upgrade_turns[slot] > 0)
+                continue;
+
+            const int upgId = st.pending_upgrade_id[slot];
+            const auto newDef = m_upgradeDefs.find(upgId);
+            if (newDef != m_upgradeDefs.end())
+            {
+                st.upgrades.erase(std::remove_if(st.upgrades.begin(), st.upgrades.end(), [&](int installedId) {
+                    const auto itInstalled = m_upgradeDefs.find(installedId);
+                    return itInstalled != m_upgradeDefs.end() &&
+                        itInstalled->second.kind == newDef->second.kind;
+                    }), st.upgrades.end());
+                if (std::find(st.upgrades.begin(), st.upgrades.end(), upgId) == st.upgrades.end())
+                    st.upgrades.push_back(upgId);
+            }
+            st.pending_upgrade_id[slot] = -1;
+            st.pending_upgrade_turns[slot] = 0;
+            st.pending_upgrade_cost[slot] = 0;
+            st.pending_upgrade_cancelable[slot] = false;
+        }
+
+        int remaining = 0;
+        for (int slot = 0; slot < 3; ++slot)
+            remaining = std::max(remaining, st.pending_upgrade_turns[slot]);
+        st.cooldown_turns = remaining;
     }
 }
 
@@ -10019,8 +10365,8 @@ int StrategicLevelFrame::GetTechUpgradeCost(int upgradeId) const
     if (it != m_upgradeDefs.end())
         return it->second.price;
 
-    // Fallback: default cost
-    return 10;
+    // Unknown definition must not silently become a purchasable fake upgrade.
+    return -1;
 }
 
 int StrategicLevelFrame::GetTechUpgradeTime(int upgradeId) const
@@ -10030,8 +10376,7 @@ int StrategicLevelFrame::GetTechUpgradeTime(int upgradeId) const
     if (it != m_upgradeDefs.end())
         return std::max(1, it->second.time);
 
-    // Fallback: default time
-    return 1;
+    return 0;
 }
 
 // Helper: get unit class category from JEDNOTKY.DEF (utype field)
@@ -10096,6 +10441,7 @@ bool StrategicLevelFrame::CanUpgradeUnitTo(int fromUnitId, int toUnitId) const
 std::vector<int> StrategicLevelFrame::GetAvailableUpgradesForUnit(int unitId) const
 {
     std::vector<int> result;
+    EnsureUpgradeDefsLoaded();
 
     // RESEARCH.DEF UpgradeItem::Data() points at the real UPGRADES.DEF id.
     // Earlier restored builds accidentally used the research-item id itself,
@@ -10109,7 +10455,9 @@ std::vector<int> StrategicLevelFrame::GetAvailableUpgradesForUnit(int unitId) co
 
         const int upgradeId = (r.data >= 0) ? r.data : r.id;
         const auto def = m_upgradeDefs.find(upgradeId);
-        if (def != m_upgradeDefs.end() && !def->second.suitableTypes.empty() &&
+        // UPGRADES.DEF is authoritative. Missing definition/suitability means
+        // unavailable, never "compatible with everything".
+        if (def == m_upgradeDefs.end() || def->second.suitableTypes.empty() ||
             !def->second.suitableTypes.count(unitId))
             continue;
         if (std::find(result.begin(), result.end(), upgradeId) == result.end())
@@ -10127,23 +10475,41 @@ std::vector<int> StrategicLevelFrame::GetAvailableUnitTypesForUpgrade(int unitId
     if (!m_spellData || !m_spellData->units)
         return result;
 
-    // Use GetUnitCategoryName() which now prefers units.json categories
-    // This works correctly in both Game mode and Editor mode.
-    wxString currentCat = GetUnitCategoryName(unitId);
-    if (currentCat.empty() || currentCat == "Other" || currentCat == "Unknown")
+    // Canonical original weapon groups used by re-armament.  The catch-all
+    // "Other" bucket in units.json is a BUY-screen convenience, not a weapon
+    // class: Hummer, radar and Mi-24 must not become mutually convertible.
+    auto rearmGroup = [](int id) -> int
+    {
+        if (id >= 0 && id <= 9) return 1;                         // Infantry
+        if ((id >= 10 && id <= 14) || id == 17 ||
+            id == 35 || id == 36 || id == 73) return 2;           // Tanks
+        if (id == 15 || id == 16 || (id >= 18 && id <= 20) ||
+            id == 33 || id == 34) return 3;                       // Transporters
+        if (id >= 21 && id <= 23) return 4;                       // Anti-aircraft
+        if (id >= 24 && id <= 28) return 5;                       // Artillery
+        if (id == 30 || id == 31) return 6;                       // Radars
+        return 0;                                                  // No re-arm group
+    };
+
+    const int group = rearmGroup(unitId);
+    if (group == 0)
         return result;
 
-    // Find all units in the same category that are different
-    for (int i = 0; i < m_spellData->units->Count(); i++)
+    for (int i = 0; i < m_spellData->units->Count(); ++i)
     {
-        if (i == unitId)
+        if (i == unitId || rearmGroup(i) != group)
             continue;
 
-        wxString cat = GetUnitCategoryName(i);
-        if (cat != currentCat)
+        // Target must still be a normal strategic Alliance unit and must be
+        // available at this point in the campaign. This excludes Renegades,
+        // commanders, convoys and every scenario-only actor even if their raw
+        // JEDNOTKY.DEF combat class resembles the source unit.
+        const auto cat = m_unitCategories.find(i);
+        if (cat == m_unitCategories.end() || cat->second.empty() ||
+            cat->second == "Other Side units")
             continue;
-
-        // In Game mode: also check if unit is unlocked via research flags
+        if (GetUnitBuyCost(i) <= 0)
+            continue;
         if (m_gameModeEnabled && !IsCampaignUnitUnlocked(i))
             continue;
 
@@ -12229,6 +12595,20 @@ std::vector<LevelData::PlayerUnitAdd> StrategicLevelFrame::GetSelectedUnitsForLa
                     add.formation_defence_bonus = formation.defence_bonus;
                     add.formation_commander_mask = formation.commander_host_mask;
                     add.carries_commander = formation.carries_commander;
+                    if (pIdx < m_unitStates.size())
+                    {
+                        EnsureUpgradeDefsLoaded();
+                        for (int upgradeId : m_unitStates[pIdx].upgrades)
+                        {
+                            const auto itUpg = m_upgradeDefs.find(upgradeId);
+                            if (itUpg == m_upgradeDefs.end()) continue;
+                            add.upgrade_move_bonus += itUpg->second.move;
+                            add.upgrade_defence_bonus += itUpg->second.defence;
+                            add.upgrade_attack_bonus += itUpg->second.attack;
+                            add.upgrade_attack_count_bonus += itUpg->second.attackCount;
+                            add.upgrade_range_bonus += itUpg->second.range;
+                        }
+                    }
                     result.push_back(add);
                 }
             }
@@ -15253,6 +15633,31 @@ static bool LoadStrategicStateFile(
                     (void)ParseJsonIntField(obj, "cooldown", st.cooldown_turns);
                     (void)ParseJsonIntField(obj, "experience", st.experience);
                     (void)ParseJsonIntField(obj, "level", st.level);
+                    (void)ParseJsonIntField(obj, "pending_kind", st.pending_kind);
+                    (void)ParseJsonIntField(obj, "pending_value", st.pending_value);
+                    (void)ParseJsonIntField(obj, "pending_cost", st.pending_cost);
+                    {
+                        std::smatch mp;
+                        std::regex pending_cancel_re(R"("pending_cancelable"\s*:\s*(true|false))",
+                            std::regex_constants::ECMAScript | std::regex_constants::icase);
+                        if (std::regex_search(obj, mp, pending_cancel_re) && mp.size() > 1)
+                            st.pending_cancelable = (to_lower(mp[1].str()) == "true");
+                    }
+                    const char* slotNames[3] = { "engine", "weapon", "armor" };
+                    for (int slot = 0; slot < 3; ++slot)
+                    {
+                        const std::string keyId = std::string("pending_") + slotNames[slot] + "_id";
+                        const std::string keyTurns = std::string("pending_") + slotNames[slot] + "_turns";
+                        const std::string keyCost = std::string("pending_") + slotNames[slot] + "_cost";
+                        (void)ParseJsonIntField(obj, keyId.c_str(), st.pending_upgrade_id[slot]);
+                        (void)ParseJsonIntField(obj, keyTurns.c_str(), st.pending_upgrade_turns[slot]);
+                        (void)ParseJsonIntField(obj, keyCost.c_str(), st.pending_upgrade_cost[slot]);
+                        std::smatch mu;
+                        std::regex cre(std::string("\"") + "pending_" + slotNames[slot] + "_cancelable\"\\s*:\\s*(true|false)",
+                            std::regex_constants::ECMAScript | std::regex_constants::icase);
+                        if (std::regex_search(obj, mu, cre) && mu.size() > 1)
+                            st.pending_upgrade_cancelable[slot] = (to_lower(mu[1].str()) == "true");
+                    }
                     (void)ParseJsonStringField(obj, "custom_name", st.custom_name);
                     {
                         std::smatch mt;
@@ -15615,6 +16020,23 @@ static void SaveStrategicStateFile(
             f << ", \"experience\": " << st.experience;
             f << ", \"level\": " << st.level;
             f << ", \"temporary\": " << (st.temporary ? "true" : "false");
+            if (st.pending_kind != 0)
+            {
+                f << ", \"pending_kind\": " << st.pending_kind;
+                f << ", \"pending_value\": " << st.pending_value;
+                f << ", \"pending_cost\": " << st.pending_cost;
+                f << ", \"pending_cancelable\": " << (st.pending_cancelable ? "true" : "false");
+            }
+            const char* saveSlotNames[3] = { "engine", "weapon", "armor" };
+            for (int slot = 0; slot < 3; ++slot)
+            {
+                if (st.pending_upgrade_id[slot] < 0) continue;
+                f << ", \"pending_" << saveSlotNames[slot] << "_id\": " << st.pending_upgrade_id[slot];
+                f << ", \"pending_" << saveSlotNames[slot] << "_turns\": " << st.pending_upgrade_turns[slot];
+                f << ", \"pending_" << saveSlotNames[slot] << "_cost\": " << st.pending_upgrade_cost[slot];
+                f << ", \"pending_" << saveSlotNames[slot] << "_cancelable\": "
+                  << (st.pending_upgrade_cancelable[slot] ? "true" : "false");
+            }
             if (!st.custom_name.empty())
                 f << ", \"custom_name\": \"" << EscapeJson(st.custom_name) << "\"";
             if (!st.upgrades.empty())
@@ -15814,12 +16236,7 @@ bool StrategicLevelFrame::LoadOriginalBigMapSaveFromPath(
         const int pendingType = static_cast<int>(static_cast<int8_t>(raw[off + 62])) - 1;
         const int upgradeTimeout = static_cast<int>(static_cast<int8_t>(raw[off + 44]));
         if (pendingType >= 0)
-        {
-            // Our strategic re-arm model changes the type immediately and then
-            // keeps the company on cooldown. Mirror that representation.
-            unitType = pendingType;
             ++pendingRearms;
-        }
 
         const int hp = static_cast<int>(raw[off + 42]);
         const int hpMax = static_cast<int>(raw[off + 43]);
@@ -15851,6 +16268,13 @@ bool StrategicLevelFrame::LoadOriginalBigMapSaveFromPath(
         state.level = add.experience_level;
         state.custom_name = OriginalCp895ToUtf8(rawName);
         state.temporary = ((flags & 0x01) == 0) || ((flags & 0x02) != 0);
+        if (pendingType >= 0)
+        {
+            state.pending_kind = 3;
+            state.pending_value = pendingType;
+            state.pending_cost = 0; // original save does not expose/refund the already-paid amount here
+            state.pending_cancelable = false;
+        }
 
         const int engine = static_cast<int>(static_cast<int8_t>(raw[off + 48])) - 1;
         const int armor = static_cast<int>(static_cast<int8_t>(raw[off + 50])) - 1;
@@ -16092,8 +16516,8 @@ bool StrategicLevelFrame::LoadOriginalBigMapSaveFromPath(
         if (pendingRearms > 0)
         {
             if (repairedCommanderNames > 0) ss << " ";
-            ss << "Converted " << pendingRearms
-               << " pending re-arm operation(s) to the remake cooldown model.";
+            ss << "Preserved " << pendingRearms
+               << " pending re-arm operation(s) from the original save.";
         }
         *warning = ss.str();
     }

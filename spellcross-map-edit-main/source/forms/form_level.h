@@ -85,6 +85,8 @@ public:
     void OnUnitsDisband(wxCommandEvent& ev);
     void OnUnitsTabChange(int tab);
     void ApplyUnitsCooldownTick();  // Called at end of turn
+    void CompletePendingUnitOperation(size_t unitIndex);
+    bool CancelPendingUnitOperation(size_t unitIndex, bool askConfirmation);
     int GetRecruitCost(int unitIndex, int quality) const;
     int GetRecruitTime(int quality) const;
     int GetUnitExperienceLevel(int unitId, int experience) const;
@@ -97,7 +99,7 @@ public:
     int GetUpgradeTime(int upgradeId) const;              // re-arm time
     int GetTechUpgradeCost(int upgradeId) const;          // tech upgrade cost (from UPGRADES.DEF)
     int GetTechUpgradeTime(int upgradeId) const;          // tech upgrade time (from UPGRADES.DEF)
-    bool EnsureUpgradeDefsLoaded();                       // load UPGRADES.DEF
+    bool EnsureUpgradeDefsLoaded() const;                 // load UPGRADES.DEF
     wxString GetUnitCategoryName(int unitId) const;
     bool CanUpgradeUnitTo(int fromUnitId, int toUnitId) const;
     std::vector<int> GetAvailableUpgradesForUnit(int unitId) const;
@@ -477,12 +479,17 @@ public:
         int id = -1;
         int price = 0;
         int time = 1;
+        int move = 0;
+        int defence = 0;
+        int attack = 0;
+        int attackCount = 0; // UPGRADES.DEF AttackPT()
+        int range = 0;
         Kind kind = Unknown;
         wxString title;
         std::set<int> suitableTypes; // unit type_ids this upgrade applies to
     };
-    std::unordered_map<int, UpgradeDefRec> m_upgradeDefs;
-    bool m_upgradeDefsLoaded = false;
+    mutable std::unordered_map<int, UpgradeDefRec> m_upgradeDefs;
+    mutable bool m_upgradeDefsLoaded = false;
 
     // Game mode (campaign progression)
     bool m_gameModeEnabled = false;
@@ -922,6 +929,20 @@ public:
         int level = 0;                 // unit level (derived from experience)
         std::string custom_name;       // player-assigned name
         bool temporary = false;        // support unit: valid only for the current strategic level
+        // Original game keeps modifications pending until their timer expires.
+        // They may be cancelled before the first strategic end-turn after purchase.
+        int pending_kind = 0;          // 0 none, 1 recruit, 2 legacy tech upgrade, 3 re-arm
+        int pending_value = -1;        // recruit quality / legacy upgrade id / target unit id
+        int pending_cost = 0;          // refunded on same-turn cancellation
+        bool pending_cancelable = false;
+
+        // Original STRUPG allows one engine, weapon and armour modification to
+        // be ordered in parallel.  Their timers run independently; the unit is
+        // unavailable for the longest remaining timer, not the sum.
+        int pending_upgrade_id[3] = { -1, -1, -1 };
+        int pending_upgrade_turns[3] = { 0, 0, 0 };
+        int pending_upgrade_cost[3] = { 0, 0, 0 };
+        bool pending_upgrade_cancelable[3] = { false, false, false };
     };
     std::vector<UnitInstanceState> m_unitStates;
 

@@ -153,6 +153,16 @@ private:
                            const std::vector<std::uint8_t>& src,
                            int srcW,
                            int srcH);
+    // Composite the original DOS strategic list chrome from COMMON.FS.
+    // SB_BG* contains the CRT surface, metal surround and normal arrow buttons;
+    // SB_BAR* is the original metal scrollbar track. No procedural substitute.
+    static bool BlitListChrome(const AssetLoader& load,
+                               std::vector<std::uint8_t>& dst,
+                               const char* bgName,
+                               int bgH,
+                               const char* barName,
+                               int barH,
+                               std::string* error);
     static void GenerateHatch(const std::vector<std::uint8_t>& territoryMask,
                               int w,
                               int h,

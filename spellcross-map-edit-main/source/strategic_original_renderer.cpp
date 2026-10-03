@@ -157,6 +157,36 @@ void StrategicOriginalRenderer::BlitOpaque(std::vector<std::uint8_t>& dst,
     }
 }
 
+bool StrategicOriginalRenderer::BlitListChrome(const AssetLoader& load,
+                                                 std::vector<std::uint8_t>& dst,
+                                                 const char* bgName,
+                                                 int bgH,
+                                                 const char* barName,
+                                                 int barH,
+                                                 std::string* error)
+{
+    // Pixel-perfect positions measured against original 640x480 captures.
+    // Every strategic list starts at (412,5).  The 22 px normal arrow wells
+    // are already baked into SB_BG*.  The textured 16 px shaft starts at
+    // (556,33), directly between the two original arrow buttons.
+    constexpr int kBgX = 412;
+    constexpr int kBgY = 5;
+    constexpr int kBgW = 163;
+    constexpr int kBarX = 556;
+    constexpr int kBarY = 33;
+    constexpr int kBarW = 16;
+
+    std::vector<std::uint8_t> bg, bar;
+    if(!LoadExact(load, bgName, static_cast<std::size_t>(kBgW) * bgH, bg, error))
+        return false;
+    if(!LoadExact(load, barName, static_cast<std::size_t>(kBarW) * barH, bar, error))
+        return false;
+
+    BlitOpaque(dst, kScreenW, kScreenH, kBgX, kBgY, bg, kBgW, bgH);
+    BlitOpaque(dst, kScreenW, kScreenH, kBarX, kBarY, bar, kBarW, barH);
+    return true;
+}
+
 bool StrategicOriginalRenderer::DecodeClk(const std::vector<std::uint8_t>& bytes,
                                            int& outW,
                                            int& outH,
@@ -359,6 +389,7 @@ bool StrategicOriginalRenderer::RenderStrategicMap(const AssetLoader& load,
     // Exact original strategic-map subpanels found by matching against reference.
     BlitOpaque(canvas, kScreenW, kScreenH, 6, 298, lst2, 406, 174);
     BlitOpaque(canvas, kScreenW, kScreenH, 412, 434, lst1, 163, 41);
+    if(!BlitListChrome(load, canvas, "SB_BG01.LZ", 429, "SB_BAR01.LZ", 373, error)) return false;
 
     // Convert the indexed framebuffer once. No layout manager touches coordinates.
     out.width = kScreenW;
@@ -433,6 +464,7 @@ bool StrategicOriginalRenderer::RenderHierarchy(const AssetLoader& load,
     std::vector<std::uint8_t> canvas = bigMap;
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmh, kScreenSpecificW, kScreenH);
     BlitOpaque(canvas, kScreenW, kScreenH, 6, 8, hierarchy, 406, 464);
+    if(!BlitListChrome(load, canvas, "SB_BG02.LZ", 472, "SB_BAR02.LZ", 417, error)) return false;
 
     out.width = kScreenW;
     out.height = kScreenH;
@@ -482,6 +514,7 @@ bool StrategicOriginalRenderer::RenderUnits(const AssetLoader& load,
     // These two resources are the original dynamic lower-right unit panel.
     BlitOpaque(canvas, kScreenW, kScreenH, 334, 292, infoPanel, 241, 141);
     BlitOpaque(canvas, kScreenW, kScreenH, 421, 434, actionStrip, 154, 41);
+    if(!BlitListChrome(load, canvas, "SB_BG03.LZ", 287, "SB_BAR03.LZ", 231, error)) return false;
 
     out.width = kScreenW;
     out.height = kScreenH;
@@ -535,6 +568,7 @@ bool StrategicOriginalRenderer::RenderBuy(const AssetLoader& load,
     // exposed from VMB_FULL as a solid black seam above the action strip.
     BlitOpaque(canvas, kScreenW, kScreenH, 334, 292, infoPanel, 241, 141);
     BlitOpaque(canvas, kScreenW, kScreenH, 412, 434, actionStrip, 163, 41);
+    if(!BlitListChrome(load, canvas, "SB_BG04.LZ", 287, "SB_BAR03.LZ", 231, error)) return false;
 
     // BUY.LZ contains all 32 permanent-unit slots and 14 commander slots in
     // their unlocked form. The original game darkens the part unavailable at
@@ -589,6 +623,7 @@ bool StrategicOriginalRenderer::RenderResearch(const AssetLoader& load,
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmr, kScreenSpecificW, kScreenH);
     BlitOpaque(canvas, kScreenW, kScreenH, 6, 8, researchBg, 406, 464);
     BlitOpaque(canvas, kScreenW, kScreenH, 277, 431, actionStrip, 120, 40);
+    if(!BlitListChrome(load, canvas, "SB_BG02.LZ", 472, "SB_BAR02.LZ", 417, error)) return false;
 
     out.width = kScreenW;
     out.height = kScreenH;
@@ -621,6 +656,7 @@ bool StrategicOriginalRenderer::RenderInfo(const AssetLoader& load,
     std::vector<std::uint8_t> canvas = bigMap;
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 0, vmi, kScreenSpecificW, kScreenH);
     BlitOpaque(canvas, kScreenW, kScreenH, 0, 8, infoBg, 412, 464);
+    if(!BlitListChrome(load, canvas, "SB_BG02.LZ", 472, "SB_BAR02.LZ", 417, error)) return false;
 
     out.width = kScreenW;
     out.height = kScreenH;
