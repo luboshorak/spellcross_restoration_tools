@@ -19522,10 +19522,12 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     // --- 2) Sync unit health / damage / deaths back to player roster ---
     // Only touch roster entries that were actually sent to the mission (sent_unit_indices).
     const auto& sent = m_pendingMission.sent_unit_indices;
-    if (sent.empty() && m_pendingMission.sent_unit_uids.empty())
-    {
-        return mission_enemy_losses;
-    }
+
+    // Do not return early when no roster company was explicitly deployed.
+    // Some missions can award an ArmyUnit/VoluntUnit entirely through mission
+    // events; those survivors still need to be processed by the persistence
+    // block below.  An empty `sent` list simply means there is no existing
+    // strategic company whose damage/death must be synchronized.
 
     // Build ordered list of surviving alliance units from the tactical map
     std::vector<MapUnit*> survivors;

@@ -130,6 +130,14 @@ public:
     int m_mission_result_input_guard = 0;
     SpellMap::MissionLossStats m_mission_result_stats;
 
+    // Snapshot of mission-created persistent Alliance companies captured at the
+    // exact mission-end tick.  The tactical simulation must not be allowed to
+    // change these units while the result/debrief/cutscene flow is on screen.
+    // This is especially important for M01_01A: the rescued Commando is an
+    // ArmyUnit and must survive into LEVEL_02 even though enemies may remain on
+    // the map when Alexander reaches the escape square.
+    std::vector<LevelData::PlayerUnitAdd> m_mission_earned_units;
+
     // Editor is locked by default (game mode UI). Console command GAMEMODEOFF unlocks it.
     bool m_editor_unlocked = false;
     void UpdateMenuForGameMode();
