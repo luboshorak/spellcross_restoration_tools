@@ -1,0 +1,20 @@
+Stage 6.61 verification checklist
+
+Static checks performed:
+- stale strategic context guard exists before OnTimer mission-end enrichment
+- stale strategic context guard exists in OpenStrategicAndLoadNext
+- New Game destroys previous StrategicLevelFrame before loading M01_01A
+- tactical save loader destroys previous strategy when no matching campaign context was restored
+- mission family normalization maps M01_01A and M01_01 to M01_01
+- LEVEL_01 next level remains derived by LevelLoader as LEVEL_02.DEF
+- Stage 6.60 ArmyUnit carry-over code is unchanged
+
+Runtime regression tests on Windows:
+1. Load a LEVEL_05 strategic save.
+2. Return/open main menu and choose New Game.
+3. Finish M01_01A while keeping the palisade commando alive.
+4. Confirm the expected LEVEL_01 ending flow and transition to LEVEL_02, never LEVEL_05.
+5. Confirm the commando is present in the LEVEL_02 strategic roster.
+6. Confirm blue-striped MissionUnit infantry are not present in the strategic roster.
+7. Launch a normal mission from LEVEL_05 strategic and finish it; confirm it returns to LEVEL_05 rather than being treated as standalone.
+8. Load a tactical .scsave with embedded strategic context; finish it and confirm it returns to the embedded campaign level.

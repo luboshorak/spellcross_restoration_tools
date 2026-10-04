@@ -49,17 +49,36 @@ SoundChannels::SoundChannels(int count)
 // close stream channels
 SoundChannels::~SoundChannels()
 {
-    // loose all stream channels
+    // Tear audio streams down without allowing a broken/stalled backend to
+    // keep the whole process alive forever during application shutdown.
+    // Normally the fake stream-time marker makes the callback exit almost
+    // immediately.  Older code waited here with no timeout at all.
     for(auto& chn : channels)
     {
-        // signalize stop to eventually running callback
+        if(!chn)
+            continue;
+
         chn->setStreamTime(FAKE_STOP_TIME_MARK*2.0);
-        // wait to actually stop
-        while(chn->isStreamRunning())
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while(chn->isStreamRunning() && std::chrono::steady_clock::now() < deadline)
             this_thread::sleep_for(10ms);
-        chn->closeStream();
-        // delete it
+
+        if(chn->isStreamRunning())
+        {
+            // Do not call abortStream()/closeStream()/delete on a backend that
+            // has already failed to stop: the Windows RtAudio implementations
+            // can themselves wait indefinitely for the callback thread.  This
+            // is a shutdown-only escape hatch; the OS reclaims the deliberately
+            // leaked backend object when the process exits.
+            chn = nullptr;
+            continue;
+        }
+
+        if(chn->isStreamOpen())
+            chn->closeStream();
         delete chn;
+        chn = nullptr;
     }
     channels.clear();
 }

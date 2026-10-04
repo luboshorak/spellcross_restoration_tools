@@ -1,0 +1,36 @@
+Stage 6.58 / v28 verification
+
+Source pack:
+  MOVIE.zip supplied by user / Maslan Spellcross-Mod-CZ-Hard conversions
+  SMK files found: 37
+
+Fallback pack:
+  MP4 files generated: 37
+  video: H.264/AVC, yuv420p, 320x200
+  audio: AAC-LC mono
+  frame cadence: source Smacker cadence preserved with ffmpeg -fps_mode passthrough
+
+Automated ffprobe comparison for every source SMK -> fallback MP4:
+  - same width/height: PASS 37/37
+  - same nominal video frame rate: PASS 37/37
+  - exact decoded video frame count: PASS 37/37
+  - total duration within 0.002 s: PASS 37/37
+  - H.264 video + AAC audio present: PASS 37/37
+
+Special regression cases covered by basename mapping:
+  INTRO.CAN  -> data/movie_fallback/INTRO.mp4
+  L_01.CAN   -> data/movie_fallback/L_01.mp4
+  CAN/SMK special cutscenes present in supplied pack include KEFTACI, MAG,
+  RUJNY_T, SAMOSEC, STUDNA, TITAN1 and TITAN2.
+
+Code-path review:
+  - CAN/SMK prefer native Windows MFPlay fallback.
+  - DPK/DP2 retain original decoder first, then fallback on load/decode failure.
+  - existing close/completion event semantics retained.
+  - build post-step copies movie_fallback into $(OutDir)\\data\\movie_fallback.
+
+Environment limitation:
+  The container has no Visual Studio/wxWidgets Windows toolchain, so the final
+  MFPlay link/runtime smoke test must be performed on the normal Windows build
+  machine. The source explicitly links mfplay/mfplat/mfuuid/ole32 via MSVC
+  pragma comments and uses Windows 10 SDK headers already targeted by the project.

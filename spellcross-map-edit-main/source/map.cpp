@@ -1647,9 +1647,12 @@ int SpellMap::IsLoaded()
 // cleanup MAP data
 void SpellMap::Close()
 {
-	// lock map before doing anything
-	LockMap();
+	// Stop asynchronous range/view workers BEFORE taking the map mutex.
+	// The old order held map_lock while waiting for workers to become idle,
+	// which is exactly the wrong shutdown ordering if a worker (now or after a
+	// future change) needs map data protected by the same lock.
 	HaltUnitRanging(true);
+	LockMap();
 	is_valid = false;
 
 	// these must go before touching anything else as they are async!
@@ -3615,12 +3618,29 @@ MapSounds::~MapSounds()
 void MapSounds::ClearSounds()
 {
 	for (auto& snd : list)
-		snd->Stop();
+		if (snd)
+			snd->Stop();
+
+	// Audio callbacks normally acknowledge CTRL_STOP immediately.  Do not let
+	// a wedged audio backend turn map/application shutdown into an infinite
+	// wait with every window already gone.  Use one bounded grace period for
+	// all loops, then deliberately keep any still-running SpellSound allocated
+	// so its callback cannot dereference freed memory.  The OS will reclaim it
+	// at process exit; during runtime this path is only reached if audio is
+	// already non-responsive.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	for (auto& snd : list)
 	{
-		while (!snd->isDone())
-			this_thread::sleep_for(1ms);
-		delete snd;
+		if (!snd)
+			continue;
+
+		while (!snd->isDone() && std::chrono::steady_clock::now() < deadline)
+			this_thread::sleep_for(std::chrono::milliseconds(1));
+
+		if (snd->isDone())
+			delete snd;
+		// else: intentionally leak the still-running callback owner; see above.
+		snd = nullptr;
 	}
 	list.clear();
 }
@@ -9391,7 +9411,11 @@ bool SpellMap::ViewRange::Halt(bool clear_tasks)
 	is_halted = true;
 	ctrl_lock.unlock();
 
-	while (state == ThreadCtrl::IDLE)
+	// If a calculation is already running, let it finish.  The old code waited
+	// while the worker was IDLE, which was backwards: it introduced an exit race
+	// and could leave teardown waiting for a state transition that was irrelevant
+	// to map safety.  Once BUSY is gone, is_halted prevents a new task starting.
+	while (state == ThreadCtrl::BUSY)
 		std::this_thread::sleep_for(1ms);
 
 	if (clear_tasks)

@@ -1,0 +1,46 @@
+Stage 6.60 static verification
+==============================
+
+1. Original mission lifetime evidence
+-------------------------------------
+M01_01A.DEF:
+- EventData(1): AddSpecialUnit(ArmyUnit,03,5745,05,020,-)
+- EventData(22/23/25/27/28/34): AddSpecialUnit(MissionUnit,...)
+Therefore the palisade commando is a different lifetime class from the blue-striped infantry helpers.
+
+Original EN campaign scan:
+- campaign ArmyUnit: M01_01A.DEF
+- campaign VoluntUnit: M08_18A.DEF (four event-created units)
+- tutorial ArmyUnit records also exist, but are outside campaign progression.
+
+2. Save/load routing
+--------------------
+- MainFrame::OnSaveGameState -> ShowUnifiedSaveGameDialog
+- MainFrame::OnLoadGameState -> ShowUnifiedLoadGameDialog
+- StrategicLevelFrame::OnSaveGame -> ShowUnifiedSaveGameDialog
+- StrategicLevelFrame::OnLoadGame -> ShowUnifiedLoadGameDialog
+- Strategic Exit/YES -> ShowUnifiedSaveGameDialog
+
+3. Exit routing
+---------------
+- MainFrame menu Exit -> RequestApplicationExit
+- restored main-menu Exit -> RequestApplicationExit
+- restored strategic Options Exit -> RequestApplicationExit
+- native MainFrame close -> RequestApplicationExit
+- closing startup/strategic-return main menu -> RequestApplicationExit
+
+4. Video fallback assets
+------------------------
+No movie_fallback files are part of the v30 delivery archive. v28/v29 video assets are intentionally unchanged and are expected to remain installed.
+
+5. Patch/package validation
+--------------------------
+- v29 -> v30 unified patch applies cleanly to an untouched v29 tree (`git apply --check`).
+- Applying the patch reproduces the v30 tree byte-for-byte apart from the unchanged movie_fallback directory.
+- Visual Studio project XML parses successfully.
+- Full v30 overwrite ZIP passes ZIP CRC/integrity validation.
+- `data/movie_fallback` is intentionally absent from the v30 ZIP; keep the already-installed v28/v29 fallback asset directory.
+
+6. Runtime build note
+---------------------
+This environment does not contain the Windows MSVC + wxWidgets toolchain used by the project, so the final Windows binary cannot be built/run here. Static source, patch and archive validation were completed. Primary runtime regression checks are: first-mission ArmyUnit commando transfer, strategic top-menu Save/Load, and Strategic Exit -> No.

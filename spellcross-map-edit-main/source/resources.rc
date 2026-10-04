@@ -148,11 +148,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription", "Spellcross Reloaded\0"
-            VALUE "FileVersion", "0.7.1\0"
+            VALUE "FileVersion", "0.7.9\0"
             VALUE "InternalName", "Spellcross\0"
             VALUE "OriginalFilename", "Spellcross.exe\0"
             VALUE "ProductName", "Spellcross Reloaded\0"
-            VALUE "ProductVersion", "0.7.1\0"
+            VALUE "ProductVersion", "0.7.9\0"
             VALUE "Comments", "Fan-made Spellcross restoration project\0"
         END
     END

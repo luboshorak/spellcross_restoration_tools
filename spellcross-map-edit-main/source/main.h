@@ -152,6 +152,19 @@ public:
     void ShowTacticalWindow();
     void HideTacticalWindow();
 
+    // Shared game-save dialogs used by both the tactical/main window and the
+    // strategic window. Load understands tactical .scsave, remake strategic
+    // .json and original BIG_MAP.SAV; Save chooses the correct native format
+    // for the currently visible game layer.
+    bool ShowUnifiedLoadGameDialog(wxWindow* owner = nullptr);
+    bool ShowUnifiedSaveGameDialog(wxWindow* owner = nullptr);
+
+    // One idempotent shutdown path for every UI layer.  Strategic/main-menu
+    // frames are independent top-level windows, so closing only MainFrame can
+    // otherwise leave the process alive with no visible window.
+    void RequestApplicationExit();
+    bool IsApplicationExitInProgress() const { return m_applicationExitInProgress; }
+
     // Message display (used by SpellMap and StrategicLevelFrame)
     void ShowMessage(SpellTextRec *message, bool is_yesno, std::function<void(bool)> exit_cb=NULL);
     bool CheckMessageState();
@@ -159,6 +172,8 @@ public:
     SpellData* spell_data;
 
 private:
+    bool m_applicationExitInProgress = false;
+
     void OnMapConsoleCommand();
     void OnViewLayer(wxCommandEvent& event);
     void OnOpenMap(wxCommandEvent& event);

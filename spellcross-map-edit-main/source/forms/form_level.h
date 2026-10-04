@@ -110,6 +110,8 @@ public:
     void BuildMenu();
     void OnSaveGame(wxCommandEvent& ev);
     void OnLoadGame(wxCommandEvent& ev);
+    void SaveStrategicGameToPath(const std::filesystem::path& path, bool notify = true);
+    bool PromptStrategicSaveFile(bool notify = false);
     void SaveStrategicGameToSlot(int slot, bool notify = true);
     void LoadStrategicGameFromSlot(int slot, bool notify = true);
     bool PromptStrategicSaveSlot(int maxSlots, bool notify = true);

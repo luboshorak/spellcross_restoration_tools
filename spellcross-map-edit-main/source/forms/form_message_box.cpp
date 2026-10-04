@@ -94,10 +94,12 @@ void FormMsgBox::OnClose(wxCloseEvent& ev)
     // optional kill narration sound playback
     if(m_sound)
     {
-        m_sound->Stop();
-        while(!m_sound->isDone())
-            this_thread::sleep_for(10ms);
-        delete m_sound;
+        // Never block the UI/shutdown path forever on a narration callback.
+        // If the backend does not acknowledge STOP within the grace period,
+        // keep the object alive rather than freeing memory under its callback.
+        if(m_sound->Stop(2.0) == 0)
+            delete m_sound;
+        m_sound = nullptr;
     }
 
     // terminate (and send message to parent)

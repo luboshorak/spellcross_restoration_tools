@@ -2387,26 +2387,7 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
 
 void MainFrame::OnSaveGameState(wxCommandEvent& event)
 {
-    if (!spell_map || !spell_map->IsLoaded())
-        return;
-
-    wstring temp_dir = (std::filesystem::current_path() / L"temp").wstring();
-    wxFileDialog dlg(
-        this,
-        "Save game state",
-        temp_dir,
-        "",
-        "Spellcross save (*.scsave)|*.scsave|JSON (*.json)|*.json|All files (*.*)|*.*",
-        wxFD_SAVE | wxFD_OVERWRITE_PROMPT
-    );
-
-    if (dlg.ShowModal() != wxID_OK)
-        return;
-
-    std::wstring path = dlg.GetPath().ToStdWstring();
-
-    if (!SaveTacticalGameWithCampaignContext(path))
-        wxMessageBox("Save game state failed!", "Error", wxICON_ERROR);
+    (void)ShowUnifiedSaveGameDialog(this);
 }
 
 void MainFrame::OnOptionsAudio(wxCommandEvent& event)
@@ -2500,10 +2481,86 @@ void MainFrame::OnOptionsScreen(wxCommandEvent& event)
 
 
 // on form close
+void MainFrame::RequestApplicationExit()
+{
+    if (m_applicationExitInProgress)
+        return;
+
+    m_applicationExitInProgress = true;
+    wxLogDebug("[SHUTDOWN] beginning application shutdown");
+
+    // The restored main menu and strategic screen intentionally live as
+    // independent top-level frames (their wx parent is nullptr).  Destroying
+    // only MainFrame therefore does NOT guarantee that wxWidgets leaves the
+    // event loop.  Tear the independent layers down explicitly first.
+    if (form_mmenu)
+    {
+        delete form_mmenu;
+        form_mmenu = nullptr;
+    }
+
+    if (m_strategicLevel)
+    {
+        StrategicLevelFrame* strategic = m_strategicLevel;
+        m_strategicLevel = nullptr;
+        strategic->Hide();
+        strategic->Destroy();
+    }
+
+    // A video wrapper owns Media Foundation / audio playback objects which are
+    // not wx children themselves.  Release those before the canvas disappears.
+    if (form_video_box)
+    {
+        delete form_video_box;
+        form_video_box = nullptr;
+    }
+
+    if (spell_data && spell_data->midi)
+        spell_data->midi->Stop();
+
+    if (spell_map)
+    {
+        wxLogDebug("[SHUTDOWN] stopping tactical map/workers");
+        spell_map->Close();
+        wxLogDebug("[SHUTDOWN] tactical map/workers stopped");
+    }
+
+    // Safety net: should another independent top-level helper ever be added,
+    // do not leave it keeping the process alive after every visible window has
+    // gone.  Copy the list first because Destroy() mutates wxTopLevelWindows.
+    std::vector<wxWindow*> strayTopLevels;
+    for (wxWindowList::compatibility_iterator node = wxTopLevelWindows.GetFirst();
+         node; node = node->GetNext())
+    {
+        wxWindow* win = node->GetData();
+        if (win && win != this)
+            strayTopLevels.push_back(win);
+    }
+    for (wxWindow* win : strayTopLevels)
+    {
+        if (!win || win->IsBeingDeleted())
+            continue;
+        wxLogDebug("[SHUTDOWN] destroying stray top-level window: %s", win->GetName().c_str());
+        win->Hide();
+        win->Destroy();
+    }
+
+    // Destroy rather than Close(): this is the terminal path and must not
+    // re-enter OnClose or reopen the main menu from a child close handler.
+    Hide();
+    Destroy();
+
+    // Do not rely solely on wxWidgets' "last top-level window" heuristic.
+    // The restoration uses several independently-owned top-level frames and a
+    // deferred Destroy() can otherwise leave the GUI loop alive with no visible
+    // window.  Explicitly end the loop after all teardown requests are queued.
+    if (wxTheApp)
+        wxTheApp->ExitMainLoop();
+}
+
 void MainFrame::OnExit(wxCommandEvent& event)
 {
-    spell_map->Close();
-    Close(true);
+    RequestApplicationExit();
 }
 // about message
 void MainFrame::OnAbout(wxCommandEvent& event)
@@ -2770,11 +2827,35 @@ void MainFrame::OnClose(wxCloseEvent& ev)
         {
             // Closing the startup/strategic-return menu must never expose the
             // stale tactical map behind it. Treat the window close like Exit.
-            Close(true);
+            RequestApplicationExit();
         }
     }
     else
-        ev.Skip();
+    {
+        // This handler is bound both to MainFrame and to the tactical canvas,
+        // because several overlay wrappers forward close notifications through
+        // the canvas.  Only an actual MainFrame close means application exit.
+        const bool mainFrameClose = ev.GetEventObject() == this || ev.GetId() == GetId();
+        if (!mainFrameClose)
+        {
+            ev.Skip();
+            return;
+        }
+
+        // Native close of MainFrame is an application exit.  Route it through
+        // the same idempotent cleanup as menu/strategic Exit so independent
+        // top-level frames cannot survive invisibly in the background.
+        if (m_applicationExitInProgress)
+        {
+            ev.Skip();
+        }
+        else
+        {
+            if (ev.CanVeto())
+                ev.Veto();
+            CallAfter([this]() { RequestApplicationExit(); });
+        }
+    }
 }
 
 
@@ -2790,7 +2871,7 @@ void MainFrame::OnSwitchGameMode(wxCommandEvent& event)
 
 void MainFrame::OnLoadGameState(wxCommandEvent& event)
 {
-    LoadGameStateFromDialog();
+    (void)ShowUnifiedLoadGameDialog(this);
 }
 
 bool MainFrame::LoadGameStateFromDialog()
@@ -2818,6 +2899,94 @@ bool MainFrame::LoadGameStateFromDialog()
         return false;
     }
 
+    return true;
+}
+
+
+bool MainFrame::ShowUnifiedSaveGameDialog(wxWindow* owner)
+{
+    // If the strategic layer is the active game screen, save the campaign
+    // state rather than the hidden/stale tactical map behind it.  This is the
+    // exact same entry point used by Strategic -> File -> Save game.
+    if (m_strategicLevel && m_strategicLevel->IsShown())
+        return m_strategicLevel->PromptStrategicSaveFile(false);
+
+    if (!spell_map || !spell_map->IsLoaded())
+        return false;
+
+    const std::filesystem::path startDir = std::filesystem::current_path() / "temp";
+    wxWindow* dialogOwner = owner ? owner : static_cast<wxWindow*>(this);
+    wxFileDialog dlg(
+        dialogOwner,
+        "Save game",
+        wxString::FromUTF8(startDir.string()),
+        "",
+        "Spellcross save (*.scsave)|*.scsave|All files (*.*)|*.*",
+        wxFD_SAVE | wxFD_OVERWRITE_PROMPT
+    );
+
+    if (dlg.ShowModal() != wxID_OK)
+        return false;
+
+    std::filesystem::path savePath(dlg.GetPath().ToStdWstring());
+    if (savePath.extension().empty())
+        savePath.replace_extension(".scsave");
+
+    if (!SaveTacticalGameWithCampaignContext(savePath.wstring()))
+    {
+        wxMessageBox("Save game state failed!", "Save error", wxICON_ERROR | wxOK, dialogOwner);
+        return false;
+    }
+
+    return true;
+}
+
+bool MainFrame::ShowUnifiedLoadGameDialog(wxWindow* owner)
+{
+    namespace fs = std::filesystem;
+
+    fs::path loadStart = fs::current_path() / "save" / "strategic";
+    std::error_code ec;
+    if (!fs::exists(loadStart, ec))
+        loadStart = fs::current_path() / "temp";
+
+    wxWindow* dialogOwner = owner ? owner : static_cast<wxWindow*>(this);
+    wxFileDialog dlg(
+        dialogOwner,
+        "Load game",
+        wxString::FromUTF8(loadStart.string()),
+        "",
+        "All saves (*.scsave;*.json;*.sav)|*.scsave;*.json;*.sav|Tactical save (*.scsave)|*.scsave|Remake strategic state (*.json)|*.json|Original BIG_MAP.SAV (*.sav)|*.sav",
+        wxFD_OPEN | wxFD_FILE_MUST_EXIST
+    );
+
+    if (dlg.ShowModal() != wxID_OK)
+        return false;
+
+    const fs::path loadPath(dlg.GetPath().ToStdWstring());
+    const std::string extLower = to_lower(loadPath.extension().string());
+
+    if (extLower == ".json" || extLower == ".sav")
+        return OpenStrategicSaveFromPath(this, loadPath);
+
+    if (!LoadTacticalGameWithCampaignContext(loadPath.wstring()))
+    {
+        wxMessageBox(wxString::Format("Load failed: %s", spell_map ? spell_map->GetLastError() : "unknown error"),
+            "Load error", wxICON_ERROR | wxOK, dialogOwner);
+        return false;
+    }
+
+    // Loading an old/standalone tactical save may not contain campaign context,
+    // in which case LoadTacticalGameWithCampaignContext intentionally cannot
+    // know that a currently visible strategic window must go away.
+    if (m_strategicLevel && m_strategicLevel->IsShown())
+    {
+        StrategicLevelFrame* old = m_strategicLevel;
+        m_strategicLevel = nullptr;
+        old->Destroy();
+    }
+
+    ShowTacticalWindow();
     return true;
 }
 
@@ -2862,6 +3031,44 @@ void MainFrame::OnOpenMainMenu(wxCommandEvent& event)
 
 static std::string FindLevelDefContainingMission(const std::string& missionStem,
     const SpellData* spellData);
+
+// Tactical DEF names may carry an A/B/C mission-stage suffix while the loaded
+// battlefield itself is Mxx_yy.DTA.  Reduce both forms to the same mission
+// family before deciding whether a hidden strategic frame belongs to the
+// battle that is currently running.
+static std::string MissionFamilyToken(const std::string& raw)
+{
+    namespace fs = std::filesystem;
+    std::string token = fs::path(raw).stem().string();
+    for (char& c : token)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+    // Original campaign mission families are MNN_NN with an optional stage
+    // letter (M05_06A/M05_06B).  The DTA is simply M05_06.
+    if (token.size() == 7 && token[0] == 'M' &&
+        std::isdigit(static_cast<unsigned char>(token[1])) &&
+        std::isdigit(static_cast<unsigned char>(token[2])) &&
+        token[3] == '_' &&
+        std::isdigit(static_cast<unsigned char>(token[4])) &&
+        std::isdigit(static_cast<unsigned char>(token[5])) &&
+        std::isalpha(static_cast<unsigned char>(token[6])))
+    {
+        token.pop_back();
+    }
+    return token;
+}
+
+static bool StrategicContextMatchesLoadedMission(const StrategicLevelFrame* strategic,
+    SpellMap* map)
+{
+    if (!strategic || !map || !map->IsLoaded() || !strategic->m_pendingMission.valid)
+        return false;
+
+    const std::string pending = MissionFamilyToken(strategic->m_pendingMission.mission_token);
+    const std::string loaded = MissionFamilyToken(
+        std::filesystem::path(map->map_path).stem().string());
+    return !pending.empty() && !loaded.empty() && pending == loaded;
+}
 
 void MainFrame::SyncUiAfterTacticalLoad()
 {
@@ -2953,9 +3160,11 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
         {
             StrategicLevelFrame* old = m_strategicLevel;
             m_strategicLevel = nullptr;
+            old->Hide();
             old->Destroy();
         }
     };
+    bool restoredStrategicContext = false;
 
     if (hasEmbeddedContext && ctx.present && !ctx.strategic_state_json.empty())
     {
@@ -3001,6 +3210,7 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
                 return false;
             }
             win->Hide();
+            restoredStrategicContext = true;
         }
         else
         {
@@ -3040,6 +3250,7 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
                         candidate->LoadStrategicState();
                         candidate->RecoverPendingMissionFromLoadedBattle(missionStem);
                         candidate->Hide();
+                        restoredStrategicContext = true;
                     }
                     else
                     {
@@ -3049,6 +3260,14 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
             }
         }
     }
+
+    // A tactical save can intentionally have no strategic snapshot (the
+    // campaign-opening mission is the important example).  Never leave an
+    // unrelated hidden StrategicLevelFrame from an earlier load attached to
+    // such a battle: mission completion would otherwise return to that stale
+    // level instead of following the loaded mission's own campaign data.
+    if (!restoredStrategicContext && m_strategicLevel)
+        destroyOldStrategic();
 
     SyncUiAfterTacticalLoad();
     return true;
@@ -3073,6 +3292,24 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
             {
                 if(!spell_data)
                     break;
+
+                // New Game starts with the standalone M01_01A escape mission.
+                // A previously loaded strategic campaign can still exist as a
+                // hidden frame behind the main menu; keeping it would make the
+                // opening mission return to that old level when it ends.
+                if (m_strategicLevel)
+                {
+                    StrategicLevelFrame* old = m_strategicLevel;
+                    m_strategicLevel = nullptr;
+                    old->Hide();
+                    old->Destroy();
+                }
+                m_mission_end_flow = false;
+                m_mission_result_pending_show = false;
+                m_mission_result_visible = false;
+                m_mission_result_stage = MissionResultStage::None;
+                m_mission_end_req = SpellMap::MissionEndRequest();
+
                 std::filesystem::path root = std::filesystem::path(spell_data->spell_data_root);
                 auto def_path = FindSpellDataFile(root, "M01_01A.DEF");
                 if(def_path.empty())
@@ -3142,47 +3379,11 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
             }
             case FormMainMenuAction::LoadGame:
             {
-                // Tactical .scsave and strategic campaign .json use one entry point.
-                namespace fs = std::filesystem;
-                fs::path loadStart = fs::current_path() / "save" / "strategic";
-                std::error_code loadEc;
-                if (!fs::exists(loadStart, loadEc))
-                    loadStart = fs::current_path() / "temp";
-                wxFileDialog dlg(
-                    this,
-                    "Load game",
-                    wxString::FromUTF8(loadStart.string()),
-                    "",
-                    "All saves (*.scsave;*.json;*.sav)|*.scsave;*.json;*.sav|Tactical save (*.scsave)|*.scsave|Remake strategic state (*.json)|*.json|Original BIG_MAP.SAV (*.sav)|*.sav",
-                    wxFD_OPEN | wxFD_FILE_MUST_EXIST
-                );
-                if (dlg.ShowModal() == wxID_CANCEL)
-                {
+                // Use the exact same picker/dispatch path as Strategic -> File
+                // -> Load game, so tactical, remake strategic and original DOS
+                // saves behave identically from either screen.
+                if (!ShowUnifiedLoadGameDialog(this))
                     ShowMainMenuWindow();
-                    break;
-                }
-
-                std::wstring load_path = dlg.GetPath().ToStdWstring();
-                std::string ext_lower = to_lower(std::filesystem::path(load_path).extension().string());
-
-                if (ext_lower == ".json" || ext_lower == ".sav")
-                {
-                    // Strategic campaign save. JSON is the remake format;
-                    // .SAV imports the original Spellcross BIG_MAP.SAV.
-                    if (!OpenStrategicSaveFromPath(this, std::filesystem::path(load_path)))
-                        ShowMainMenuWindow();
-                }
-                else
-                {
-                    // classic scsave
-                    if (!LoadTacticalGameWithCampaignContext(load_path))
-                    {
-                        wxMessageBox(wxString::Format("Load failed: %s", spell_map->GetLastError()), "Load error", wxICON_ERROR | wxOK, this);
-                        ShowMainMenuWindow();
-                        break;
-                    }
-                    ShowTacticalWindow();
-                }
                 break;
             }
             case FormMainMenuAction::Credits:
@@ -3220,10 +3421,8 @@ void MainFrame::OnMainMenuAction(FormMainMenuAction action)
                 break;
             }
             case FormMainMenuAction::Exit:
-                if(spell_map)
-                    spell_map->Close();
-                Close(true);
-                break;
+                RequestApplicationExit();
+                return;
             case FormMainMenuAction::GameModeOff:
                 m_editor_unlocked = true;
                 if(spell_map && spell_map->IsLoaded() && spell_map->isGameMode())
@@ -3399,8 +3598,16 @@ void MainFrame::DrawMissionResultOverlay(wxDC& dc)
         if (debrief.empty())
             debrief = m_mission_end_req.success ? L"Mission accomplished." : L"Mission failed.";
 
-        const int panelW = 450;
-        const int innerW = 390;
+        // Match the original post-mission debrief placement: a fixed framed
+        // message box directly under the banner.  The earlier restoration sized
+        // and positioned the box dynamically near the bottom of the screen,
+        // which made the frame drift down/right compared to DOS and changed
+        // from mission to mission depending on wrapped line count.
+        const int panelW = 408;
+        const int innerW = 344;
+        const int panelX = 116;
+        const int panelY = 92;
+
         const auto chunks = m_mission_end_req.text
             ? m_mission_end_req.text->WordWrap(spell_data->font, innerW)
             : SpellTextChunks{};
@@ -3418,25 +3625,59 @@ void MainFrame::DrawMissionResultOverlay(wxDC& dc)
         }
 
         const int lineH = std::max(1, spell_data->font->GetHeight()) + 1;
-        const int panelH = std::max(86, 44 + (int)lines.size() * lineH);
-        const int panelX = (640 - panelW) / 2;
-        const int panelY = std::min(365 - panelH / 2, 385 - panelH);
+        const int panelH = std::max(74, 32 + (int)lines.size() * lineH);
 
-        // Dark battlefield-backed centre; original metallic frame is drawn on
-        // top from the real RAM2* resources.
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(wxColour(9, 30, 10)));
-        dc.DrawRectangle(X(panelX + 8), Y(panelY + 8),
-            (int)std::lround((panelW - 16) * scale),
-            (int)std::lround((panelH - 16) * scale));
+        // Recreate the original message-box background from the already
+        // rendered battlefield and run it through the same dark palette filter
+        // as FormMsgBox.  This keeps the terrain visible underneath instead of
+        // replacing it with an opaque green rectangle.
+        const int bgX = X(panelX);
+        const int bgY = Y(panelY);
+        const int bgW = std::max(1, (int)std::lround(panelW * scale));
+        const int bgH = std::max(1, (int)std::lround(panelH * scale));
+        if (spell_map && spell_map->terrain && bgW > 0 && bgH > 0)
+        {
+            std::vector<uint8_t> bg(static_cast<size_t>(bgW) * static_cast<size_t>(bgH));
+            spell_map->GetRender(bg.data(), bgW, bgH, bgX, bgY);
+            for (uint8_t& px : bg)
+                px = spell_map->terrain->filter.darkpal[px];
 
-        auto drawNative = [&](SpellGraphicItem* item, int x, int y)
+            uint8_t* pal = reinterpret_cast<uint8_t*>(spell_map->terrain->pal);
+            wxBitmap darkBg(bgW, bgH, 24);
+            wxNativePixelData pdata(darkBg);
+            wxNativePixelData::Iterator it(pdata);
+            size_t src = 0;
+            for (int y = 0; y < bgH; ++y)
+            {
+                uint8_t* scan = it.m_ptr;
+                for (int x = 0; x < bgW; ++x, ++src)
+                {
+                    const uint8_t idx = bg[src];
+                    *scan++ = pal[idx * 3 + 2];
+                    *scan++ = pal[idx * 3 + 1];
+                    *scan++ = pal[idx * 3 + 0];
+                }
+                it.OffsetY(pdata, 1);
+            }
+            dc.DrawBitmap(darkBg, bgX, bgY, false);
+        }
+
+        // Compose only the metallic frame and text at native 640x480 size,
+        // then scale that finished overlay as one bitmap.  A colour key keeps
+        // the centre transparent so the darkened battlefield remains visible.
+        const wxColour maskColour(255, 0, 255);
+        wxBitmap panel(panelW, panelH, 24);
+        wxMemoryDC mem;
+        mem.SelectObject(panel);
+        mem.SetBackground(wxBrush(maskColour));
+        mem.Clear();
+
+        auto drawNativePanel = [&](SpellGraphicItem* item, int x, int y)
         {
             if (!item) return;
             std::unique_ptr<wxBitmap> native(item->Render(true));
             if (!native || !native->IsOk()) return;
-            wxBitmap bmp = ScaleNearest(*native, scale);
-            dc.DrawBitmap(bmp, X(x), Y(y), true);
+            mem.DrawBitmap(*native, x, y, true);
         };
 
         auto* corn = spell_data->gres.wm_frame_corner;
@@ -3446,25 +3687,34 @@ void MainFrame::DrawMissionResultOverlay(wxDC& dc)
         {
             const int cw = std::max(1, corn->x_size);
             const int ch = std::max(1, corn->y_size);
-            for (int x = panelX + cw; x < panelX + panelW - cw; x += std::max(1, horz->x_size))
+            for (int x = cw; x < panelW - cw; x += std::max(1, horz->x_size))
             {
-                drawNative(horz, x, panelY);
-                drawNative(horz, x, panelY + panelH - horz->y_size);
+                drawNativePanel(horz, x, 0);
+                drawNativePanel(horz, x, panelH - horz->y_size);
             }
-            for (int y = panelY + ch; y < panelY + panelH - ch; y += std::max(1, vert->y_size))
+            for (int y = ch; y < panelH - ch; y += std::max(1, vert->y_size))
             {
-                drawNative(vert, panelX, y);
-                drawNative(vert, panelX + panelW - cw, y);
+                drawNativePanel(vert, 0, y);
+                drawNativePanel(vert, panelW - cw, y);
             }
-            drawNative(corn, panelX, panelY);
-            drawNative(corn, panelX + panelW - cw, panelY);
-            drawNative(corn, panelX, panelY + panelH - ch);
-            drawNative(corn, panelX + panelW - cw, panelY + panelH - ch);
+            drawNativePanel(corn, 0, 0);
+            drawNativePanel(corn, panelW - cw, 0);
+            drawNativePanel(corn, 0, panelH - ch);
+            drawNativePanel(corn, panelW - cw, panelH - ch);
         }
 
-        const int textY = panelY + 22;
+        const int textY = 18;
         for (size_t i = 0; i < lines.size(); ++i)
-            drawText(lines[i], panelX + 30, textY + (int)i * lineH, innerW, true);
+        {
+            wxBitmap lineBmp = MakeSpellTextBitmap(spell_data->font, lines[i], text, innerW, true);
+            if (lineBmp.IsOk())
+                mem.DrawBitmap(lineBmp, 32, textY + (int)i * lineH, true);
+        }
+        mem.SelectObject(wxNullBitmap);
+        panel.SetMask(new wxMask(panel, maskColour));
+
+        panel = ScaleNearest(panel, scale);
+        dc.DrawBitmap(panel, X(panelX), Y(panelY), true);
         return;
     }
 
@@ -3625,6 +3875,18 @@ void MainFrame::OnTimer(wxTimerEvent& event)
         {
             m_mission_end_flow = true;
             m_mission_end_req = req;
+
+            // A strategic frame is usable only when it actually launched this
+            // tactical mission.  Direct mission loads and New Game can otherwise
+            // inherit an unrelated hidden level from a previous campaign load.
+            if (m_strategicLevel && !StrategicContextMatchesLoadedMission(m_strategicLevel, spell_map))
+            {
+                wxLogDebug("[MISSION] Detaching stale strategic context before mission-end flow.");
+                StrategicLevelFrame* stale = m_strategicLevel;
+                m_strategicLevel = nullptr;
+                stale->Hide();
+                stale->Destroy();
+            }
 
             // If no strategic level is active (e.g. first mission from main menu),
             // try to fill in movie_path and next_level_def from the parent LEVEL_XX.DEF.
@@ -3800,6 +4062,18 @@ void MainFrame::OpenStrategicAndLoadNext()
 {
     const std::wstring nextW = m_mission_end_req.next_level_def;
 
+    // Return to an existing strategic level only when it is the frame that
+    // launched the battle being resolved.  A hidden frame from a previously
+    // loaded campaign must never hijack a standalone/direct-loaded mission.
+    if (m_strategicLevel && !StrategicContextMatchesLoadedMission(m_strategicLevel, spell_map))
+    {
+        wxLogDebug("[MISSION] Ignoring stale strategic context while resolving mission result.");
+        StrategicLevelFrame* stale = m_strategicLevel;
+        m_strategicLevel = nullptr;
+        stale->Hide();
+        stale->Destroy();
+    }
+
     // Return to existing strategic level with mission result
     if (m_strategicLevel)
     {
@@ -3927,25 +4201,33 @@ void MainFrame::OpenStrategicAndLoadNext()
         }
         else
         {
-            // Check if player saved the commando in the first mission (unit type 3 = Komando)
-            // If so, add a bonus commando unit to the new level's roster
+            // Carry mission-earned permanent companies into the first strategic
+            // screen.  Do NOT infer this from unit type: the mission DEF itself
+            // tells us the lifetime.  In M01_01A the rescued infantry are
+            // MissionUnit (blue stripes, tactical-only), while the commando in
+            // the palisades is ArmyUnit and therefore joins the permanent army.
             std::vector<LevelData::PlayerUnitAdd> bonus_units;
             if (spell_map && spell_map->IsLoaded())
             {
                 for (auto* u : spell_map->units)
                 {
-                    if (!u || u->is_enemy || u->isDead()) continue;
-                    // Unit type 3 = Komando (commando), check if it survived the mission
-                    if (u->unit && u->unit->type_id == 3)
-                    {
-                        LevelData::PlayerUnitAdd bonus;
-                        bonus.unit_id = 3;
-                        bonus.count = 1;
-                        bonus.health = 100;
-                        bonus.extra = "-";
-                        bonus_units.push_back(bonus);
-                        break; // only one bonus commando
-                    }
+                    if (!u || !u->unit || u->is_enemy || u->isDead())
+                        continue;
+                    if (u->strategic_uid != 0 || u->spec_type != MapUnitType::ArmyUnit)
+                        continue;
+
+                    LevelData::PlayerUnitAdd bonus;
+                    bonus.unit_id = u->unit->type_id;
+                    bonus.count = 1;
+                    const int maxMan = u->unit->cnt;
+                    bonus.health = maxMan > 0
+                        ? std::max(1, (u->man * 100 + maxMan / 2) / maxMan)
+                        : 100;
+                    bonus.extra = u->name.empty() ? "-" : u->name;
+                    bonus.experience = std::max(0, u->experience);
+                    bonus.experience_level = std::clamp(u->experience_level > 0
+                        ? u->experience_level : u->experience_init, 1, 12);
+                    bonus_units.push_back(std::move(bonus));
                 }
             }
 

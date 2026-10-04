@@ -2540,10 +2540,11 @@ StrategicLevelFrame::StrategicLevelFrame(MainFrame* parent, const LevelData& lev
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& ev) {
         MainFrame* main = m_main;
         const bool wasCurrentStrategic = main && main->m_strategicLevel == this;
+        const bool appIsExiting = main && main->IsApplicationExitInProgress();
         if (wasCurrentStrategic)
             main->m_strategicLevel = nullptr;
         ev.Skip(); // proceed with default close/destroy
-        if (main && wasCurrentStrategic)
+        if (main && wasCurrentStrategic && !appIsExiting)
             main->CallAfter([main]() { main->ShowMainMenuWindow(); });
     });
 
@@ -6149,11 +6150,20 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                 const int answer = quitDlg.ShowModal();
                 if (answer == wxID_CANCEL)
                     return;
-                if (answer == wxID_YES && !PromptStrategicSaveSlot(9, false))
-                    return;
+                // Use the same file picker as Strategic -> Save game.  This
+                // also removes the last shutdown path that still invoked the
+                // legacy slot chooser.  Cancelling the save cancels exit.
+                if (answer == wxID_YES)
+                {
+                    const bool saved = m_main
+                        ? m_main->ShowUnifiedSaveGameDialog(this)
+                        : PromptStrategicSaveFile(false);
+                    if (!saved)
+                        return;
+                }
 
                 if (m_main)
-                    m_main->Close(true);
+                    m_main->RequestApplicationExit();
                 else
                     Close(true);
                 return;
@@ -6893,10 +6903,12 @@ static bool PeekStrategicSaveSummary(const std::filesystem::path& path, int& out
     return true;
 }
 
-void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
+void StrategicLevelFrame::SaveStrategicGameToPath(const std::filesystem::path& path, bool notify)
 {
-    slot = std::clamp(slot, 1, 10);
-    const auto path = GetStrategicSaveSlotPath(m_level, slot);
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!path.parent_path().empty())
+        fs::create_directories(path.parent_path(), ec);
 
     ResearchPersistSaveView rsv;
     rsv.activeId = m_researchActiveId;
@@ -6939,6 +6951,14 @@ void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
     g_researchPersistSave = prevR;
 
     m_originalStrategicDirty = true;
+    if (notify)
+        wxMessageBox("Game saved.", "Save game", wxOK | wxICON_INFORMATION, this);
+}
+
+void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
+{
+    slot = std::clamp(slot, 1, 10);
+    SaveStrategicGameToPath(GetStrategicSaveSlotPath(m_level, slot), false);
     if (notify)
         wxMessageBox(wxString::Format("Saved to slot %02d.", slot), "Save game", wxOK | wxICON_INFORMATION, this);
 }
@@ -7217,57 +7237,80 @@ bool StrategicLevelFrame::PromptStrategicSaveSlot(int maxSlots, bool notify)
     return true;
 }
 
+bool StrategicLevelFrame::PromptStrategicSaveFile(bool notify)
+{
+    // Match the normal file-picker workflow used by the rest of the remake.
+    // The old strategic top-menu implementation had its own 10-slot selector,
+    // which made Load/Save behave differently from the startup/main-menu path.
+    const std::filesystem::path startDir = GetStrategicSaveDir(m_level);
+    const std::string defaultName = LevelKeyFromSourcePath(m_level.source_path) + ".json";
+
+    wxFileDialog dlg(
+        this,
+        "Save game",
+        wxString::FromUTF8(startDir.string()),
+        wxString::FromUTF8(defaultName),
+        "Remake strategic save (*.json)|*.json|All files (*.*)|*.*",
+        wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+
+    if (dlg.ShowModal() != wxID_OK)
+        return false;
+
+    std::filesystem::path path(dlg.GetPath().ToStdWstring());
+    if (path.extension().empty())
+        path.replace_extension(".json");
+
+    SaveStrategicGameToPath(path, notify);
+    return true;
+}
+
 void StrategicLevelFrame::OnSaveGame(wxCommandEvent&)
 {
-    (void)PromptStrategicSaveSlot(10, true);
+    // Route through the same Save entry point as the tactical/main window.
+    // The shared dispatcher detects that this strategic frame is active and
+    // writes the campaign JSON rather than a stale hidden tactical snapshot.
+    if (m_main)
+        (void)m_main->ShowUnifiedSaveGameDialog(this);
+    else
+        (void)PromptStrategicSaveFile(false);
 }
 
 void StrategicLevelFrame::OnLoadGame(wxCommandEvent&)
 {
-    wxArrayString choices;
-    choices.reserve(10);
-
-    std::vector<bool> exists(10, false);
-    for (int i = 1; i <= 10; ++i)
+    // Use the same unified picker as the startup/main-menu Load action.  This
+    // also means a tactical .scsave, a remake strategic .json or an original
+    // BIG_MAP.SAV can be selected from either screen with identical dispatch.
+    if (m_main)
     {
-        const auto p = GetStrategicSaveSlotPath(m_level, i);
-        std::error_code ec;
-        exists[i - 1] = std::filesystem::exists(p, ec);
-        if (exists[i - 1])
-        {
-            int money = 0, rank = 0, xp = 0;
-            std::string ts;
-            PeekStrategicSaveSummary(p, money, rank, xp, ts);
-            wxString line = wxString::Format("Slot %02d  |  %s  |  $%d  |  XP %d  |  %s",
-                i,
-                ts.empty() ? wxString(L"(no time)") : wxString::FromUTF8(ts),
-                money,
-                xp,
-                RankNameCz(rank));
-            choices.Add(line);
-        }
-        else
-        {
-            choices.Add(wxString::Format("Slot %02d  |  (empty)", i));
-        }
+        (void)m_main->ShowUnifiedLoadGameDialog(this);
+        return;
     }
 
-    wxSingleChoiceDialog dlg(this, "Choose a slot to load:", "Load game", choices);
-    dlg.SetSelection(0);
+    // Defensive standalone fallback (StrategicLevelFrame normally always has
+    // MainFrame in the game).
+    wxFileDialog dlg(
+        this,
+        "Load game",
+        wxString::FromUTF8(GetStrategicSaveDir(m_level).string()),
+        "",
+        "Remake strategic save (*.json)|*.json|Original BIG_MAP.SAV (*.sav)|*.sav|All files (*.*)|*.*",
+        wxFD_OPEN | wxFD_FILE_MUST_EXIST);
     if (dlg.ShowModal() != wxID_OK)
         return;
 
-    const int slot = dlg.GetSelection() + 1;
-    if (!exists[slot - 1])
+    const std::filesystem::path path(dlg.GetPath().ToStdWstring());
+    if (to_lower(path.extension().string()) == ".sav")
     {
-        wxMessageBox("This slot is empty.", "Load game", wxOK | wxICON_WARNING, this);
-        return;
+        std::string warning;
+        if (!LoadOriginalBigMapSaveFromPath(path, &warning))
+            wxMessageBox("The selected BIG_MAP.SAV could not be loaded.", "Load game", wxOK | wxICON_ERROR, this);
+        else if (!warning.empty())
+            wxMessageBox(wxString::FromUTF8(warning), "Original save imported", wxOK | wxICON_INFORMATION, this);
     }
-
-    // Keep all strategic persistence in one path.  This is important for
-    // imported BIG_MAP.SAV games because research, stable UIDs and hierarchy
-    // assignments must survive the first native save/load round trip.
-    LoadStrategicGameFromSlot(slot, true);
+    else if (!LoadStrategicStateFromPath(path))
+    {
+        wxMessageBox("The selected file is not a valid strategic save.", "Load game", wxOK | wxICON_ERROR, this);
+    }
 }
 
 void StrategicLevelFrame::MarkOverlayDirty()
@@ -10430,7 +10473,11 @@ void StrategicLevelFrame::NormalizeStrategicUnitInstances()
             // an experience LEVEL as its second argument. Seed the strategic
             // unit from that original value instead of treating it as a stack count.
             base.level = std::clamp(src.experience_level, 1, 12);
-            if (m_spellData && m_spellData->units)
+            // A mission-earned ArmyUnit carries its exact tactical XP in the
+            // transient PlayerUnitAdd payload.  LEVEL_xx.DEF start units leave
+            // this at zero and continue to derive XP from their declared level.
+            base.experience = std::max(0, src.experience);
+            if (base.experience <= 0 && m_spellData && m_spellData->units)
             {
                 if (auto* rec = m_spellData->units->GetUnit(src.unit_id))
                     base.experience = std::max(0, rec->GetExperiencePts(base.level));
@@ -19608,17 +19655,26 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     }
     RebuildRosterRowUidsFromUnitStates();
 
-    // Surviving SpecUnit objects with no strategic UID are units created by
-    // the mission itself (for example a rescued special company). All sent strategic
-    // companies have a UID in current saves, so they must never be duplicated
-    // here merely because another company of the same type was also deployed.
+    // Mission-created allied units are NOT all equivalent.  The original DEF
+    // type is the persistence contract:
+    //   MissionUnit = blue-striped helper for this tactical mission only
+    //   SpecUnit    = red-striped mission-critical/special unit
+    //   VoluntUnit  = volunteer/support company kept for this strategic map
+    //   ArmyUnit    = joins the player's permanent strategic army if it survives
+    //
+    // M01_01A proves the important distinction explicitly: the infantry found
+    // during the escape are MissionUnit, while the commando in the palisades is
+    // ArmyUnit.  M08_18A uses VoluntUnit, which maps naturally to the existing
+    // strategic temporary-company lifetime and is removed on chapter transition.
     for (auto* s : survivors)
     {
         if (!s || matchedSurvivors.count(s) != 0)
             continue;
         if (s->strategic_uid != 0)
             continue;
-        if (s->spec_type != MapUnitType::SpecUnit)
+        const bool permanentArmyUnit = s->spec_type == MapUnitType::ArmyUnit;
+        const bool chapterVolunteer = s->spec_type == MapUnitType::VoluntUnit;
+        if (!permanentArmyUnit && !chapterVolunteer)
             continue;
 
         LevelData::PlayerUnitAdd pu;
@@ -19628,14 +19684,20 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
         pu.health = maxMan > 0
             ? std::max(1, (s->man * 100 + maxMan / 2) / maxMan)
             : 100;
-        pu.extra = "-";
+        pu.extra = s->name.empty() ? "-" : s->name;
+        pu.experience = std::max(0, s->experience);
+        pu.experience_level = std::clamp(s->experience_level > 0
+            ? s->experience_level : s->experience_init, 1, 12);
         m_playerUnits.push_back(pu);
 
         UnitInstanceState state;
         state.uid = m_nextRosterUid++;
-        state.experience = std::max(0, s->experience);
+        state.experience = pu.experience;
         state.level = GetUnitExperienceLevel(pu.unit_id, state.experience);
+        if (!s->name.empty() && s->name != "-")
+            state.custom_name = s->name;
         state.cooldown_turns = 1;
+        state.temporary = chapterVolunteer;
         m_unitStates.push_back(std::move(state));
     }
     RebuildRosterRowUidsFromUnitStates();
