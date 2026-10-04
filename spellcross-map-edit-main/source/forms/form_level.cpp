@@ -30,6 +30,7 @@
 #include <array>
 #include <sstream>
 #include <iomanip>
+#include <limits>
 #include "LZ_spell.h"
 #include "../strategic_original_renderer.h"
 
@@ -2605,9 +2606,10 @@ static std::filesystem::path GetStableBaseDir() {
 // Forward declarations (definitions are later in this file)
 
 // ------------------------------------------------------------------
-// Research persistence glue
-// We MUST NOT change SaveStrategicStateFile / LoadStrategicStateFile signatures.
-// So we pass research state via thread-local pointers set by StrategicLevelFrame::SaveStrategicState / LoadStrategicState.
+// Research persistence glue.
+// Research has a larger nested state than the core strategic save arguments,
+// so it is passed through a narrow thread-local view while the common JSON
+// reader/writer handles the campaign fields (including statistics) directly.
 // ------------------------------------------------------------------
 struct ResearchPersistSaveView
 {
@@ -2647,8 +2649,8 @@ static thread_local const UnitStatePersistSaveView* g_unitStatePersistSave = nul
 static thread_local UnitStatePersistLoadView* g_unitStatePersistLoad = nullptr;
 
 // ------------------------------------------------------------------
-// Hierarchy persistence glue.  Keep SaveStrategicStateFile signatures stable;
-// the compact records only reference already-persisted unit/commander UIDs.
+// Hierarchy persistence glue. The compact records only reference the stable
+// unit/commander UIDs already persisted by the common strategic state writer.
 // ------------------------------------------------------------------
 struct HierarchyPersistSaveView
 {
@@ -2706,6 +2708,8 @@ static bool LoadStrategicStateFile(
     bool& gameModeEnabled,
     std::vector<int>& ownedTerritories,
     std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    StrategicLevelFrame::LossStats* lossStats,
+    StrategicLevelFrame::MissionStats* missionStats,
     std::string* out_level_def,
     std::string* out_timestamp);
 
@@ -2727,6 +2731,8 @@ static void SaveStrategicStateFile(
     bool gameModeEnabled,
     const std::vector<int>& ownedTerritories,
     const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    const StrategicLevelFrame::LossStats* lossStats,
+    const StrategicLevelFrame::MissionStats* missionStats,
     const std::string& timestamp);
 
 void StrategicLevelFrame::BuildMenu()
@@ -2992,7 +2998,6 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
         break;
     case OriginalStrategicScreen::Stats:
         LoadRanksTable();
-        LoadMissionStatsIfPresent();
         RecomputePlayerRank();
         rendered = renderer.RenderStats(loader, rgb, &error);
         break;
@@ -6925,6 +6930,7 @@ void StrategicLevelFrame::SaveStrategicGameToSlot(int slot, bool notify)
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        &m_lossStats, &m_stats,
         /*timestamp*/NowIsoLocal());
 
     g_missionFlowPersistSave = prevMF;
@@ -6990,6 +6996,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        &m_lossStats, &m_stats,
         &loaded_level_def, &ts))
     {
         g_missionFlowPersistLoad = prevMFL;
@@ -7067,6 +7074,8 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         bool gm2 = false;
         std::vector<int> owned2;
         std::unordered_map<int, TerritoryResourceState> terrRes;
+        LossStats loadedLossStats2{};
+        MissionStats loadedMissionStats2{};
 
         int resActiveId2 = -1;
         int resActiveIndex2 = -1;
@@ -7095,7 +7104,8 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         g_hierarchyPersistLoad = &hlv2;
 
         if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch,
-            units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes, &def2, &ts2))
+            units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes,
+            &loadedLossStats2, &loadedMissionStats2, &def2, &ts2))
         {
             g_hierarchyPersistLoad = prevHL2;
             g_unitStatePersistLoad = prevUL2;
@@ -7109,6 +7119,8 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         g_researchPersistLoad = prevRL2;
 
         auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
+        win->m_lossStats = loadedLossStats2;
+        win->m_stats = loadedMissionStats2;
         win->m_turn = turn;
         win->m_money = money;
         win->m_research = research;
@@ -14299,10 +14311,12 @@ void StrategicLevelFrame::OnShowStats(wxCommandEvent&)
     if (m_midBook)
         m_midBook->SetSelection(4);
 
-    // Ensure the stats page sees the latest state.
+    // Ensure the stats page sees the latest in-memory campaign state.
+    // Do not reload the legacy sidecar here: v20+ saves embed statistics in
+    // the exact strategic snapshot, so a later sidecar must never overwrite
+    // values restored from an older save slot.
     SaveStrategicState();
     LoadRanksTable();
-    LoadMissionStatsIfPresent();
     RecomputePlayerRank();
     RefreshStatsPage();
     if (m_statsPanel) m_statsPanel->Layout();
@@ -15227,6 +15241,41 @@ std::wstring StrategicLevelFrame::ResolveMapDefPathForMissionToken(const std::st
     return L"";
 }
 
+
+std::wstring StrategicLevelFrame::ResolveMapDtaPathForMissionToken(const std::string& mission_token) const
+{
+    if (mission_token.empty() || mission_token == "none")
+        return L"";
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<fs::path> bases;
+    bases.push_back(fs::path(GetStableBaseDir()) / "temp" / "COMMON");
+    bases.push_back(fs::path(m_level.source_path).parent_path());
+    bases.push_back(fs::current_path(ec));
+
+    std::vector<std::string> tokens;
+    tokens.push_back(mission_token);
+    if (!mission_token.empty() && std::isalpha(static_cast<unsigned char>(mission_token.back())))
+        tokens.push_back(mission_token.substr(0, mission_token.size() - 1));
+
+    for (const auto& base : bases)
+    {
+        if (base.empty() || !fs::exists(base, ec))
+            continue;
+        for (const auto& token : tokens)
+        {
+            const fs::path p1 = base / (to_upper(token) + ".DTA");
+            const fs::path p2 = base / (token + ".DTA");
+            const fs::path p3 = base / (to_lower(token) + ".dta");
+            if (fs::exists(p1, ec)) return p1.wstring();
+            if (fs::exists(p2, ec)) return p2.wstring();
+            if (fs::exists(p3, ec)) return p3.wstring();
+        }
+    }
+    return L"";
+}
+
 void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 {
     if (m_selectedTerritory < 0 || !m_main)
@@ -15250,11 +15299,117 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         return;
 
     std::wstring defPath = ResolveMapDefPathForMissionToken(token);
+    std::wstring dtaPath;
+    bool generatedDtaBattle = false;
+    std::vector<int> generatedEnemyUnits;
 
     if (defPath.empty())
     {
-        wxMessageBox("Map DEF not found for mission: " + wxString(token), "Launch", wxOK | wxICON_WARNING, this);
-        return;
+        // Starting territories (and therefore their later recaptures) are
+        // deliberately DTA-only in the original data.  DOS generated a random
+        // defence/recapture mission around that battlefield at runtime.
+        dtaPath = ResolveMapDtaPathForMissionToken(token);
+        if (dtaPath.empty())
+        {
+            wxMessageBox("Map DEF/DTA not found for mission: " + wxString(token),
+                "Launch", wxOK | wxICON_WARNING, this);
+            return;
+        }
+
+        generatedDtaBattle = true;
+
+        // Prefer the exact scripted Army(...) force that attacked/occupied
+        // this territory.  Reverse iteration selects the newest attack when a
+        // territory changed hands more than once.
+        for (auto it = m_counterAttacks.rbegin(); it != m_counterAttacks.rend(); ++it)
+        {
+            if (it->territory_id != terr_id || it->enemy_units.empty())
+                continue;
+            if ((it->triggered && !it->completed) || it->territory_lost)
+            {
+                generatedEnemyUnits = it->enemy_units;
+                break;
+            }
+        }
+
+        // Backward compatibility for strategic saves created by <= v26: the
+        // triggering Level Event was persisted, but the concrete occupying
+        // Army(...) list was not. Reconstruct the most recent triggered army
+        // event first. This is important for existing saves such as LEVEL_05
+        // where R0502.MIS is generated from Event(6)'s exact Army(...) force.
+        if (generatedEnemyUnits.empty())
+        {
+            const LevelEvent* newestTriggeredArmy = nullptr;
+            int newestTriggerTurn = std::numeric_limits<int>::min();
+            for (const auto& evt : m_level.events)
+            {
+                if (evt.armies.empty() || !m_triggeredLevelEvents.count(evt.id))
+                    continue;
+
+                int effectiveTurn = std::numeric_limits<int>::min();
+                if (evt.abs_time)
+                {
+                    effectiveTurn = evt.time_value;
+                }
+                else
+                {
+                    const auto ait = m_activatedEvents.find(evt.id);
+                    if (ait != m_activatedEvents.end() && evt.time_value >= 0)
+                        effectiveTurn = ait->second + evt.time_value;
+                }
+
+                // Some condition-only/chained events do not have a useful
+                // numeric trigger turn. They are still valid candidates, but
+                // a dated event wins when one is available.
+                if (!newestTriggeredArmy || effectiveTurn >= newestTriggerTurn)
+                {
+                    newestTriggeredArmy = &evt;
+                    newestTriggerTurn = effectiveTurn;
+                }
+            }
+
+            if (newestTriggeredArmy)
+            {
+                for (const auto& army : newestTriggeredArmy->armies)
+                    generatedEnemyUnits.insert(generatedEnemyUnits.end(), army.units.begin(), army.units.end());
+            }
+        }
+
+        // Last-resort fallback when no persisted event can identify the old
+        // attack: reconstruct a deterministic random-attack sized force from
+        // LevelInit::AttackUnits/AttackSpecialUnits/AttackFlags.
+        if (generatedEnemyUnits.empty())
+        {
+            int normalCount = 0;
+            int specialCount = 0;
+            if (m_level.attack_flags.size() >= 4)
+            {
+                normalCount = std::max(1, (m_level.attack_flags[0] + m_level.attack_flags[1]) / 2);
+                specialCount = std::max(0, (m_level.attack_flags[2] + m_level.attack_flags[3]) / 2);
+            }
+            else
+            {
+                size_t playerCompanies = 0;
+                for (const auto& u : unitsForMission)
+                    playerCompanies += static_cast<size_t>(std::max(0, u.count));
+                normalCount = std::clamp(static_cast<int>(playerCompanies), 6, 18);
+                specialCount = m_level.attack_special_units.empty() ? 0 : std::max(1, normalCount / 5);
+            }
+
+            if (!m_level.attack_units.empty())
+                for (int i = 0; i < normalCount; ++i)
+                    generatedEnemyUnits.push_back(m_level.attack_units[static_cast<size_t>(i) % m_level.attack_units.size()]);
+            if (!m_level.attack_special_units.empty())
+                for (int i = 0; i < specialCount; ++i)
+                    generatedEnemyUnits.push_back(m_level.attack_special_units[static_cast<size_t>(i) % m_level.attack_special_units.size()]);
+        }
+
+        if (generatedEnemyUnits.empty())
+        {
+            wxMessageBox("This DTA-only territory has no counter-attack force data.",
+                "Launch", wxOK | wxICON_WARNING, this);
+            return;
+        }
     }
     // Store pending mission for result handling
     m_pendingMission.valid = true;
@@ -15296,9 +15451,11 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
         const auto& u = unitsForMission[i];
     }
 
-    bool ok = m_main->LoadMapFromDefPath(defPath, unitsForMission);
+    bool ok = generatedDtaBattle
+        ? m_main->LoadGeneratedStrategicBattleFromDtaPath(dtaPath, unitsForMission, generatedEnemyUnits)
+        : m_main->LoadMapFromDefPath(defPath, unitsForMission);
 
-    if (!ok && !unitsForMission.empty())
+    if (!generatedDtaBattle && !ok && !unitsForMission.empty())
     {
         const std::vector<LevelData::PlayerUnitAdd> empty_units;
         ok = m_main->LoadMapFromDefPath(defPath, empty_units);
@@ -15306,7 +15463,10 @@ void StrategicLevelFrame::OnLaunch(wxCommandEvent&)
 
     if (!ok)
     {
-        wxMessageBox("LoadMapFromDefPath FAILED (even without units)\nDEF:\n" + wxString(defPath),
+        const wxString source = generatedDtaBattle ? wxString(dtaPath) : wxString(defPath);
+        wxMessageBox((generatedDtaBattle
+                ? "Generated DTA strategic battle failed\nDTA:\n"
+                : "LoadMapFromDefPath FAILED (even without units)\nDEF:\n") + source,
             "Launch", wxOK | wxICON_ERROR, this);
         return;
     }
@@ -15510,6 +15670,8 @@ static bool LoadStrategicStateFile(
     bool& gameModeEnabled,
     std::vector<int>& ownedTerritories,
     std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    StrategicLevelFrame::LossStats* lossStats,
+    StrategicLevelFrame::MissionStats* missionStats,
     std::string* out_level_def = nullptr,
     std::string* out_timestamp = nullptr)
 
@@ -15529,6 +15691,8 @@ static bool LoadStrategicStateFile(
     research = 0;
     selected_territory = -1;
     player = StrategicLevelFrame::PlayerProgress{};
+    if (lossStats) *lossStats = StrategicLevelFrame::LossStats{};
+    if (missionStats) *missionStats = StrategicLevelFrame::MissionStats{};
     gameModeEnabled = false;
     ownedTerritories.clear();
 
@@ -15598,6 +15762,38 @@ static bool LoadStrategicStateFile(
     std::regex gm_re("\"game_mode\"\\s*:\\s*(true|false)");
     if (std::regex_search(data, m, gm_re) && m.size() > 1)
         gameModeEnabled = (m[1].str() == "true");
+
+    // Embedded strategic statistics (v20+). Older saves remain valid and
+    // simply leave these structures at zero unless they are explicitly
+    // migrated from the legacy installation-global sidecar.
+    const std::string statsVal = ExtractJsonBlock(data, "statistics");
+    if (!statsVal.empty() && statsVal != "null" && statsVal.front() == '{')
+    {
+        auto readLoss = [&](const char* key, StrategicLevelFrame::LossBlock& b)
+        {
+            const std::string block = ExtractJsonBlock(statsVal, key);
+            if (block.empty() || block == "null") return;
+            (void)ParseJsonIntField(block, "light", b.light);
+            (void)ParseJsonIntField(block, "heavy", b.heavy);
+            (void)ParseJsonIntField(block, "air", b.air);
+            (void)ParseJsonIntField(block, "commanders", b.commanders);
+        };
+        if (lossStats)
+        {
+            readLoss("all_alliance", lossStats->alliance_all);
+            readLoss("all_enemy", lossStats->enemy_all);
+            readLoss("level_alliance", lossStats->alliance_level);
+            readLoss("level_enemy", lossStats->enemy_level);
+        }
+        if (missionStats)
+        {
+            (void)ParseJsonIntField(statsVal, "missions_completed", missionStats->missions_completed);
+            (void)ParseJsonIntField(statsVal, "missions_failed", missionStats->missions_failed);
+            (void)ParseJsonIntField(statsVal, "territories_conquered", missionStats->territories_conquered);
+            (void)ParseJsonIntField(statsVal, "territories_lost", missionStats->territories_lost);
+            (void)ParseJsonIntField(statsVal, "turns_total", missionStats->turns_total);
+        }
+    }
 
     // owned territories (optional)
     std::smatch mm2;
@@ -15776,6 +15972,11 @@ static bool LoadStrategicStateFile(
                     (void)ParseJsonStringField(obj, "counter_mission", ca.counter_mission);
                     ca.triggered = obj.find("\"triggered\":true") != std::string::npos || obj.find("\"triggered\": true") != std::string::npos;
                     ca.completed = obj.find("\"completed\":true") != std::string::npos || obj.find("\"completed\": true") != std::string::npos;
+                    ca.territory_lost = obj.find("\"territory_lost\":true") != std::string::npos || obj.find("\"territory_lost\": true") != std::string::npos;
+                    const std::string enemyUnits = ExtractJsonBlock(obj, "enemy_units");
+                    std::regex enemy_num_re("(-?\\d+)");
+                    for (auto uit = std::sregex_iterator(enemyUnits.begin(), enemyUnits.end(), enemy_num_re); uit != std::sregex_iterator(); ++uit)
+                        ca.enemy_units.push_back(std::stoi((*uit)[1].str()));
                     if (ca.territory_id > 0) g_missionFlowPersistLoad->counterAttacks->push_back(std::move(ca));
                 }
             }
@@ -15988,6 +16189,8 @@ static void SaveStrategicStateFile(
     bool gameModeEnabled,
     const std::vector<int>& ownedTerritories,
     const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
+    const StrategicLevelFrame::LossStats* lossStats,
+    const StrategicLevelFrame::MissionStats* missionStats,
     const std::string& timestamp)
 {
     std::ofstream f(path);
@@ -15995,7 +16198,7 @@ static void SaveStrategicStateFile(
         return;
 
     f << "{\n";
-    f << "  \"version\": 1,\n";
+    f << "  \"version\": 2,\n";
     f << "  \"timestamp\": \"" << EscapeJson(timestamp) << "\",\n";
     f << "  \"level_def\": \"" << EscapeJson(level.source_path) << "\",\n";
     f << "  \"turn\": " << turn << ",\n";
@@ -16003,6 +16206,41 @@ static void SaveStrategicStateFile(
     f << "  \"research\": " << research << ",\n";
     f << "  \"selected_territory\": " << selected_territory << ",\n";
     f << "  \"game_mode\": " << (gameModeEnabled ? "true" : "false") << ",\n";
+
+    // Statistics are part of the campaign state. Keep them inside the same
+    // JSON blob so normal strategic saves and embedded tactical-save context
+    // cannot lose or accidentally pick up counters from another playthrough.
+    f << "  \"statistics\": {\n";
+    auto writeEmbeddedLoss = [&](const char* key, const StrategicLevelFrame::LossBlock& b, bool comma)
+    {
+        f << "    \"" << key << "\": {\"light\": " << b.light
+          << ", \"heavy\": " << b.heavy
+          << ", \"air\": " << b.air
+          << ", \"commanders\": " << b.commanders << "}" << (comma ? "," : "") << "\n";
+    };
+    if (lossStats)
+    {
+        writeEmbeddedLoss("all_alliance", lossStats->alliance_all, true);
+        writeEmbeddedLoss("all_enemy", lossStats->enemy_all, true);
+        writeEmbeddedLoss("level_alliance", lossStats->alliance_level, true);
+        writeEmbeddedLoss("level_enemy", lossStats->enemy_level, true);
+    }
+    else
+    {
+        const StrategicLevelFrame::LossBlock z{};
+        writeEmbeddedLoss("all_alliance", z, true);
+        writeEmbeddedLoss("all_enemy", z, true);
+        writeEmbeddedLoss("level_alliance", z, true);
+        writeEmbeddedLoss("level_enemy", z, true);
+    }
+    const StrategicLevelFrame::MissionStats zeroMission{};
+    const auto& ms = missionStats ? *missionStats : zeroMission;
+    f << "    \"missions_completed\": " << ms.missions_completed << ",\n";
+    f << "    \"missions_failed\": " << ms.missions_failed << ",\n";
+    f << "    \"territories_conquered\": " << ms.territories_conquered << ",\n";
+    f << "    \"territories_lost\": " << ms.territories_lost << ",\n";
+    f << "    \"turns_total\": " << ms.turns_total << "\n";
+    f << "  },\n";
 
     f << "  \"owned_territories\": [";
     for (size_t i = 0; i < ownedTerritories.size(); ++i)
@@ -16128,7 +16366,15 @@ static void SaveStrategicStateFile(
               << ",\"trigger_turn\":" << ca.trigger_turn
               << ",\"counter_mission\":\"" << EscapeJson(ca.counter_mission) << "\""
               << ",\"triggered\":" << (ca.triggered ? "true" : "false")
-              << ",\"completed\":" << (ca.completed ? "true" : "false") << "}";
+              << ",\"completed\":" << (ca.completed ? "true" : "false")
+              << ",\"territory_lost\":" << (ca.territory_lost ? "true" : "false")
+              << ",\"enemy_units\":[";
+            for (size_t i = 0; i < ca.enemy_units.size(); ++i)
+            {
+                if (i) f << ",";
+                f << ca.enemy_units[i];
+            }
+            f << "]}";
         }
         f << "]\n";
         f << "  },\n";
@@ -16821,6 +17067,7 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
     const bool ok = LoadStrategicStateFile(path, m_level, turn, money, research, selected, player, terrM, terrL, units,
         playerCmds, availCmds, windowStart, genCount,
         gm, owned, terrRes,
+        &m_lossStats, &m_stats,
         &level_def, &ts);
     g_missionFlowPersistLoad = prevMF;
     g_hierarchyPersistLoad = prevH;
@@ -16967,6 +17214,8 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     bool gm = false;
     std::vector<int> owned;
     std::unordered_map<int, TerritoryResourceState> terrRes;
+    LossStats previousLossStats{};
+    MissionStats previousMissionStats{};
     std::string level_def, ts;
 
     // Hook research persistence
@@ -16998,7 +17247,7 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
 
     const bool ok = LoadStrategicStateFile(prevSave, m_level, turn, money, research, selected, player,
         terrM, terrL, units, playerCmds, availCmds, windowStart, genCount,
-        gm, owned, terrRes, &level_def, &ts);
+        gm, owned, terrRes, &previousLossStats, &previousMissionStats, &level_def, &ts);
 
     g_hierarchyPersistLoad = prevH;
     g_unitStatePersistLoad = prevU;
@@ -17029,6 +17278,14 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     m_researchAllocPerTurn = resAllocPerTurn;
     m_researchProgressById = std::move(resProgressById);
     m_researchCompleted = std::move(resCompleted);
+
+    // Carry campaign-wide statistics into the new chapter while resetting the
+    // per-level buckets.
+    m_lossStats.alliance_all = previousLossStats.alliance_all;
+    m_lossStats.enemy_all = previousLossStats.enemy_all;
+    m_lossStats.alliance_level = {};
+    m_lossStats.enemy_level = {};
+    m_stats = previousMissionStats;
 
     // Enable game mode (campaign = game mode)
     m_gameModeEnabled = true;
@@ -17070,50 +17327,10 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
         m_levelResearchFlags = GetCumulativeResearchFlags(defPath);
     }
 
-    // Load all-time loss stats from previous level's strategic_stats.json (if accessible)
-    // (level-scope stats start fresh for the new level)
-    {
-        namespace fs = std::filesystem;
-        std::error_code ec2;
-        fs::path prevDir = prevSave.parent_path().parent_path().parent_path(); // up from save/strategic/level_XX/
-        // Try common location for stats (same as FindStrategicStatsPath logic)
-        fs::path prevLevelDef = fs::path(level_def);
-        fs::path statsDir = prevLevelDef.parent_path();
-        if (statsDir.empty() || !fs::exists(statsDir, ec2))
-            statsDir = fs::current_path(ec2);
-        fs::path statsPath = statsDir / "strategic_stats.json";
-        if (fs::exists(statsPath, ec2))
-        {
-            std::ifstream sf(statsPath);
-            if (sf)
-            {
-                std::string sdata((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>());
-                auto extractBlock = [&](const char* key, LossBlock& out)
-                {
-                    std::regex re(std::string("\"") + key + "\"\\s*:\\s*\\{([^}]*)\\}");
-                    std::smatch sm;
-                    if (std::regex_search(sdata, sm, re) && sm.size() >= 2)
-                    {
-                        (void)ParseJsonIntField(sm[1].str(), "light", out.light);
-                        (void)ParseJsonIntField(sm[1].str(), "heavy", out.heavy);
-                        (void)ParseJsonIntField(sm[1].str(), "air", out.air);
-                        (void)ParseJsonIntField(sm[1].str(), "commanders", out.commanders);
-                    }
-                };
-                extractBlock("all_alliance", m_lossStats.alliance_all);
-                extractBlock("all_enemy", m_lossStats.enemy_all);
-                // Level-scope stats start fresh
-                m_lossStats.alliance_level = {};
-                m_lossStats.enemy_level = {};
-
-                (void)ParseJsonIntField(sdata, "missions_completed", m_stats.missions_completed);
-                (void)ParseJsonIntField(sdata, "missions_failed", m_stats.missions_failed);
-                (void)ParseJsonIntField(sdata, "territories_conquered", m_stats.territories_conquered);
-                (void)ParseJsonIntField(sdata, "territories_lost", m_stats.territories_lost);
-                (void)ParseJsonIntField(sdata, "turns_total", m_stats.turns_total);
-            }
-        }
-    }
+    // Statistics have already been loaded from the exact previous-level save
+    // selected above. Do not re-read strategic_stats.json here: that legacy
+    // sidecar is global to an installation and may belong to a different save
+    // slot/playthrough. The embedded JSON counters are authoritative.
 
     // Persist the merged state immediately
     SaveStrategicState();
@@ -17156,6 +17373,7 @@ void StrategicLevelFrame::SaveStrategicState() const
         m_player, m_territoryCurrentMission, m_territoryLaunchCount, m_playerUnits,
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
+        &m_lossStats, &m_stats,
         NowIsoLocal());
 
     g_missionFlowPersistSave = prevMF;
@@ -18994,6 +19212,26 @@ wxString StrategicLevelFrame::GetRankNameCz(int rank) const
 // STRATEGIC LEVEL INTEGRATION - Mission Result Handling
 // ============================================================
 
+void StrategicLevelFrame::RecordStandaloneMissionStatistics(const LossBlock& allianceLosses,
+    const LossBlock& enemyLosses, bool success)
+{
+    auto add = [](LossBlock& dst, const LossBlock& src)
+    {
+        dst.light += src.light;
+        dst.heavy += src.heavy;
+        dst.air += src.air;
+        dst.commanders += src.commanders;
+    };
+    add(m_lossStats.alliance_all, allianceLosses);
+    add(m_lossStats.enemy_all, enemyLosses);
+    add(m_lossStats.alliance_level, allianceLosses);
+    add(m_lossStats.enemy_level, enemyLosses);
+    if (success) ++m_stats.missions_completed;
+    else ++m_stats.missions_failed;
+    SaveMissionStats();
+    SaveStrategicState();
+}
+
 void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, const std::string& mission_token)
 {
     // Collect battle results from the tactical map (losses, damage, unit experience).
@@ -19022,11 +19260,16 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
             if (success)
             {
                 ca.completed = true;
+                ca.territory_lost = false;
+                ca.enemy_units.clear();
             }
             else
             {
-                // Counter-attack defense failed — territory is lost
+                // Counter-attack defense failed — territory is lost. Keep the
+                // attacking force attached to the territory so a later
+                // recapture can rebuild the DOS-generated DTA battle.
                 ca.completed = true;
+                ca.territory_lost = true;
                 auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), territory_id);
                 if (it != m_ownedTerritories.end())
                     m_ownedTerritories.erase(it);
@@ -19077,6 +19320,18 @@ void StrategicLevelFrame::HandleMissionResult(int territory_id, bool success, co
         {
             // A territory is secured only when its successful mission chain ends.
             ConquestTerritory(territory_id);
+
+            // If this was a recapture of a DTA-only starting territory, its
+            // stored occupying force has now been defeated and must not leak
+            // into a future battle for the same territory.
+            for (auto& ca : m_counterAttacks)
+            {
+                if (ca.territory_id == territory_id && ca.territory_lost)
+                {
+                    ca.territory_lost = false;
+                    ca.enemy_units.clear();
+                }
+            }
         }
 
         // Campaign progression is driven by LevelInit::End(n).  Earlier builds
@@ -19180,40 +19435,22 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
     }
 
     // --- 1) Count losses by category ---
+    // Dead tactical units are physically removed from SpellMap during combat.
+    // Therefore counting only units still present at mission end under-reports
+    // casualties. SpellMap keeps an authoritative per-mission casualty ledger
+    // at the moment each destroyed company is removed.
+    const auto tacticalLosses = tactical_map->GetMissionLossStats();
     LossBlock mission_alliance_losses{};
+    mission_alliance_losses.light = tacticalLosses.alliance_light;
+    mission_alliance_losses.heavy = tacticalLosses.alliance_heavy;
+    mission_alliance_losses.air = tacticalLosses.alliance_air;
+    mission_alliance_losses.commanders = tacticalLosses.alliance_commanders;
+
     LossBlock mission_enemy_losses{};
-
-    for (auto* u : tactical_map->units)
-    {
-        if (!u || !u->unit)
-            continue;
-
-        const bool dead = u->isDead() != 0;
-        const bool is_air = u->unit->isAir() != 0;
-        const bool is_armored = u->unit->isArmored() != 0;
-        const bool is_cmd = u->is_commander != 0;
-
-        if (u->is_enemy)
-        {
-            if (dead)
-            {
-                if (is_cmd)       mission_enemy_losses.commanders++;
-                else if (is_air)  mission_enemy_losses.air++;
-                else if (is_armored) mission_enemy_losses.heavy++;
-                else              mission_enemy_losses.light++;
-            }
-        }
-        else
-        {
-            if (dead)
-            {
-                if (is_cmd)       mission_alliance_losses.commanders++;
-                else if (is_air)  mission_alliance_losses.air++;
-                else if (is_armored) mission_alliance_losses.heavy++;
-                else              mission_alliance_losses.light++;
-            }
-        }
-    }
+    mission_enemy_losses.light = tacticalLosses.enemy_light;
+    mission_enemy_losses.heavy = tacticalLosses.enemy_heavy;
+    mission_enemy_losses.air = tacticalLosses.enemy_air;
+    mission_enemy_losses.commanders = tacticalLosses.enemy_commanders;
 
     // Update loss statistics (both level and all-time)
     m_lossStats.alliance_level.light += mission_alliance_losses.light;
@@ -19626,6 +19863,7 @@ void StrategicLevelFrame::CheckCounterAttacks()
 
                 m_stats.territories_lost++;
                 ca.completed = true;
+                ca.territory_lost = true;
 
                 ApplyTerritoryVisibility();
                 MarkOverlayDirty();
@@ -19816,9 +20054,25 @@ void StrategicLevelFrame::ProcessLevelEvents()
         // Army: counter-attack on a player-owned territory
         if (!evt->armies.empty() && !m_ownedTerritories.empty())
         {
-            // Pick a target territory for the counter-attack
-            // Prefer the most recently conquered territory
+            // Pick a target territory for the counter-attack. The original
+            // strategic engine keeps the exact Army(...) company list and
+            // generates the tactical battle on the territory's DTA map.
+            // Persist that force here so declining/losing the defence still
+            // leaves a concrete occupying army for a later recapture.
             int target_tid = m_ownedTerritories.back();
+
+            CounterAttackState eventAttack;
+            eventAttack.territory_id = target_tid;
+            eventAttack.conquest_turn = m_turn;
+            eventAttack.trigger_turn = m_turn;
+            eventAttack.counter_mission = ResolveMissionTokenForTerritory(target_tid);
+            eventAttack.triggered = true;
+            eventAttack.completed = false;
+            eventAttack.territory_lost = false;
+            for (const auto& army : evt->armies)
+                eventAttack.enemy_units.insert(eventAttack.enemy_units.end(), army.units.begin(), army.units.end());
+            m_counterAttacks.push_back(std::move(eventAttack));
+            CounterAttackState& activeAttack = m_counterAttacks.back();
 
             // Select the territory visually
             SelectTerritoryById(target_tid);
@@ -19838,17 +20092,21 @@ void StrategicLevelFrame::ProcessLevelEvents()
 
             if (result == wxYES)
             {
-                // Player will defend — set territory for launch
+                // Player will defend. OnLaunch finds this active state and
+                // generates the DTA tactical battle with the exact Army force.
                 RefreshUI();
             }
             else
             {
-                // Player refuses to defend — lose the territory
+                // Player refuses to defend — lose the territory, but retain
+                // the occupiers for the later recapture battle.
                 auto it = std::find(m_ownedTerritories.begin(), m_ownedTerritories.end(), target_tid);
                 if (it != m_ownedTerritories.end())
                     m_ownedTerritories.erase(it);
 
                 m_stats.territories_lost++;
+                activeAttack.completed = true;
+                activeAttack.territory_lost = true;
                 ApplyTerritoryVisibility();
                 MarkOverlayDirty();
             }
@@ -20248,10 +20506,15 @@ void StrategicLevelFrame::AdvanceToNextLevel()
         }
     }
     
-    // Play outro video
-    if (!m_level.outro_video.empty() && m_level.outro_video != "none")
+    // Prefer the original talking-head/story CAN outro when present.
+    // PlayEndDeltaAnim is a separate level-transition animation and must not
+    // replace e.g. ALEX.SMK after the opening Escape mission.
+    const std::string& outroToPlay =
+        (!m_level.outro_can_video.empty() && m_level.outro_can_video != "none")
+        ? m_level.outro_can_video : m_level.outro_video;
+    if (!outroToPlay.empty() && outroToPlay != "none")
     {
-        PlayVideo(m_level.outro_video);
+        PlayVideo(outroToPlay);
     }
     
     if (nextDef.empty())
@@ -20406,6 +20669,7 @@ void StrategicLevelFrame::AdvanceToNextLevel()
     // Transfer all-time loss stats (level stats reset for new level)
     newWin->m_lossStats.alliance_all = m_lossStats.alliance_all;
     newWin->m_lossStats.enemy_all = m_lossStats.enemy_all;
+    newWin->m_stats = m_stats;
     // Level-scope stats start fresh
     newWin->m_lossStats.alliance_level = {};
     newWin->m_lossStats.enemy_level = {};

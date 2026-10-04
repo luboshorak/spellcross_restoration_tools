@@ -108,6 +108,9 @@ public:
     void StatusStringCallback(std::string info);
     void CreateHUDbuttons();
     bool LoadMapFromDefPath(const std::wstring& def_path, const std::vector<LevelData::PlayerUnitAdd>& player_units);
+    bool LoadGeneratedStrategicBattleFromDtaPath(const std::wstring& dta_path,
+        const std::vector<LevelData::PlayerUnitAdd>& player_units,
+        const std::vector<int>& enemy_unit_ids);
     // Switch between editor/game mode (also updates UI + resets game state when entering).
     void SetGameModeUI(bool enable_game_mode);
     // Access the current tactical map (used by strategic level for battle results)
@@ -115,6 +118,17 @@ public:
 
     bool m_mission_end_flow = false;
     SpellMap::MissionEndRequest m_mission_end_req;
+    enum class MissionResultStage { None, Debrief, Statistics };
+    MissionResultStage m_mission_result_stage = MissionResultStage::None;
+    bool m_mission_result_visible = false;
+    // A mission can finish while a normal tactical message is still closing.
+    // Defer showing the result overlay until the canvas is unobstructed.
+    bool m_mission_result_pending_show = false;
+    // Ignore the mouse/key event that actually completed the mission. Without
+    // this guard a newly-created result page can consume the same click and
+    // disappear before wxWidgets has painted a single frame.
+    int m_mission_result_input_guard = 0;
+    SpellMap::MissionLossStats m_mission_result_stats;
 
     // Editor is locked by default (game mode UI). Console command GAMEMODEOFF unlocks it.
     bool m_editor_unlocked = false;
@@ -124,6 +138,9 @@ public:
     class StrategicLevelFrame* m_strategicLevel = nullptr;
 
     void StartMissionEndFlow();
+    void ShowMissionResultOverlay();
+    void DismissMissionResultOverlay();
+    void DrawMissionResultOverlay(wxDC& dc);
     void OnCutsceneClosed(wxCloseEvent& ev);
     void OpenStrategicAndLoadNext();
 

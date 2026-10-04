@@ -812,6 +812,21 @@ void SpellMap::CheckObjectiveNotifications()
 	if (!isGameMode())
 		return;
 
+	// The original game does not insert a separate "objective completed"
+	// message between the final objective and the mission-result sequence.
+	// MissionEndOKText/MissionEndBadText owns that presentation.  Keeping a
+	// normal FormMsgBox alive here hid the native result overlay underneath it
+	// and the next click on the battlefield then dismissed the invisible result.
+	if (AreAllObjectivesDone())
+	{
+		for (auto* e : events->GetEvents())
+			if (e && e->is_objective && e->isDone())
+				e->objective_notified = true;
+		m_objective_notify_queue.clear();
+		m_objective_notify_active = false;
+		return;
+	}
+
 	// If a notification is currently displayed, wait until dismissed
 	if (m_objective_notify_active)
 	{
@@ -1178,23 +1193,17 @@ void SpellMap::CheckAndTriggerMissionEnd()
 	}
 	// next_level_def se zpracovává ve Strategic Level (HandleMissionResult/AdvanceToNextLevel)
 
-	if (m_msg_creator && m_mission_end_req.text)
-	{
-		// OPRAVA: Použij callback který nastaví pending flag když uživatel zavře message box
-		// Toto je spolehlivější než polling přes m_msg_checker
-		// false = jen tlačítko OK (ne YES/NO) pro mission accomplished/failed
-		m_msg_creator(m_mission_end_req.text, false, [this](bool /*result*/) {
-			m_mission_end_ack = true;
-			m_mission_end_req.pending = true;
-		});
-		m_mission_end_shown = true;
-	}
-	else
-	{
-		// bez UI hooku -> pusť přechod rovnou
-		m_mission_end_ack = true;
-		m_mission_end_req.pending = true;
-	}
+	// Mission-end presentation belongs to MainFrame.  Earlier restoration
+	// builds opened a normal tactical message box here and only queued the
+	// mission result after that child window closed.  That inverted the DOS
+	// order (banner/debrief first, then statistics) and could strand completed
+	// missions on the tactical map if the child-window callback was missed.
+	// Queue the completed result immediately; keep `text` attached to the
+	// request so MainFrame can render the original debrief flow.
+	m_mission_end_ack = true;
+	m_mission_end_shown = true;
+	m_mission_end_req.pending = true;
+
 }
 
 
@@ -1715,6 +1724,7 @@ void SpellMap::Close()
 	m_mission_end_ack = false;
 	m_mission_end_req = MissionEndRequest();
 	m_mission_end_fired = false;
+	m_mission_losses = MissionLossStats();
 	m_start_text_pending = false;
 
 	SetDefaultRenderFilter(NULL);
@@ -3231,6 +3241,87 @@ int SpellMap::UnitsMoved(int clear)
 	return(moved);
 }
 
+
+static int MissionCommanderLossCount(const MapUnit* unit)
+{
+	if (!unit)
+		return 0;
+
+	// Strategic hierarchy commanders are carried by a host company. A company
+	// may host battalion, regiment and brigade commanders simultaneously, so a
+	// boolean is_commander would under-count a destroyed multi-command host.
+	// formation_commander_mask keeps those three independent commander slots.
+	unsigned int mask = static_cast<unsigned int>(unit->formation_commander_mask) & 0x07u;
+	int count = 0;
+	while (mask)
+	{
+		count += static_cast<int>(mask & 1u);
+		mask >>= 1u;
+	}
+	if (count == 0 && unit->is_commander)
+		count = 1; // legacy/standalone tactical saves pre-dating the mask
+	return count;
+}
+
+void SpellMap::RecordMissionLoss(const MapUnit* unit)
+{
+	if (!unit || !unit->unit || !unit->isDead())
+		return;
+
+	const bool air = unit->unit->isAir() != 0;
+	const bool heavy = unit->unit->isArmored() != 0;
+	const int commanderLosses = MissionCommanderLossCount(unit);
+	if (unit->is_enemy)
+	{
+		if (air) ++m_mission_losses.enemy_air;
+		else if (heavy) ++m_mission_losses.enemy_heavy;
+		else ++m_mission_losses.enemy_light;
+		// A commander is an additional casualty carried by the company, not a
+		// replacement for the company's light/heavy/air loss. BIG_MAP.SAV stores
+		// Alliance commander losses as a separate counter for exactly this reason.
+		m_mission_losses.enemy_commanders += commanderLosses;
+	}
+	else
+	{
+		if (air) ++m_mission_losses.alliance_air;
+		else if (heavy) ++m_mission_losses.alliance_heavy;
+		else ++m_mission_losses.alliance_light;
+		m_mission_losses.alliance_commanders += commanderLosses;
+	}
+}
+
+SpellMap::MissionLossStats SpellMap::GetMissionLossStats() const
+{
+	MissionLossStats result = m_mission_losses;
+
+	// A mission may end in the same tick in which a unit reached zero manpower,
+	// before the normal cleanup path had a chance to extract it. Include such
+	// lingering corpses here. Units already recorded above have been extracted,
+	// so this cannot double-count them.
+	for (auto* unit : units)
+	{
+		if (!unit || !unit->unit || !unit->isDead())
+			continue;
+		const bool air = unit->unit->isAir() != 0;
+		const bool heavy = unit->unit->isArmored() != 0;
+		const int commanderLosses = MissionCommanderLossCount(unit);
+		if (unit->is_enemy)
+		{
+			if (air) ++result.enemy_air;
+			else if (heavy) ++result.enemy_heavy;
+			else ++result.enemy_light;
+			result.enemy_commanders += commanderLosses;
+		}
+		else
+		{
+			if (air) ++result.alliance_air;
+			else if (heavy) ++result.alliance_heavy;
+			else ++result.alliance_light;
+			result.alliance_commanders += commanderLosses;
+		}
+	}
+	return result;
+}
 
 bool SpellMap::ConsumeMissionEndRequest(MissionEndRequest& out)
 {
@@ -10736,6 +10827,7 @@ void SpellMap::CleanupDeadUnits()
 	}
 	for (auto* dead : dead_list)
 	{
+		RecordMissionLoss(dead);
 		auto extracted = ExtractUnit(dead);
 		if (extracted)
 			extracted->Kill();
@@ -10978,7 +11070,34 @@ int SpellMap::Tick()
 	}
 
 	if (!unit)
+	{
+		// A finished objective must be allowed to advance the mission even when
+		// no tactical unit is currently selected.  The old early return here
+		// skipped the common end-of-tick event/mission-end processing entirely.
+		// Result: the player could see the final mission text, but the result
+		// screen was not queued until some later click selected a unit.
+		//
+		// Keep the no-selection fast path, but run the presentation-independent
+		// mission finalisation first.  This is especially important after a
+		// message box closes and after loading a tactical save with no selection.
+		CleanupDeadUnits();
+
+		if (m_start_text_pending && m_msg_creator && m_msg_checker && !m_msg_checker())
+		{
+			m_start_text_pending = false;
+			if (spelldata && spelldata->texts && !params.start_text.empty())
+			{
+				SpellTextRec* start_txt = spelldata->texts->GetText(params.start_text);
+				if (start_txt)
+					m_msg_creator(start_txt, false, NULL);
+			}
+		}
+
+		ProcEventsList(event_list);
+		CheckObjectiveNotifications();
+		CheckAndTriggerMissionEnd();
 		return(update);
+	}
 
 	
 	// === Group multi-move support ===
@@ -11926,7 +12045,10 @@ int SpellMap::Tick()
 
 				if (need_extract)
 				{
-					// kill target unit
+					// Count the loss before ExtractUnit()/Kill() removes the unit from
+					// the tactical roster. The original statistics count destroyed
+					// companies, not only corpses still present at mission end.
+					RecordMissionLoss(target);
 					auto dead = ExtractUnit(target);
 					if (dead)
 					{

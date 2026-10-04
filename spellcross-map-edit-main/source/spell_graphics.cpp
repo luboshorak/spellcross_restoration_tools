@@ -227,9 +227,29 @@ SpellGraphicItem *SpellGraphics::GetResource(int index)
 }
 SpellGraphicItem *SpellGraphics::GetResource(const char* name)
 {
+	if(!name)
+		return(NULL);
+
+	// Most raw Spellcross graphics are intentionally stored with a "loose"
+	// resource name (AddRaw(..., with_ext=false) strips .LZ/.LZ0/etc.).
+	// Accept both forms here.  Several callers naturally use the original FS
+	// filename, e.g. M_ACCOMP.LZ; without this fallback such an item existed in
+	// memory as M_ACCOMP but could never be found and UI became invisibly modal.
 	for(int k = 0; k < items.size(); k++)
 		if(strcmp(name, items[k].name) == 0)
 			return(&items[k]);
+
+	std::string loose_name(name);
+	size_t slash = loose_name.find_last_of("/\\");
+	size_t dot = loose_name.find_last_of('.');
+	if(dot != std::string::npos && (slash == std::string::npos || dot > slash))
+	{
+		loose_name.resize(dot);
+		for(int k = 0; k < items.size(); k++)
+			if(strcmp(loose_name.c_str(), items[k].name) == 0)
+				return(&items[k]);
+	}
+
 	return(NULL);
 }
 // get items count

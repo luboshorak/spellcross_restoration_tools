@@ -910,6 +910,11 @@ int SpellData::LoadAuxGraphics(FSarchive *fs,std::function<void(std::string)> st
 			// war map end title
 			gres.AddRaw(data,flen,340,flen/340,name,map_pal);
 		}
+		else if(strcmp(name,"WM_STAT.LZ") == 0)
+		{
+			// Original 408x175 mission-result statistics panel.
+			gres.AddRaw(data,flen,408,flen/408,name,map_pal);
+		}
 		else if(strcmp(name,"OPT_BAR.LZ") == 0)
 		{
 			// window frame

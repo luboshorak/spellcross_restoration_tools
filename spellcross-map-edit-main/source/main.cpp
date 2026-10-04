@@ -33,6 +33,7 @@
 #include <tuple>
 #include <string>
 #include <chrono>
+#include <cmath>
 #include <cctype>
 #include <future>
 #include <thread>
@@ -76,11 +77,62 @@ namespace
         std::string mission_token;
         std::vector<std::uint64_t> sent_unit_indices;
         std::vector<std::uint32_t> sent_unit_uids;
+        SpellMap::MissionLossStats mission_losses;
     };
+
+    static wxBitmap MakeSpellTextBitmap(SpellFont* font, const wxString& text,
+        const wxColour& fg, int boxWidth, bool centered)
+    {
+        if (!font || text.empty() || boxWidth <= 0)
+            return wxBitmap();
+        const int h = std::max(1, font->GetHeight()) + 4;
+        std::vector<uint8_t> mask(static_cast<size_t>(boxWidth) * static_cast<size_t>(h), 0);
+        std::string encoded = wstring2stringCP895(text.ToStdWstring());
+        const int tw = font->GetTextWidth(encoded);
+        const int x = centered ? std::max(0, (boxWidth - tw) / 2) : 0;
+        font->Render(mask.data(), mask.data() + mask.size(), boxWidth, x, 1,
+            text.ToStdWstring(), 2, 1, SpellFont::RIGHT_DOWN, SpellFont::LEFT);
+
+        wxImage img(boxWidth, h, true);
+        img.InitAlpha();
+        unsigned char* rgb = img.GetData();
+        unsigned char* alpha = img.GetAlpha();
+        if (!rgb || !alpha)
+            return wxBitmap();
+        for (size_t i = 0; i < mask.size(); ++i)
+        {
+            if (mask[i] == 0)
+            {
+                alpha[i] = 0;
+                continue;
+            }
+            alpha[i] = 255;
+            if (mask[i] == 1)
+            {
+                rgb[i * 3 + 0] = 0; rgb[i * 3 + 1] = 0; rgb[i * 3 + 2] = 0;
+            }
+            else
+            {
+                rgb[i * 3 + 0] = fg.Red();
+                rgb[i * 3 + 1] = fg.Green();
+                rgb[i * 3 + 2] = fg.Blue();
+            }
+        }
+        return wxBitmap(img);
+    }
+
+    static wxBitmap ScaleNearest(const wxBitmap& bmp, double scale)
+    {
+        if (!bmp.IsOk() || scale <= 0.0 || std::abs(scale - 1.0) < 0.001)
+            return bmp;
+        wxImage img = bmp.ConvertToImage();
+        return wxBitmap(img.Scale(std::max(1, (int)std::lround(img.GetWidth() * scale)),
+            std::max(1, (int)std::lround(img.GetHeight() * scale)), wxIMAGE_QUALITY_NEAREST));
+    }
 
     static constexpr char kTacticalContextMarker[] = "\n--SPELLCROSS-STRATEGIC-CONTEXT-V1--\n";
     static constexpr std::uint32_t kTacticalContextMagic = 0x31584353u; // SCX1
-    static constexpr std::uint32_t kTacticalContextVersion = 2u;
+    static constexpr std::uint32_t kTacticalContextVersion = 3u;
 
     template <typename T>
     static bool WriteCtxPod(std::ostream& os, const T& v)
@@ -136,6 +188,16 @@ namespace
         if (!WriteCtxPod(os, uidCount)) return false;
         for (std::uint32_t uid : ctx.sent_unit_uids)
             if (!WriteCtxPod(os, uid)) return false;
+        const int losses[8] = {
+            ctx.mission_losses.alliance_light, ctx.mission_losses.alliance_heavy,
+            ctx.mission_losses.alliance_air, ctx.mission_losses.alliance_commanders,
+            ctx.mission_losses.enemy_light, ctx.mission_losses.enemy_heavy,
+            ctx.mission_losses.enemy_air, ctx.mission_losses.enemy_commanders };
+        for (int v : losses)
+        {
+            const std::int32_t x = static_cast<std::int32_t>(v);
+            if (!WriteCtxPod(os, x)) return false;
+        }
         return static_cast<bool>(os);
     }
 
@@ -173,6 +235,20 @@ namespace
             ctx.sent_unit_uids.resize(static_cast<size_t>(uidCount));
             for (std::uint32_t& uid : ctx.sent_unit_uids)
                 if (!ReadCtxPod(is, uid)) return false;
+        }
+        if (ver >= 3u)
+        {
+            std::int32_t losses[8]{};
+            for (auto& v : losses)
+                if (!ReadCtxPod(is, v)) return false;
+            ctx.mission_losses.alliance_light = losses[0];
+            ctx.mission_losses.alliance_heavy = losses[1];
+            ctx.mission_losses.alliance_air = losses[2];
+            ctx.mission_losses.alliance_commanders = losses[3];
+            ctx.mission_losses.enemy_light = losses[4];
+            ctx.mission_losses.enemy_heavy = losses[5];
+            ctx.mission_losses.enemy_air = losses[6];
+            ctx.mission_losses.enemy_commanders = losses[7];
         }
         ctx.present = true;
         return true;
@@ -1395,6 +1471,232 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
     return true;
 }
 
+
+bool MainFrame::LoadGeneratedStrategicBattleFromDtaPath(const std::wstring& dta_path,
+    const std::vector<LevelData::PlayerUnitAdd>& player_units,
+    const std::vector<int>& enemy_unit_ids)
+{
+    if (!spell_map || !spell_data || dta_path.empty())
+        return false;
+
+    // Starting/recaptured territories in the original campaign intentionally
+    // have only Mxx_yy.DTA.  Their defence/recapture battle was generated by
+    // the DOS strategic layer, so looking for Mxx_yy.DEF is wrong.  Load the
+    // base battlefield and reconstruct the small amount of runtime mission
+    // data the tactical engine needs: deployment squares, occupiers and the
+    // DestroyAllUnits objective.
+    std::wstring path = dta_path;
+    if (spell_map->Load(path, spell_data))
+    {
+        wxMessageBox(string_format("Loading Spellcross map DTA file failed with error:\n%s",
+            spell_map->GetLastError().c_str()), "Launch", wxOK | wxICON_ERROR, this);
+        return false;
+    }
+
+    if (spell_map->x_size <= 0 || spell_map->y_size <= 0)
+        return false;
+
+    SetTitle(BuildSpellcrossWindowTitle(spell_map));
+    spell_map->SetGamma(1.30);
+
+    wxCommandEvent dummy;
+    OnViewLayer(dummy);
+    LoadToolsetRibbon();
+    Refresh();
+
+    size_t playerCompanyCount = 0;
+    for (const auto& entry : player_units)
+        playerCompanyCount += static_cast<size_t>(std::max(0, entry.count));
+
+    auto tile_ok = [&](int x, int y, bool strict) -> bool
+    {
+        if (x < 0 || y < 0 || x >= spell_map->x_size || y >= spell_map->y_size)
+            return false;
+        const uint8_t flags = spell_map->tiles[static_cast<size_t>(y * spell_map->x_size + x)].flags;
+        if (strict)
+            return flags == 0x00;
+        // 0x60/0x90 are the two special terrain cases accepted by some land
+        // movement classes. PlaceUnit() still performs the authoritative check
+        // for the concrete unit and searches nearby when necessary.
+        return flags == 0x00 || flags == 0x60 || flags == 0x90;
+    };
+
+    auto collect_band = [&](bool playerSide, bool strict) -> std::vector<MapXY>
+    {
+        std::vector<MapXY> out;
+        const int yMargin = std::max(1, spell_map->y_size / 20);
+        const int xMargin = std::max(1, spell_map->x_size / 12);
+        const int band = std::max(4, spell_map->y_size / 4);
+        const int yBegin = playerSide
+            ? std::max(yMargin, spell_map->y_size - yMargin - band)
+            : yMargin;
+        const int yEnd = playerSide
+            ? std::max(yBegin + 1, spell_map->y_size - yMargin)
+            : std::min(spell_map->y_size - yMargin, yMargin + band);
+
+        for (int y = yBegin; y < yEnd; ++y)
+        {
+            for (int x = xMargin; x < spell_map->x_size - xMargin; ++x)
+            {
+                if (tile_ok(x, y, strict))
+                    out.emplace_back(x, y);
+            }
+        }
+        return out;
+    };
+
+    auto spread_pick = [](const std::vector<MapXY>& candidates, size_t wanted) -> std::vector<MapXY>
+    {
+        std::vector<MapXY> out;
+        if (candidates.empty() || wanted == 0)
+            return out;
+        wanted = std::min(wanted, candidates.size());
+        out.reserve(wanted);
+        for (size_t i = 0; i < wanted; ++i)
+        {
+            const size_t idx = ((i + 1) * candidates.size()) / (wanted + 1);
+            out.push_back(candidates[std::min(idx, candidates.size() - 1)]);
+        }
+        return out;
+    };
+
+    std::vector<MapXY> playerCandidates = collect_band(true, true);
+    if (playerCandidates.empty())
+        playerCandidates = collect_band(true, false);
+    std::vector<MapXY> enemyCandidates = collect_band(false, true);
+    if (enemyCandidates.empty())
+        enemyCandidates = collect_band(false, false);
+
+    if (playerCandidates.empty() || enemyCandidates.empty())
+    {
+        wxMessageBox("The DTA battlefield has no usable deployment area.",
+            "Launch", wxOK | wxICON_ERROR, this);
+        return false;
+    }
+
+    const size_t wantedStarts = std::max<size_t>(12, playerCompanyCount);
+    spell_map->start = spread_pick(playerCandidates, wantedStarts);
+    const std::vector<MapXY> enemySeeds = spread_pick(enemyCandidates,
+        std::max<size_t>(1, enemy_unit_ids.size()));
+
+    // Recreate the random/counter-attack mission objective used by the DOS
+    // generated battle: destroy every Other Side company on the map.
+    if (spell_map->events)
+    {
+        auto* objective = new SpellMapEventRec(spell_map);
+        objective->SetType(SpellMapEventRec::EvtTypes::EVT_DESTROY_ALL);
+        objective->is_objective = true;
+        objective->probability = 100;
+        objective->label = L"Destroy all enemies";
+        spell_map->events->AddEvent(objective);
+    }
+
+    // Place Other Side occupiers first, well away from the Alliance deployment
+    // band. PlaceUnit() is deliberately used instead of trusting a raw tile: it
+    // resolves local terrain restrictions for walkers, hover units and air units.
+    size_t enemySeedIndex = 0;
+    for (int unitId : enemy_unit_ids)
+    {
+        SpellUnitRec* unitRec = spell_data->units ? spell_data->units->GetUnit(unitId) : nullptr;
+        if (!unitRec)
+            continue;
+
+        MapUnit* unit = new MapUnit(spell_map);
+        unit->unit = unitRec;
+        unit->coor = enemySeeds[enemySeedIndex % enemySeeds.size()];
+        unit->spec_type = MapUnitType::EnemyUnit;
+        unit->behave = MapUnitType::NormalUnit;
+        unit->is_enemy = 1;
+        unit->is_active = 1;
+        unit->InitExperience(0);
+        unit->man = std::max(1, unitRec->cnt);
+        unit->wounded = 0;
+        unit->morale = 100.0;
+        unit->ResetAP();
+
+        if (spell_map->PlaceUnit(unit))
+        {
+            delete unit;
+            continue;
+        }
+        spell_map->AssignUnitID(unit);
+        ++enemySeedIndex;
+    }
+
+    if (enemySeedIndex == 0)
+    {
+        wxMessageBox("No valid Other Side units could be created for this generated battle.",
+            "Launch", wxOK | wxICON_ERROR, this);
+        return false;
+    }
+
+    // Deploy the selected permanent Alliance companies exactly the same way as
+    // normal DEF missions, including strategic UID / formation / upgrade data.
+    size_t start_idx = 0;
+    MapUnit* first_deployed_player_unit = nullptr;
+    for (const auto& entry : player_units)
+    {
+        const int count = std::max(0, entry.count);
+        for (int i = 0; i < count; ++i)
+        {
+            SpellUnitRec* unit_rec = spell_data->units ? spell_data->units->GetUnit(entry.unit_id) : nullptr;
+            if (!unit_rec)
+                continue;
+
+            MapUnit* unit = new MapUnit(spell_map);
+            unit->unit = unit_rec;
+            unit->coor = spell_map->start[start_idx % spell_map->start.size()];
+            unit->spec_type = MapUnitType::NormalUnit;
+            unit->behave = MapUnitType::NormalUnit;
+            unit->is_enemy = 0;
+            unit->experience = std::max(0, entry.experience);
+            unit->experience_level = std::clamp(entry.experience_level, 1, 12);
+            unit->experience_init = unit->experience_level;
+            unit->strategic_uid = entry.strategic_uid;
+            unit->formation_id = entry.formation_id;
+            unit->formation_commander_mask = entry.formation_commander_mask;
+            unit->commander_id = entry.formation_level > 0 ? entry.formation_id : 0;
+            unit->is_commander = entry.formation_commander_mask != 0 ? 1 : (entry.carries_commander ? 1 : 0);
+            unit->formation_level = entry.formation_level;
+            unit->formation_attack_bonus = entry.formation_attack_bonus;
+            unit->formation_defence_bonus = entry.formation_defence_bonus;
+            unit->upgrade_move_bonus = entry.upgrade_move_bonus;
+            unit->upgrade_defence_bonus = entry.upgrade_defence_bonus;
+            unit->upgrade_attack_bonus = entry.upgrade_attack_bonus;
+            unit->upgrade_attack_count_bonus = entry.upgrade_attack_count_bonus;
+            unit->upgrade_range_bonus = entry.upgrade_range_bonus;
+            unit->ResetAP();
+            if (entry.health > 0 && entry.health <= 100)
+                unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+            else
+                unit->man = unit_rec->cnt;
+            unit->wounded = 0;
+
+            if (spell_map->PlaceUnit(unit))
+            {
+                delete unit;
+                continue;
+            }
+
+            spell_map->AssignUnitID(unit);
+            if (!first_deployed_player_unit)
+                first_deployed_player_unit = unit;
+            ++start_idx;
+        }
+    }
+
+    if (spell_map->events)
+        spell_map->events->ResetEvents();
+    spell_map->SortUnits();
+    spell_map->RecalculateTacticalFormations();
+    spell_map->InvalidateUnitsView();
+
+    if (first_deployed_player_unit)
+        spell_map->SelectUnit(first_deployed_player_unit, true);
+
+    return first_deployed_player_unit != nullptr;
+}
+
 void MainFrame::SetGameModeUI(bool enable_game_mode)
 {
     if(!spell_map || !spell_map->IsLoaded())
@@ -2406,6 +2708,18 @@ void MainFrame::OnClose(wxCloseEvent& ev)
         form_message->ResultCallback(); // exec result callback (calling it from here to have in this thread)
         delete form_message;
         form_message = NULL;
+
+        // If the mission ended while this message was visible, reveal the
+        // mission-result page only after wxWidgets has finished closing the
+        // child window.  This guarantees a repaint instead of waiting for a
+        // seemingly unrelated click/move on the battlefield.
+        if (m_mission_result_pending_show)
+        {
+            CallAfter([this]() {
+                if (m_mission_result_pending_show && !CheckMessageState())
+                    ShowMissionResultOverlay();
+            });
+        }
     }
     else if(ev.GetId() == ID_VIDEO_BOX_WIN && form_video_box)
     {
@@ -2589,26 +2903,32 @@ bool MainFrame::SaveTacticalGameWithCampaignContext(const std::wstring& path)
     if (rc != 0)
         return false;
 
-    // The very first tactical mission legitimately has no strategic frame yet.
-    // Every mission launched from the strategic layer does, and its exact state
-    // is embedded so the battle save can be resumed days later on its own.
-    if (!m_strategicLevel)
-        return true;
-
+    // Persist the current mission casualty ledger even for the opening
+    // tactical mission, which legitimately has no strategic frame yet. Dead
+    // units have already been removed from the map and cannot be reconstructed
+    // from the tactical unit list after loading.
     TacticalCampaignContext ctx;
-    StrategicLevelFrame::PendingMissionResult pending;
-    if (!m_strategicLevel->ExportBattleSaveContext(
-            ctx.level_def_path, ctx.strategic_state_json, pending))
-        return false;
-
     ctx.present = true;
-    ctx.pending_valid = pending.valid;
-    ctx.territory_id = pending.territory_id;
-    ctx.mission_token = pending.mission_token;
-    ctx.sent_unit_indices.reserve(pending.sent_unit_indices.size());
-    for (size_t idx : pending.sent_unit_indices)
-        ctx.sent_unit_indices.push_back(static_cast<std::uint64_t>(idx));
-    ctx.sent_unit_uids = pending.sent_unit_uids;
+    // Serialize only casualties already removed from the tactical unit list.
+    // A zero-man unit still present in the base .scsave will be counted by
+    // GetMissionLossStats() after load; storing that transient corpse here as
+    // well would count it twice.
+    ctx.mission_losses = spell_map->GetRecordedMissionLossStats();
+
+    if (m_strategicLevel)
+    {
+        StrategicLevelFrame::PendingMissionResult pending;
+        if (!m_strategicLevel->ExportBattleSaveContext(
+                ctx.level_def_path, ctx.strategic_state_json, pending))
+            return false;
+        ctx.pending_valid = pending.valid;
+        ctx.territory_id = pending.territory_id;
+        ctx.mission_token = pending.mission_token;
+        ctx.sent_unit_indices.reserve(pending.sent_unit_indices.size());
+        for (size_t idx : pending.sent_unit_indices)
+            ctx.sent_unit_indices.push_back(static_cast<std::uint64_t>(idx));
+        ctx.sent_unit_uids = pending.sent_unit_uids;
+    }
 
     return AppendTacticalCampaignContext(path, ctx);
 }
@@ -2624,6 +2944,8 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
     const int rc = spell_map->LoadGameStateFromFile(path);
     if (rc != 0)
         return false;
+    if (hasEmbeddedContext && ctx.present)
+        spell_map->SetMissionLossStats(ctx.mission_losses);
 
     auto destroyOldStrategic = [this]()
     {
@@ -2687,12 +3009,14 @@ bool MainFrame::LoadTacticalGameWithCampaignContext(const std::wstring& path)
             return false;
         }
     }
-    else
+    else if (!hasEmbeddedContext || !ctx.present)
     {
         // Compatibility for old Stage/build saves: they did not embed strategic
         // context at all. If the matching strategic autosave still exists on the
         // same installation, reconnect it and reconstruct the pending mission.
-        // This is deliberately best-effort; new saves are self-contained.
+        // A v3 context with an intentionally empty strategic JSON is the opening
+        // standalone mission and must NOT be rebound to an unrelated autosave.
+        // This is deliberately best-effort; new campaign saves are self-contained.
         namespace fs = std::filesystem;
         std::string missionStem;
         if (spell_map->IsLoaded())
@@ -2945,6 +3269,243 @@ void MainFrame::OnSelectUnitView(wxCommandEvent& event)
 
 static bool g_cutscene_handled = false;
 
+static bool IsIntroEscapeMission(const SpellMap* map)
+{
+    if (!map) return false;
+    std::wstring stem = std::filesystem::path(map->map_path).stem().wstring();
+    for (auto& ch : stem) ch = (wchar_t)towupper(ch);
+    return stem == L"M01_01" || stem == L"M01_01A" || stem == L"LEVEL_01" ||
+        stem == L"LEVEL1_1" || stem == L"LEVEL_01_01";
+}
+
+
+void MainFrame::ShowMissionResultOverlay()
+{
+    m_mission_result_pending_show = false;
+    m_mission_result_stats = spell_map ? spell_map->GetMissionLossStats() : SpellMap::MissionLossStats{};
+    m_mission_result_visible = true;
+    m_mission_result_stage = MissionResultStage::Debrief;
+    // Two timer ticks are enough to get past the input event that triggered the
+    // final objective/death.  This makes the result page a real modal step
+    // instead of allowing a click-through straight into Strategic Level.
+    m_mission_result_input_guard = 2;
+
+    // Mission-end presentation is deliberately drawn directly into the tactical
+    // canvas.  Do not use FormMsgBox here: creating a child window from the same
+    // mouse event that completes a mission can immediately close that child and
+    // advance the flow before it is ever painted (the bug seen in v20-v22).
+    if (canvas)
+    {
+        canvas->SetFocus();
+        canvas->Refresh();
+        canvas->Update();
+    }
+}
+
+void MainFrame::DismissMissionResultOverlay()
+{
+    if (!m_mission_result_visible || m_mission_result_input_guard > 0)
+        return;
+
+    if (m_mission_result_stage == MissionResultStage::Debrief)
+    {
+        // The campaign-opening Escape mission goes from the debrief directly to
+        // Alexander's video, matching the DOS flow.  Normal campaign missions
+        // show the losses table as a second page.
+        if (IsIntroEscapeMission(spell_map) && !m_strategicLevel)
+        {
+            m_mission_result_visible = false;
+            m_mission_result_stage = MissionResultStage::None;
+            if (canvas) canvas->Refresh();
+            StartMissionEndFlow();
+            return;
+        }
+
+        m_mission_result_stage = MissionResultStage::Statistics;
+        m_mission_result_input_guard = 2;
+        if (canvas)
+        {
+            canvas->Refresh();
+            canvas->Update();
+        }
+        return;
+    }
+
+    m_mission_result_visible = false;
+    m_mission_result_stage = MissionResultStage::None;
+    if (canvas) canvas->Refresh();
+    StartMissionEndFlow();
+}
+
+void MainFrame::DrawMissionResultOverlay(wxDC& dc)
+{
+    if (!m_mission_result_visible || !spell_data || !spell_data->font || !canvas)
+        return;
+
+    SpellGraphicItem* titleItem = spell_data->gres.GetResource(
+        m_mission_end_req.success ? "M_ACCOMP" : "M_FAILED");
+
+    const wxSize cs = canvas->GetClientSize();
+    const double scale = std::min(cs.GetWidth() / 640.0, cs.GetHeight() / 480.0);
+    if (scale <= 0.0) return;
+    const int ox = (cs.GetWidth() - (int)std::lround(640.0 * scale)) / 2;
+    const int oy = (cs.GetHeight() - (int)std::lround(480.0 * scale)) / 2;
+    auto X = [&](int v) { return ox + (int)std::lround(v * scale); };
+    auto Y = [&](int v) { return oy + (int)std::lround(v * scale); };
+
+    const wxColour text(218, 222, 211);
+
+    // The original FS filename is M_ACCOMP.LZ/M_FAILED.LZ, but AddRaw stores
+    // these as extensionless resources.  Draw the original asset whenever it
+    // is available.  If an installation is genuinely missing it, keep the
+    // result page visible with a text heading instead of creating an invisible
+    // modal screen.
+    bool titleDrawn = false;
+    if (titleItem)
+    {
+        std::unique_ptr<wxBitmap> titleNative(titleItem->Render(true));
+        if (titleNative && titleNative->IsOk())
+        {
+            wxBitmap title = ScaleNearest(*titleNative, scale);
+            dc.DrawBitmap(title, X(150), Y(10), true);
+            titleDrawn = true;
+        }
+    }
+
+    auto drawText = [&](const wxString& str, int x, int y, int w, bool centered)
+    {
+        wxBitmap b = MakeSpellTextBitmap(spell_data->font, str, text, w, centered);
+        if (!b.IsOk()) return;
+        b = ScaleNearest(b, scale);
+        dc.DrawBitmap(b, X(x), Y(y), true);
+    };
+
+    if (!titleDrawn)
+    {
+        wxLogWarning("Mission result title resource is missing; using text fallback.");
+        drawText(m_mission_end_req.success ? L"MISSION ACCOMPLISHED" : L"MISSION FAILED",
+            150, 35, 340, true);
+    }
+
+    if (m_mission_result_stage == MissionResultStage::Debrief)
+    {
+        // Render the debrief in the same original battlefield message-frame
+        // graphics used by Spellcross (RAM2ROH/RAM2HORZ/RAM2VERT).  Keeping it
+        // inside the canvas makes this page deterministic after save/load and
+        // prevents the old child-window click-through race.
+        wxString debrief;
+        if (m_mission_end_req.text)
+            debrief = wxString(m_mission_end_req.text->text.c_str());
+        if (debrief.empty())
+            debrief = m_mission_end_req.success ? L"Mission accomplished." : L"Mission failed.";
+
+        const int panelW = 450;
+        const int innerW = 390;
+        const auto chunks = m_mission_end_req.text
+            ? m_mission_end_req.text->WordWrap(spell_data->font, innerW)
+            : SpellTextChunks{};
+        std::vector<wxString> lines;
+        if (!chunks.empty())
+        {
+            lines.reserve(chunks.size());
+            for (const auto& c : chunks)
+                if (!c.text.empty()) lines.emplace_back(c.text);
+        }
+        else
+        {
+            // Fallback is short; keep it as one centered line.
+            lines.push_back(debrief);
+        }
+
+        const int lineH = std::max(1, spell_data->font->GetHeight()) + 1;
+        const int panelH = std::max(86, 44 + (int)lines.size() * lineH);
+        const int panelX = (640 - panelW) / 2;
+        const int panelY = std::min(365 - panelH / 2, 385 - panelH);
+
+        // Dark battlefield-backed centre; original metallic frame is drawn on
+        // top from the real RAM2* resources.
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour(9, 30, 10)));
+        dc.DrawRectangle(X(panelX + 8), Y(panelY + 8),
+            (int)std::lround((panelW - 16) * scale),
+            (int)std::lround((panelH - 16) * scale));
+
+        auto drawNative = [&](SpellGraphicItem* item, int x, int y)
+        {
+            if (!item) return;
+            std::unique_ptr<wxBitmap> native(item->Render(true));
+            if (!native || !native->IsOk()) return;
+            wxBitmap bmp = ScaleNearest(*native, scale);
+            dc.DrawBitmap(bmp, X(x), Y(y), true);
+        };
+
+        auto* corn = spell_data->gres.wm_frame_corner;
+        auto* horz = spell_data->gres.wm_frame_horz;
+        auto* vert = spell_data->gres.wm_frame_vert;
+        if (corn && horz && vert)
+        {
+            const int cw = std::max(1, corn->x_size);
+            const int ch = std::max(1, corn->y_size);
+            for (int x = panelX + cw; x < panelX + panelW - cw; x += std::max(1, horz->x_size))
+            {
+                drawNative(horz, x, panelY);
+                drawNative(horz, x, panelY + panelH - horz->y_size);
+            }
+            for (int y = panelY + ch; y < panelY + panelH - ch; y += std::max(1, vert->y_size))
+            {
+                drawNative(vert, panelX, y);
+                drawNative(vert, panelX + panelW - cw, y);
+            }
+            drawNative(corn, panelX, panelY);
+            drawNative(corn, panelX + panelW - cw, panelY);
+            drawNative(corn, panelX, panelY + panelH - ch);
+            drawNative(corn, panelX + panelW - cw, panelY + panelH - ch);
+        }
+
+        const int textY = panelY + 22;
+        for (size_t i = 0; i < lines.size(); ++i)
+            drawText(lines[i], panelX + 30, textY + (int)i * lineH, innerW, true);
+        return;
+    }
+
+    SpellGraphicItem* statItem = spell_data->gres.GetResource("WM_STAT");
+    bool statDrawn = false;
+    if (statItem)
+    {
+        std::unique_ptr<wxBitmap> statNative(statItem->Render(true));
+        if (statNative && statNative->IsOk())
+        {
+            wxBitmap stats = ScaleNearest(*statNative, scale);
+            dc.DrawBitmap(stats, X(116), Y(103), true);
+            statDrawn = true;
+        }
+    }
+    if (!statDrawn)
+    {
+        wxLogWarning("Mission result statistics resource WM_STAT is missing; using visible fallback panel.");
+        dc.SetPen(wxPen(wxColour(135, 135, 135)));
+        dc.SetBrush(wxBrush(wxColour(12, 18, 12)));
+        dc.DrawRectangle(X(116), Y(103),
+            (int)std::lround(408 * scale), (int)std::lround(175 * scale));
+    }
+
+    // WM_STAT.LZ native grid: x=116..523, y=103..277 in 640x480 space.
+    drawText(L"Alliance - losses", 116 + 113, 103 + 25, 132, true);
+    drawText(L"Dark Side - losses", 116 + 246, 103 + 25, 144, true);
+
+    const wxString labels[4] = { L"Light units", L"Heavy units", L"Air units", L"Commanders" };
+    const int alliance[4] = { m_mission_result_stats.alliance_light, m_mission_result_stats.alliance_heavy,
+        m_mission_result_stats.alliance_air, m_mission_result_stats.alliance_commanders };
+    const int enemy[4] = { m_mission_result_stats.enemy_light, m_mission_result_stats.enemy_heavy,
+        m_mission_result_stats.enemy_air, m_mission_result_stats.enemy_commanders };
+    const int rowY[4] = { 53, 79, 106, 133 };
+    for (int i = 0; i < 4; ++i)
+    {
+        drawText(labels[i], 116 + 18, 103 + rowY[i], 90, false);
+        drawText(wxString::Format("%d", alliance[i]), 116 + 113, 103 + rowY[i], 132, true);
+        drawText(wxString::Format("%d", enemy[i]), 116 + 246, 103 + rowY[i], 144, true);
+    }
+}
 
 void MainFrame::StartMissionEndFlow()
 {
@@ -3035,6 +3596,22 @@ void MainFrame::OnTimer(wxTimerEvent& event)
     if (!spell_map->IsLoaded())
         return;
 
+    // Mission-end presentation must never be painted underneath a tactical
+    // FormMsgBox/video.  Once that window is gone, reveal the native result
+    // page on the very next timer tick and force an immediate repaint.
+    if (m_mission_result_pending_show && !CheckMessageState())
+        ShowMissionResultOverlay();
+
+    // The original result table is modal over the finished battlefield. Freeze
+    // tactical simulation until the player dismisses it, otherwise AI/cleanup
+    // ticks could keep changing the just-reported mission state underneath it.
+    if (m_mission_result_visible)
+    {
+        if (m_mission_result_input_guard > 0)
+            --m_mission_result_input_guard;
+        return;
+    }
+
     if (spell_map->Tick())
         canvas->Refresh();
 
@@ -3067,9 +3644,13 @@ void MainFrame::OnTimer(wxTimerEvent& event)
                         if (loader.LoadLevelDef(levelDefPath, currentLvl, &err))
                         {
                             // Set outro video as movie_path so StartMissionEndFlow() plays it
-                            if (m_mission_end_req.success && !currentLvl.outro_video.empty() && currentLvl.outro_video != "none")
+                            if (m_mission_end_req.success)
                             {
-                                m_mission_end_req.movie_path = std::wstring(currentLvl.outro_video.begin(), currentLvl.outro_video.end());
+                                const std::string& preferredOutro =
+                                    (!currentLvl.outro_can_video.empty() && currentLvl.outro_can_video != "none")
+                                    ? currentLvl.outro_can_video : currentLvl.outro_video;
+                                if (!preferredOutro.empty() && preferredOutro != "none")
+                                    m_mission_end_req.movie_path = std::wstring(preferredOutro.begin(), preferredOutro.end());
                             }
 
                             // Set next_level_def so OpenStrategicAndLoadNext() can create the strategic level
@@ -3100,7 +3681,9 @@ void MainFrame::OnTimer(wxTimerEvent& event)
                 }
             }
 
-            StartMissionEndFlow();
+            m_mission_result_pending_show = true;
+            if (!CheckMessageState())
+                ShowMissionResultOverlay();
         }
     }
 }
@@ -3373,6 +3956,21 @@ void MainFrame::OpenStrategicAndLoadNext()
             // Start fresh game mode directly (campaign progression)
             win->StartFreshGameMode(bonus_units);
 
+            // The campaign-opening tactical mission can run before a strategic
+            // frame exists. Preserve its casualties in the same global/level
+            // statistics model once the first strategic frame is created.
+            StrategicLevelFrame::LossBlock allianceLosses;
+            allianceLosses.light = m_mission_result_stats.alliance_light;
+            allianceLosses.heavy = m_mission_result_stats.alliance_heavy;
+            allianceLosses.air = m_mission_result_stats.alliance_air;
+            allianceLosses.commanders = m_mission_result_stats.alliance_commanders;
+            StrategicLevelFrame::LossBlock enemyLosses;
+            enemyLosses.light = m_mission_result_stats.enemy_light;
+            enemyLosses.heavy = m_mission_result_stats.enemy_heavy;
+            enemyLosses.air = m_mission_result_stats.enemy_air;
+            enemyLosses.commanders = m_mission_result_stats.enemy_commanders;
+            win->RecordStandaloneMissionStatistics(allianceLosses, enemyLosses, m_mission_end_req.success);
+
             HideTacticalWindow();
             win->Show();
             win->Raise();
@@ -3383,7 +3981,8 @@ void MainFrame::OpenStrategicAndLoadNext()
         // No next_level_def and no strategic level
     }
 
-    // reset flow flag
+    // reset flow flags
+    m_mission_result_pending_show = false;
     m_mission_end_flow = false;
 }
 
@@ -3421,6 +4020,8 @@ void MainFrame::OnPaintCanvas(wxPaintEvent& event)
         float time = 1e-6*std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
         SetStatusText(wxString::Format(wxT("%.0f fps"),frames/time),7);*/
         pdc.DrawBitmap(m_buffer,wxPoint(0,0));
+        if (m_mission_result_visible)
+            DrawMissionResultOverlay(pdc);
     }
        
 
@@ -4760,6 +5361,14 @@ void MainFrame::OnDeleteSel(wxCommandEvent& event)
 // canvas left click
 void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
 {
+    if (m_mission_end_flow)
+    {
+        if (m_mission_result_visible && event.LeftDown())
+            DismissMissionResultOverlay();
+        // A completed mission is modal. Never allow a click intended for the
+        // result flow to select/move/attack a tactical unit underneath it.
+        return;
+    }
     if(!spell_map->IsLoaded())
         return;
     if(inUnitOptions())

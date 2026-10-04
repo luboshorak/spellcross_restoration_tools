@@ -288,6 +288,12 @@ bool LevelLoader::LoadLevelDef(const std::string& path, LevelData& out, std::str
                 continue;
             }
             // PlayEndDeltaAnim na úrovni levelu - outro video
+            // PlayEndCANAnim - original talking-head/story outro. This is
+            // distinct from PlayEndDeltaAnim (LEVEL_01: ALEX.SMK vs LEVEL1_1.SMK).
+            if (cmd == "PlayEndCANAnim" && args.size() >= 1) {
+                out.outro_can_video = args[0];
+                continue;
+            }
             if (cmd == "PlayEndDeltaAnim" && args.size() >= 1) {
                 out.outro_video = args[0];
                 continue;

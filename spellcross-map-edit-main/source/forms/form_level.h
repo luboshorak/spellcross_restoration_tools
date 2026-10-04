@@ -202,6 +202,7 @@ public:
     // mission selection / progression
     std::string ResolveMissionTokenForTerritory(int territory_id) const;
     std::wstring ResolveMapDefPathForMissionToken(const std::string& mission_token) const;
+    std::wstring ResolveMapDtaPathForMissionToken(const std::string& mission_token) const;
     const LevelMission* FindMissionByNameUpper(const std::string& name_upper) const;
 
     // ============================================================
@@ -240,6 +241,12 @@ public:
         std::string counter_mission;
         bool triggered = false;
         bool completed = false;
+        // Scripted Army(...) attacks use the territory DTA directly and build
+        // a tactical skirmish at runtime.  Keep the exact attacking force so
+        // refusing/losing the defence can later be recaptured with the same
+        // occupiers instead of falling through to a non-existent Mxx_yy.DEF.
+        bool territory_lost = false;
+        std::vector<int> enemy_units;
     };
     
     // Tactical battle saves must carry the strategic campaign snapshot that
@@ -254,9 +261,11 @@ public:
 
     // Handle mission completion (called from main.cpp after returning from tactical map)
     void HandleMissionResult(int territory_id, bool success, const std::string& mission_token);
+    void RecordStandaloneMissionStatistics(const LossBlock& allianceLosses,
+        const LossBlock& enemyLosses, bool success);
 
-    // Collect battle results from tactical map and apply to strategic state
-    // Returns the per-mission enemy losses for XP calculation
+    // Collect battle results from tactical map and apply to strategic state.
+    // Returns the per-mission enemy-loss block for callers that need it.
     LossBlock CollectAndApplyBattleResults(bool success);
 
     // Save mission/loss stats to strategic_stats.json

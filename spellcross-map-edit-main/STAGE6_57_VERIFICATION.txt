@@ -1,0 +1,43 @@
+Stage 6.57 verification — DTA counter-attack / recapture
+=========================================================
+
+Original-data checks performed against the supplied English Spellcross data/save set:
+
+1. LEVEL_05 territory 2 is declared as:
+   Territory(2,none,m05_02,mus04)
+
+2. COMMON.FS extraction contains M05_02.DTA and does NOT contain M05_02.DEF.
+   Therefore the v26 launch error was caused by assuming that every hostile
+   strategic territory has a scripted tactical DEF.
+
+3. Original generated-save mission R0502.MIS was decompressed. Its header is:
+   generation/turn value = 5
+   enemy company count   = 50
+
+4. LEVEL_05 Event(6), AbsTime(5), contains exactly 50 companies in Army(...)
+   commands. Parsed unit-id sequence from Event(6) is byte-for-byte identical
+   to the 50 unit ids stored at the beginning of the original R0502.MIS.
+
+   Counts:
+     unit 61 x 15
+     unit 53 x 12
+     unit 57 x  6
+     unit 38 x  5
+     unit 50 x  4
+     unit 56 x  4
+     unit 48 x  3
+     unit 47 x  1
+
+   This directly confirms that the original strategic layer generated the
+   R0502 tactical mission from the event Army(...) force on top of M05_02.DTA.
+
+5. v27 therefore preserves the Army(...) list in CounterAttackState and uses
+   a DTA-generated tactical mission for defence/recapture. Existing v26 saves
+   reconstruct the newest already-triggered Army(...) event before falling
+   back to the generic AttackUnits pool.
+
+Build note:
+The supplied project is an MSVC/wxWidgets Visual Studio project. This Linux
+container does not have wx-config/MSVC, so a native Windows link/build could
+not be performed here. Source-level diffs and original-data consistency checks
+were performed; no project format or unrelated gameplay code was changed.

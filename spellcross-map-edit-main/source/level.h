@@ -154,8 +154,10 @@ struct LevelData {
 
     std::vector<std::string> unknown_lines; // pro debug
 
-    // Intro/outro videa levelu
+    // Intro/outro videa levelu. Original LEVEL_xx.DEF distinguishes the
+    // talking-head CAN outro from the delta/map outro.
     std::string intro_video;
+    std::string outro_can_video;
     std::string outro_video;
 
     // Výchozí další level

@@ -234,6 +234,18 @@ typedef struct{
 class SpellMap
 {
 public:
+	struct MissionLossStats
+	{
+		int alliance_light = 0;
+		int alliance_heavy = 0;
+		int alliance_air = 0;
+		int alliance_commanders = 0;
+		int enemy_light = 0;
+		int enemy_heavy = 0;
+		int enemy_air = 0;
+		int enemy_commanders = 0;
+	};
+
 	struct MissionEndRequest
 	{
 		bool pending = false;
@@ -247,6 +259,7 @@ public:
 	bool m_mission_end_ack = false;
 	MissionEndRequest m_mission_end_req;
 	bool m_mission_end_fired = false;   // jednorázová pojistka: mission end už byl vyvolán
+	MissionLossStats m_mission_losses; // accumulated before dead units are physically removed
 	std::unique_ptr<SpellTextRec> m_mission_end_fallback_text; // fallback text if not found in data
 
 	// MissionStartText pending display (shown on first available Tick after video etc.)
@@ -425,6 +438,10 @@ public:
 
 		bool ConsumeMissionEndRequest(MissionEndRequest& out);
 		bool RequestRetreatMissionEnd();
+		MissionLossStats GetMissionLossStats() const;
+		MissionLossStats GetRecordedMissionLossStats() const { return m_mission_losses; }
+		void SetMissionLossStats(const MissionLossStats& stats) { m_mission_losses = stats; }
+		void RecordMissionLoss(const MapUnit* unit);
 		bool AreAllObjectivesDone() const;
 		void CheckAndTriggerMissionEnd();
 		void CheckObjectiveNotifications();
