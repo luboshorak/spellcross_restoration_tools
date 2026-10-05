@@ -1,0 +1,14 @@
+Spellcross 0.7.9 hotfix4f - enemy turn deadlock fix
+
+Base: hotfix4e target-lifetime fix.
+
+Fix:
+- EnemyTurnStep no longer loops forever when the current AI company is already
+  in a pending move/attack/action state but another unit is selected.
+- The turn driver now hands selection to the actually busy AI company so the
+  existing selected-unit state machine can finish that pending state.
+- This fixes the observed state where ending the player turn could leave an
+  enemy unit selected and all player input permanently blocked while
+  enemy_turn_running remained true.
+
+No combat/AI decision rules were changed; this is a state-machine handoff fix.

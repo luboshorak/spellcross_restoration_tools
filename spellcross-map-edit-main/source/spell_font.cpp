@@ -11,6 +11,7 @@
 #include <vector>
 #include <fstream>
 #include <stdexcept>
+#include <algorithm>
 
 using namespace std;
 
@@ -171,8 +172,8 @@ SpellFont::SpellFont(uint8_t* data, int len)
 		int sym_h = m_symbols.back().GetHeight();
 		
 		// rememebr maximum symbol sizes
-		m_max_y = max(m_max_y, sym_h);
-		m_max_x = max(m_max_x, sym_w);
+		m_max_y = (std::max)(m_max_y, sym_h);
+		m_max_x = (std::max)(m_max_x, sym_w);
 	}
 
 	// symbol spacing
@@ -237,7 +238,7 @@ SpellFont::SpellFont(std::wstring font_path)
 		int sym_h = m_symbols.back().GetHeight();
 
 		// rememebr maximum symbol sizes
-		m_max_x = max(m_max_x,sym_w);
+		m_max_x = (std::max)(m_max_x,sym_w);
 	}	
 
 	// symbol spacing
@@ -320,8 +321,8 @@ int SpellFont::Render(uint8_t* buffer,uint8_t* buf_end,int buf_x_size,int x_pos,
 	for(int k = 0; k < text.size(); k++)
 	{
 		auto& txt = text[k];
-		int clr = color[min(k,(int)color.size()-1)];
-		x_end = max(x_end, Render(buffer,buf_end,buf_x_size,x_pos,y_pos,x_limit,m_max_y,txt,clr,bg_color,shadow));
+		int clr = color[(std::min)(k,(int)color.size()-1)];
+		x_end = (std::max)(x_end, Render(buffer,buf_end,buf_x_size,x_pos,y_pos,x_limit,m_max_y,txt,clr,bg_color,shadow));
 		y_pos += m_max_y;
 	}
 	next_y = y_pos;
@@ -415,10 +416,10 @@ int SpellFont::Render(uint8_t* buffer,uint8_t* buf_end,int buf_x_size,int x_pos,
 			int x_size_txt = GetTextWidth(text);
 			for(int y = y_pos; y < y_pos + m_max_y; y++)
 			{
-				uint8_t* pix = &buffer[max(x_pos,0) + y*buf_x_size];
+				uint8_t* pix = &buffer[(std::max)(x_pos,0) + y*buf_x_size];
 				if(y < 0 || pix >= buf_end)
 					continue;
-				for(int x = max(x_pos,0); x < min(x_pos + x_size_txt,buf_x_size); x++)
+				for(int x = (std::max)(x_pos,0); x < (std::min)(x_pos + x_size_txt,buf_x_size); x++)
 					*pix++ = m_filter[*pix];
 			}
 		}

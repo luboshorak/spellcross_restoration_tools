@@ -140,7 +140,7 @@ namespace
 namespace scsave
 {
 	static constexpr uint32_t MAGIC = 0x56435353; // 'SSCV'
-	static constexpr uint32_t VERSION = 4;
+	static constexpr uint32_t VERSION = 6;
 
 	template<typename T>
 	inline void write(std::ostream& os, const T& v)
@@ -202,8 +202,11 @@ static std::string MapUnitTypeToString(MapUnitType& t)
 }
 static MapUnitType MapUnitTypeFromString(const std::string& s)
 {
-	if (s == "Unknown")     return MapUnitType::Unknown;
-	if (s == "NormalUnit")  return MapUnitType::NormalUnit;
+	if (s == "Unknown")        return MapUnitType::Unknown;
+	if (s == "PatrolUnit")     return MapUnitType::PatrolUnit;
+	if (s == "WaitForContact") return MapUnitType::WaitForContact;
+	if (s == "NormalUnit")     return MapUnitType::NormalUnit;
+	if (s == "ToughDefence")   return MapUnitType::ToughDefence;
 	if (s == "EnemyUnit")   return MapUnitType::EnemyUnit;
 	if (s == "MissionUnit") return MapUnitType::MissionUnit;
 	if (s == "ArmyUnit")    return MapUnitType::ArmyUnit;
@@ -234,6 +237,8 @@ static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, Spe
 	scsave::write(os, (int32_t)u->experience_level);
 	scsave::write(os, (int32_t)u->man);
 	scsave::write(os, (int32_t)u->wounded);
+	scsave::write(os, (int32_t)u->damage_remainder);
+	scsave::write(os, (uint8_t)(u->difficulty_adjusted ? 1 : 0));
 	scsave::write(os, (int32_t)u->action_points);
 
 	scsave::write(os, (int32_t)u->dig_level);
@@ -290,7 +295,8 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 {
 	int32_t id = -1, type_id = -1;
 	int32_t x = 0, y = 0;
-	int32_t exp = 0, exp_lvl = 1, man = 1, wounded = 0, ap = 1;
+	int32_t exp = 0, exp_lvl = 1, man = 1, wounded = 0, damage_remainder = 0, ap = 1;
+	uint8_t difficulty_adjusted = 0;
 	int32_t dig_lvl = 0, dig_turns = 0, idle_turns = 0;
 	uint8_t is_active = 0, is_enemy = 0, hide = 0, was_moved = 0, is_event = 0, was_seen = 0;
 	int32_t is_visible = 0;
@@ -315,7 +321,12 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	if (!scsave::read(is, id) || !scsave::read(is, type_id)) return false;
 	if (!scsave::read(is, x) || !scsave::read(is, y)) return false;
 
-	if (!scsave::read(is, exp) || !scsave::read(is, exp_lvl) || !scsave::read(is, man) || !scsave::read(is, wounded) || !scsave::read(is, ap)) return false;
+	if (!scsave::read(is, exp) || !scsave::read(is, exp_lvl) || !scsave::read(is, man) || !scsave::read(is, wounded)) return false;
+	if (version >= 6)
+	{
+		if (!scsave::read(is, damage_remainder) || !scsave::read(is, difficulty_adjusted)) return false;
+	}
+	if (!scsave::read(is, ap)) return false;
 	if (!scsave::read(is, dig_lvl) || !scsave::read(is, dig_turns) || !scsave::read(is, idle_turns)) return false;
 
 	if (!scsave::read(is, is_active) || !scsave::read(is, is_enemy) || !scsave::read(is, hide) || !scsave::read(is, was_moved) ||
@@ -369,6 +380,8 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	u->experience_level = exp_lvl;
 	u->man = man;
 	u->wounded = wounded;
+	u->damage_remainder = (std::clamp)((int)damage_remainder, 0, 999);
+	u->difficulty_adjusted = (difficulty_adjusted != 0);
 	u->action_points = ap;
 
 	u->dig_level = dig_lvl;
@@ -623,7 +636,7 @@ void MapSprite::SetL2(Sprite* sprite, int flags)
 		// init hit points
 		int max_hp = L2->destructible->hp;
 		if (L2->two_stage_desctruct && L2->is_destructed)
-			hp = max((10 * max_hp) / 100, rand() % (max_hp / 2));
+			hp = (std::max)((10 * max_hp) / 100, rand() % (max_hp / 2));
 		else if (L2->is_destructed)
 			hp = 0;
 		else
@@ -742,8 +755,8 @@ MapLayer3::MapLayer3(AnimL1* anm, int x_pos, int y_pos, int frame_ofs, int frame
 	this->in_placement = false;
 	if (anm)
 	{
-		this->frame_ofs = min(frame_ofs, (int)anm->frames.size() - 1);
-		this->frame_limit = min(frame_limit, (int)anm->frames.size() - 1);
+		this->frame_ofs = (std::min)(frame_ofs, (int)anm->frames.size() - 1);
+		this->frame_limit = (std::min)(frame_limit, (int)anm->frames.size() - 1);
 	}
 }
 MapLayer3::~MapLayer3()
@@ -891,6 +904,7 @@ SpellMap::SpellMap()
 	is_valid = false;
 
 	game_mode = false;
+	game_difficulty = GameDifficulty::NORMAL;
 
 	spelldata = NULL;
 	pic = NULL;
@@ -943,7 +957,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	// Header
 	f << "{\n";
 	f << "  \"format\": \"spellcross_map_editor_save\",\n";
-	f << "  \"version\": 3,\n";
+	f << "  \"version\": 6,\n";
 	f << "  \"map_path\": \"" << wstring2string(GetTopPath()) << "\",\n";
 	f << "  \"note\": \"Binary payload follows after marker\",\n";
 	f << "  \"payload\": \"__BINARY__\"\n";
@@ -953,6 +967,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	// Payload header
 	scsave::write(f, scsave::MAGIC);
 	scsave::write(f, scsave::VERSION);
+	scsave::write(f, (int32_t)game_difficulty);
 
 	// --- TILES ---
 	{
@@ -1032,6 +1047,34 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 		scsave::write(f, n);
 		for (auto v : tmp.units_view)
 			scsave::write(f, (int32_t)v);
+	}
+
+	// --- ORIGINAL OTHER SIDE GROUP/ORDER STATE (v5+) ---
+	{
+		scsave::write(f, (uint8_t)(tmp.enemy_ai_groups_initialized ? 1 : 0));
+		scsave::write(f, (int32_t)tmp.next_enemy_ai_group_id);
+		uint32_t gcnt = (uint32_t)tmp.enemy_ai_groups.size();
+		scsave::write(f, gcnt);
+		for (const auto& g : tmp.enemy_ai_groups)
+		{
+			scsave::write(f, (int32_t)g.id);
+			MapUnitType beh = g.behavior;
+			scsave::write_string(f, MapUnitTypeToString(beh));
+			scsave::write(f, (uint16_t)g.order);
+			scsave::write(f, (int32_t)g.target_group_id);
+			scsave::write(f, (int32_t)g.target_unit_id);
+			scsave::write(f, (int32_t)g.target_point_index);
+			scsave::write(f, (int32_t)g.target_pos.x);
+			scsave::write(f, (int32_t)g.target_pos.y);
+			scsave::write(f, (int32_t)g.leader_unit_id);
+			scsave::write(f, (int32_t)g.strongest_unit_id);
+			scsave::write(f, (int32_t)g.speed);
+			scsave::write(f, (int32_t)g.strength);
+			scsave::write(f, (uint8_t)(g.contacted ? 1 : 0));
+			uint32_t ucnt = (uint32_t)g.unit_ids.size();
+			scsave::write(f, ucnt);
+			for (int uid : g.unit_ids) scsave::write(f, (int32_t)uid);
+		}
 	}
 
 	return 0;
@@ -1293,6 +1336,17 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		return 7;
 	}
 
+	if (ver >= 6)
+	{
+		int32_t difficulty = (int32_t)GameDifficulty::NORMAL;
+		if (!scsave::read(is, difficulty)) return 7;
+		SetGameDifficulty((GameDifficulty)(std::clamp)((int)difficulty, 0, 2));
+	}
+	else
+	{
+		SetGameDifficulty(GameDifficulty::NORMAL);
+	}
+
 	SpellMap::SavedState tmp;
 
 	// --- TILES ---
@@ -1453,6 +1507,54 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		}
 	}
 
+	// --- ORIGINAL OTHER SIDE GROUP/ORDER STATE (v5+) ---
+	if (ver >= 5)
+	{
+		uint8_t initialized = 0;
+		int32_t next_id = 1;
+		uint32_t gcnt = 0;
+		if (!scsave::read(is, initialized) || !scsave::read(is, next_id) || !scsave::read(is, gcnt)) return 17;
+		tmp.enemy_ai_groups.clear();
+		tmp.enemy_ai_groups.reserve(gcnt);
+		for (uint32_t gi = 0; gi < gcnt; ++gi)
+		{
+			AITacticalGroup g;
+			int32_t id = 0, tg = -1, tu = -1, tp = -1, tx = -1, ty = -1;
+			int32_t leader = -1, strongest = -1, speed = 0, strength = 0;
+			uint16_t order = 0;
+			uint8_t contacted = 0;
+			std::string behavior;
+			if (!scsave::read(is, id) || !scsave::read_string(is, behavior) || !scsave::read(is, order) ||
+				!scsave::read(is, tg) || !scsave::read(is, tu) || !scsave::read(is, tp) ||
+				!scsave::read(is, tx) || !scsave::read(is, ty) || !scsave::read(is, leader) ||
+				!scsave::read(is, strongest) || !scsave::read(is, speed) || !scsave::read(is, strength) ||
+				!scsave::read(is, contacted)) return 17;
+			g.id = id;
+			g.behavior = MapUnitTypeFromString(behavior);
+			g.order = (order <= (uint16_t)AIGroupOrder::KAMIKAZE_MOVE_ATTACK) ? (AIGroupOrder)order : AIGroupOrder::NONE;
+			g.target_group_id = tg; g.target_unit_id = tu; g.target_point_index = tp;
+			g.target_pos = MapXY(tx, ty);
+			g.leader_unit_id = leader; g.strongest_unit_id = strongest;
+			g.speed = speed; g.strength = strength; g.contacted = (contacted != 0);
+			uint32_t ucnt = 0;
+			if (!scsave::read(is, ucnt)) return 17;
+			g.unit_ids.reserve(ucnt);
+			for (uint32_t ui = 0; ui < ucnt; ++ui)
+			{
+				int32_t uid = -1; if (!scsave::read(is, uid)) return 17; g.unit_ids.push_back(uid);
+			}
+			tmp.enemy_ai_groups.push_back(std::move(g));
+		}
+		tmp.next_enemy_ai_group_id = (std::max)(1, (int)next_id);
+		tmp.enemy_ai_groups_initialized = (initialized != 0);
+	}
+	else
+	{
+		tmp.enemy_ai_groups.clear();
+		tmp.next_enemy_ai_group_id = 1;
+		tmp.enemy_ai_groups_initialized = false;
+	}
+
 	// apply saved state into current map
 	int r = saves->Load(&tmp);
 	if (r)
@@ -1460,6 +1562,8 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		last_error = "Failed to apply loaded state.";
 		return 20;
 	}
+	if(ver < 6)
+		ApplyDifficultyEnemyExperience();
 
 	// --- Enter game mode from loaded save ---
 	// The base map Load() above may or may not have reset game_mode (Close() does not
@@ -1550,6 +1654,11 @@ int SpellMap::SetGameMode(int new_mode)
 	// entering game mode: ensure we are not in any editor "placement" state
 	if (game_mode && !old_state)
 	{
+		// A new tactical session starts with no interrupted defensive-fire flow.
+		reaction_fire_queue.clear();
+		reaction_fire_active = false;
+		reaction_fire_restore_selection = nullptr;
+
 		HaltUnitRanging(true);
 		LockMap();
 		for (auto* u : units)
@@ -1557,12 +1666,12 @@ int SpellMap::SetGameMode(int new_mode)
 			// placement dragging must never be possible in game mode
 			u->in_placement = false;
 
-			// make sure player units are ready immediately
+			// All units begin the tactical battle with a full AP pool.  In the
+			// original game any AP left at the end of a side's active phase remains
+			// available for defensive fire during the opponent's movement.
 			if (!u->is_enemy)
-			{
 				u->ActivateUnit();
-				u->ResetAP();
-			}
+			u->ResetAP();
 
 			// force view/range refresh
 			u->was_moved = true;
@@ -1573,6 +1682,9 @@ int SpellMap::SetGameMode(int new_mode)
 
 		ReleaseMap();
 		ResumeUnitRanging(false);
+		// Original difficulty normalizes low Other Side experience against the
+		// current Alliance average once a unit enters the battle.
+		ApplyDifficultyEnemyExperience();
 		// Re-link objective trigger units (TransportUnit/SaveUnit/DestroyUnit etc.)
 		events->ResetEvents();
 
@@ -1630,6 +1742,74 @@ int SpellMap::isGameMode()
 	return(game_mode);
 }
 
+
+void SpellMap::SetGameDifficulty(GameDifficulty difficulty)
+{
+	int d = (std::clamp)((int)difficulty, (int)GameDifficulty::EASY, (int)GameDifficulty::HARD);
+	// The English original presents only two entries.  Its selector returns
+	// 0/1 and SPELCROS.EXE increments that value before storing it, therefore
+	// the actual engine modes exposed there are Normal(1) and Hard(2).
+	if(spelldata && spelldata->units && spelldata->units->IsEnglish() && d == (int)GameDifficulty::EASY)
+		d = (int)GameDifficulty::NORMAL;
+	game_difficulty = (GameDifficulty)d;
+	if(saves)
+		saves->SetLimit(GetTacticalSaveLimit());
+}
+
+int SpellMap::GetTacticalSaveLimit() const
+{
+	switch(game_difficulty)
+	{
+	case GameDifficulty::EASY: return 12;
+	case GameDifficulty::HARD: return 6;
+	case GameDifficulty::NORMAL:
+	default: return 10;
+	}
+}
+
+void SpellMap::AdjustEnemyExperienceForDifficulty(MapUnit* enemy)
+{
+	if(!enemy || !enemy->is_enemy || enemy->difficulty_adjusted)
+		return;
+
+	int rank_sum = 0;
+	int rank_count = 0;
+	for(auto* u : units)
+	{
+		if(!u || u->is_enemy || u->isDead() || !u->isActive()) continue;
+		rank_sum += (std::clamp)(u->experience_level - 1, 0, 11);
+		rank_count++;
+	}
+	if(rank_count <= 0)
+		return;
+
+	const int average_rank = rank_sum / rank_count;
+	int base_rank = average_rank;
+	if(game_difficulty == GameDifficulty::EASY)
+		base_rank -= 1;
+	else if(game_difficulty == GameDifficulty::HARD)
+		base_rank += 2;
+	// DOS clamps the adjusted average to 0..12 and then generates
+	// base + random(0..2), capped at base+1.  The restoration currently has
+	// twelve playable bonus levels (rank 0..11), so retain the original
+	// distribution but clamp the representable result to rank 11.
+	base_rank = (std::clamp)(base_rank, 0, 12);
+
+	int candidate_rank = base_rank + (std::rand() % 3);
+	candidate_rank = (std::min)(candidate_rank, base_rank + 1);
+	candidate_rank = (std::clamp)(candidate_rank, 0, 11);
+	const int candidate_level = candidate_rank + 1;
+	if(enemy->experience_level < candidate_level)
+		enemy->InitExperience(candidate_level);
+	enemy->difficulty_adjusted = true;
+}
+
+void SpellMap::ApplyDifficultyEnemyExperience()
+{
+	for(auto* u : units)
+		AdjustEnemyExperienceForDifficulty(u);
+}
+
 // returns path to DEF file or DTA file if DEF was not used
 wstring SpellMap::GetTopPath()
 {
@@ -1669,6 +1849,11 @@ void SpellMap::Close()
 	tiles.clear();
 	L3.clear();
 	L4.clear();
+	counter_attack_post_enemy.clear();
+	counter_attack_post_player.clear();
+	enemy_ai_groups.clear();
+	next_enemy_ai_group_id = 1;
+	enemy_ai_groups_initialized = false;
 	// loose start/ciel
 	start.clear();
 	escape.clear();
@@ -1914,6 +2099,7 @@ int SpellMap::Load(wstring& path, SpellData* spelldata)
 	fr.read((char*)map_buffer.data(), flen);
 	fr.close();
 	unsigned char* data = map_buffer.data();
+	unsigned char* dend = map_buffer.data() + map_buffer.size();
 
 
 	// get L1 data offset
@@ -2226,21 +2412,59 @@ int SpellMap::Load(wstring& path, SpellData* spelldata)
 
 	}
 
-	//////////////////////////////////////
-	///// L5 - Mysterious numbers #1 /////
-	//////////////////////////////////////
+	////////////////////////////////////////////////
+	///// L5 - Other Side counter-attack posts /////
+	////////////////////////////////////////////////
 
-	// read count of L5 stuff
+	if (data + sizeof(uint32_t) > dend)
+	{
+		last_error = string_format("Possibly corrupted map DTA file '%s'!", map_path);
+		if (def) delete def;
+		Close();
+		return(1);
+	}
 	int L5_count = *(int32_t*)data; data += 4;
-	data += L5_count * 2;
+	if (L5_count < 0 || data + (size_t)L5_count * sizeof(uint16_t) > dend)
+	{
+		last_error = string_format("Possibly corrupted map DTA file '%s'!", map_path);
+		if (def) delete def;
+		Close();
+		return(1);
+	}
+	counter_attack_post_enemy.clear();
+	counter_attack_post_enemy.reserve(L5_count);
+	for (int k = 0; k < L5_count; k++)
+	{
+		int pxy = *(uint16_t*)data; data += 2;
+		counter_attack_post_enemy.push_back(MapXY(pxy % x_size, pxy / x_size));
+	}
 
-	//////////////////////////////////////
-	///// L6 - Mysterious numbers #2 /////
-	//////////////////////////////////////
+	/////////////////////////////////////////////
+	///// L6 - Alliance counter-attack posts /////
+	/////////////////////////////////////////////
 
-	// read count of L6 stuff
+	if (data + sizeof(uint32_t) > dend)
+	{
+		last_error = string_format("Possibly corrupted map DTA file '%s'!", map_path);
+		if (def) delete def;
+		Close();
+		return(1);
+	}
 	int L6_count = *(int32_t*)data; data += 4;
-	data += L6_count * 2;
+	if (L6_count < 0 || data + (size_t)L6_count * sizeof(uint16_t) > dend)
+	{
+		last_error = string_format("Possibly corrupted map DTA file '%s'!", map_path);
+		if (def) delete def;
+		Close();
+		return(1);
+	}
+	counter_attack_post_player.clear();
+	counter_attack_post_player.reserve(L6_count);
+	for (int k = 0; k < L6_count; k++)
+	{
+		int pxy = *(uint16_t*)data; data += 2;
+		counter_attack_post_player.push_back(MapXY(pxy % x_size, pxy / x_size));
+	}
 
 	//////////////////////////
 	///// L7 - Sounds #1 /////
@@ -2476,7 +2700,7 @@ if (!mission_data || !mission_data->Size())
 				unit->InitExperience(stoi(cmd->parameters->at(3)));
 
 				// man count
-				unit->man = min(stoi(cmd->parameters->at(4)), unit->unit->cnt);
+				unit->man = (std::min)(stoi(cmd->parameters->at(4)), unit->unit->cnt);
 
 
 				// unit behaviour type
@@ -2900,11 +3124,21 @@ int SpellMap::SaveDTA(std::wstring path)
 	}
 
 
-	// write mystery L5 items
-	fw.write((uint32_t)0);
+	// write original DTA L5 Other Side counter-attack positions
+	fw.write((uint32_t)counter_attack_post_enemy.size());
+	for (auto pos : counter_attack_post_enemy)
+	{
+		auto pxy = ConvXY(pos);
+		fw.write((uint16_t)pxy);
+	}
 
-	// write mystery L6 items
-	fw.write((uint32_t)0);
+	// write original DTA L6 Alliance counter-attack positions
+	fw.write((uint32_t)counter_attack_post_player.size());
+	for (auto pos : counter_attack_post_player)
+	{
+		auto pxy = ConvXY(pos);
+		fw.write((uint16_t)pxy);
+	}
 
 
 
@@ -3480,8 +3714,8 @@ int SpellMap::RenderPrepare(TScroll* scroll)
 	if (!pic)
 	{
 		// new render buffer size
-		pic_x_size = max((x_size) * 80 + 40, surf_x);
-		pic_y_size = max(MSYOFS + 60 + 47 + (y_size) * 24 + MSYOFS, surf_y);
+		pic_x_size = (std::max)((x_size) * 80 + 40, surf_x);
+		pic_y_size = (std::max)(MSYOFS + 60 + 47 + (y_size) * 24 + MSYOFS, surf_y);
 		// allocate it
 		pic = new uint8_t[pic_x_size * pic_y_size];
 		// buffer end for range checking
@@ -3588,12 +3822,12 @@ MapSound* SpellMap::GetRandomSound(double* left, double* right)
 	double dist = sqrt(pos_x * pos_x + pos_y * pos_y);
 
 	// calc panning
-	double volume = max(min(2.0 - 2.0 * dist * 0.7071, 1.0), 0.0);
+	double volume = (std::max)((std::min)(2.0 - 2.0 * dist * 0.7071, 1.0), 0.0);
 	volume = volume * volume;
 	double l_vol = (pos_x < 0.0) ? (1.0) : (1.0 - pos_x);
 	double r_vol = (pos_x > 0.0) ? (1.0) : (1.0 + pos_x);
-	l_vol = min(max(l_vol * l_vol * volume, 0.0), 1.0);
-	r_vol = min(max(r_vol * r_vol * volume, 0.0), 1.0);
+	l_vol = (std::min)((std::max)(l_vol * l_vol * volume, 0.0), 1.0);
+	r_vol = (std::min)((std::max)(r_vol * r_vol * volume, 0.0), 1.0);
 
 	if (left)
 		*left = l_vol;
@@ -3700,9 +3934,9 @@ int MapSounds::UpdateMaps()
 				for (int x = 0; x < x_size; x++)
 				{
 					double dist = MapXY(x, y).Distance(snd_pos);
-					double w = (dist < 7.0) ? (1.0) : max(1.0 - 0.1 * (dist - 7.0), 0.0);
+					double w = (dist < 7.0) ? (1.0) : (std::max)(1.0 - 0.1 * (dist - 7.0), 0.0);
 					int16_t w_int = (int16_t)(100.0 * w * w);
-					map[x + y * x_size] = max((int16_t)map[x + y * x_size], w_int);
+					map[x + y * x_size] = (std::max)((int16_t)map[x + y * x_size], w_int);
 				}
 			}
 		}
@@ -3740,12 +3974,12 @@ tuple<double, double> MapSounds::GetViewVolume(int index, int xs_ofs, int ys_ofs
 	double dist = sqrt(pos_x * pos_x + pos_y * pos_y);
 
 	// calc panning
-	double volume = max(min(2.0 - 2.0 * dist * 0.7071, 1.0), 0.0);
+	double volume = (std::max)((std::min)(2.0 - 2.0 * dist * 0.7071, 1.0), 0.0);
 	volume = volume * volume;
 	double l_vol = (pos_x < 0.0) ? (1.0) : (1.0 - pos_x);
 	double r_vol = (pos_x > 0.0) ? (1.0) : (1.0 + pos_x);
-	l_vol = min(max(l_vol * l_vol * volume, 0.0), 1.0);
-	r_vol = min(max(r_vol * r_vol * volume, 0.0), 1.0);
+	l_vol = (std::min)((std::max)(l_vol * l_vol * volume, 0.0), 1.0);
+	r_vol = (std::min)((std::max)(r_vol * r_vol * volume, 0.0), 1.0);
 
 	// cutoff limit
 	if (l_vol < 0.001 && r_vol < 0.001)
@@ -3946,11 +4180,11 @@ void SpellMap::CopyBuffer(std::vector<MapXY>& posxy, SpellMap::Layers layers)
 	MapXY ref(1 << 30, 1 << 30);
 	for (int k = 0; k < posxy.size(); k++)
 	{
-		ref.x = min(posxy[k].x, ref.x);
-		ref.y = min(posxy[k].y, ref.y);
+		ref.x = (std::min)(posxy[k].x, ref.x);
+		ref.y = (std::min)(posxy[k].y, ref.y);
 		int xy = ConvXY(posxy[k]);
 		MapSprite sprite = tiles[xy];
-		elev = min(sprite.elev, elev);
+		elev = (std::min)(sprite.elev, elev);
 	}
 	// reference position is cursor
 	ref = posxy[0];
@@ -3969,8 +4203,8 @@ void SpellMap::CopyBuffer(std::vector<MapXY>& posxy, SpellMap::Layers layers)
 		if (!y_is_even && (posxy[k].y & 1))
 			pos.x--; // aligning zig-zag tile x-offsets
 		copy_buf.pos.push_back(pos);
-		ref2.x = min(pos.x, ref2.x);
-		ref2.y = min(pos.y, ref2.y);
+		ref2.x = (std::min)(pos.x, ref2.x);
+		ref2.y = (std::min)(pos.y, ref2.y);
 
 		int xy = ConvXY(posxy[k]);
 		MapSprite sprite = tiles[xy];
@@ -5069,7 +5303,7 @@ int SpellMap::GetRender(uint8_t* buf, int x_size, int y_size, int x_pos, int y_p
 		int xs = 0;
 		if (x_pos > 0)
 			xs = x_pos;
-		xn = min(surf_x - xs, xn);
+		xn = (std::min)(surf_x - xs, xn);
 
 		uint8_t* src = &pic[surf_x_origin + xs + (surf_y_origin + ys) * pic_x_size];
 		uint8_t* dst = &buf[x + y * x_size];
@@ -5134,10 +5368,10 @@ int SpellMap::Render(wxBitmap& bmp, TScroll* scroll, SpellTool* tool, std::funct
 		cursor = msel[0];
 
 	// clear used surface range
-	for (int y = 0; y < min(surf_y, pic_y_size - surf_y_origin); y++)
+	for (int y = 0; y < (std::min)(surf_y, pic_y_size - surf_y_origin); y++)
 	{
 		uint8_t* src = &pic[surf_x_origin + (surf_y_origin + y) * pic_x_size];
-		std::memset((void*)src, MAP_BACK_COLOR, min(surf_x, pic_x_size - surf_x_origin));
+		std::memset((void*)src, MAP_BACK_COLOR, (std::min)(surf_x, pic_x_size - surf_x_origin));
 	}
 
 
@@ -6660,6 +6894,8 @@ int SpellMap::SetUnitRangeViewMode(int mode)
 // check if unit can move to target position
 int SpellMap::CanUnitMove(MapXY target)
 {
+	if (isGameMode() && (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty()))
+		return(false);
 	if (!target.IsSelected())
 		return(false);
 	int npos = ConvXY(target);
@@ -6697,6 +6933,9 @@ int SpellMap::CanUnitMove(MapXY target)
 // move unit (in game mode)
 int SpellMap::MoveUnit(MapXY target)
 {
+    if (isGameMode() && (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty()))
+        return(1);
+
     // GROUP MODE: move whole group (no attack, no single-unit range UI)
     if (IsGroupMode())
     {
@@ -6870,6 +7109,9 @@ int SpellMap::MoveUnit(MapXY target)
 // get unit action options for cursor position (game mode)
 int SpellMap::GetUnitOptions(TScroll* scroll)
 {
+	if (isGameMode() && (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty()))
+		return(0);
+
 	// default scroller
 	if (!scroll)
 		scroll = &scroller;
@@ -7049,8 +7291,9 @@ bool SpellMap::StartAttack_NoHUD(MapUnit* attacker, MapUnit* target)
 
 	attacker->attack_target = target;
 
-	// during enemy turn: temporarily reveal attacker so the player can see the attack animation
-	if (enemy_turn_running && attacker->is_enemy && attacker->is_visible < 2)
+	// Temporarily reveal an enemy attacker so the player can see the shot.
+	// This also applies to enemy defensive fire during the player's phase.
+	if (attacker->is_enemy && attacker->is_visible < 2)
 	{
 		attacker->is_visible = 2;
 		attacker->was_moved = true; // force render refresh
@@ -7075,6 +7318,970 @@ static bool _ptr_in_units_list(const std::vector<MapUnit*>& list, const MapUnit*
 	return false;
 }
 
+
+static MapUnitType _normalize_enemy_behavior(const MapUnit* unit)
+{
+    if (!unit)
+        return MapUnitType::NormalUnit;
+    if (unit->behave == MapUnitType::PatrolUnit ||
+        unit->behave == MapUnitType::WaitForContact ||
+        unit->behave == MapUnitType::ToughDefence ||
+        unit->behave == MapUnitType::NormalUnit)
+        return unit->behave;
+    return MapUnitType::NormalUnit;
+}
+
+void SpellMap::SetGroupOrder(AITacticalGroup& group, AIGroupOrder order, int target_unit_id, int target_group_id, int target_point_index)
+{
+    group.order = order;
+    group.target_unit_id = target_unit_id;
+    group.target_group_id = target_group_id;
+    group.target_point_index = target_point_index;
+    group.target_pos.Clear();
+}
+
+SpellMap::AITacticalGroup* SpellMap::FindEnemyAIGroupForUnit(const MapUnit* unit)
+{
+    if (!unit)
+        return nullptr;
+    for (auto& group : enemy_ai_groups)
+        if (std::find(group.unit_ids.begin(), group.unit_ids.end(), unit->id) != group.unit_ids.end())
+            return &group;
+    return nullptr;
+}
+
+SpellMap::AITacticalGroup* SpellMap::FindEnemyAIGroupById(int id)
+{
+    for (auto& group : enemy_ai_groups)
+        if (group.id == id)
+            return &group;
+    return nullptr;
+}
+
+MapXY SpellMap::GetAIGroupCenter(const AITacticalGroup& group) const
+{
+    long sx = 0, sy = 0, n = 0;
+    for (int uid : group.unit_ids)
+    {
+        for (auto* u : units)
+        {
+            if (!u || u->id != uid || u->isDead())
+                continue;
+            sx += u->coor.x;
+            sy += u->coor.y;
+            ++n;
+            break;
+        }
+    }
+    if (!n)
+        return MapXY();
+    return MapXY((int)(sx / n), (int)(sy / n));
+}
+
+MapXY SpellMap::GetAllianceClusterCenter(const std::vector<MapUnit*>& cluster) const
+{
+    if (cluster.empty())
+        return MapXY();
+    long sx = 0, sy = 0, n = 0;
+    for (auto* u : cluster)
+    {
+        if (!u || u->is_enemy || u->isDead())
+            continue;
+        sx += u->coor.x;
+        sy += u->coor.y;
+        ++n;
+    }
+    return n ? MapXY((int)(sx / n), (int)(sy / n)) : MapXY();
+}
+
+std::vector<std::vector<MapUnit*>> SpellMap::BuildAllianceClusters() const
+{
+    std::vector<MapUnit*> alive;
+    for (auto* u : units)
+        if (u && !u->is_enemy && !u->isDead())
+            alive.push_back(u);
+
+    std::vector<std::vector<MapUnit*>> clusters;
+    std::vector<uint8_t> used(alive.size(), 0);
+    for (size_t seed = 0; seed < alive.size(); ++seed)
+    {
+        if (used[seed])
+            continue;
+        used[seed] = 1;
+        std::vector<size_t> queue{ seed };
+        std::vector<MapUnit*> cluster;
+        for (size_t qi = 0; qi < queue.size(); ++qi)
+        {
+            size_t i = queue[qi];
+            cluster.push_back(alive[i]);
+            for (size_t j = 0; j < alive.size(); ++j)
+            {
+                if (used[j])
+                    continue;
+                if (alive[i]->coor.Distance(alive[j]->coor) < 6.0)
+                {
+                    used[j] = 1;
+                    queue.push_back(j);
+                }
+            }
+        }
+        clusters.push_back(std::move(cluster));
+    }
+    return clusters;
+}
+
+void SpellMap::BuildEnemyAIGroups()
+{
+    enemy_ai_groups.clear();
+    next_enemy_ai_group_id = 1;
+
+    std::vector<MapUnit*> alive;
+    for (auto* u : units)
+        if (u && u->is_enemy && !u->isDead())
+            alive.push_back(u);
+
+    std::vector<uint8_t> used(alive.size(), 0);
+    for (size_t seed = 0; seed < alive.size(); ++seed)
+    {
+        if (used[seed])
+            continue;
+
+        const MapUnitType behavior = _normalize_enemy_behavior(alive[seed]);
+        AITacticalGroup group;
+        group.id = next_enemy_ai_group_id++;
+        group.behavior = behavior;
+
+        // Original startup mapping recovered from SPELCROS.EXE.
+        if (behavior == MapUnitType::WaitForContact)
+            group.order = AIGroupOrder::WAIT_CONTACT;
+        else if (behavior == MapUnitType::ToughDefence)
+            group.order = AIGroupOrder::SUICIDE_DEFENCE;
+        else if (behavior == MapUnitType::PatrolUnit)
+            group.order = AIGroupOrder::SCOUT;
+        else
+            group.order = AIGroupOrder::NONE;
+
+        used[seed] = 1;
+        std::vector<size_t> queue{ seed };
+        for (size_t qi = 0; qi < queue.size(); ++qi)
+        {
+            size_t i = queue[qi];
+            group.unit_ids.push_back(alive[i]->id);
+            for (size_t j = 0; j < alive.size(); ++j)
+            {
+                if (used[j] || _normalize_enemy_behavior(alive[j]) != behavior)
+                    continue;
+                // DOS grouping first rejects candidates at distance >= 6.  It
+                // also performs a reachability check; the runtime pathfinder
+                // remains authoritative later when a group actually moves.
+                if (alive[i]->coor.Distance(alive[j]->coor) < 6.0)
+                {
+                    used[j] = 1;
+                    queue.push_back(j);
+                }
+            }
+        }
+        enemy_ai_groups.push_back(std::move(group));
+    }
+
+    enemy_ai_groups_initialized = true;
+    RefreshEnemyAIGroupStats();
+}
+
+void SpellMap::PruneEnemyAIGroups()
+{
+    std::vector<int> alive_ids;
+    alive_ids.reserve(units.size());
+    for (auto* u : units)
+        if (u && u->is_enemy && !u->isDead())
+            alive_ids.push_back(u->id);
+
+    for (auto& group : enemy_ai_groups)
+    {
+        group.unit_ids.erase(std::remove_if(group.unit_ids.begin(), group.unit_ids.end(), [&](int uid)
+        {
+            return std::find(alive_ids.begin(), alive_ids.end(), uid) == alive_ids.end();
+        }), group.unit_ids.end());
+    }
+    enemy_ai_groups.erase(std::remove_if(enemy_ai_groups.begin(), enemy_ai_groups.end(), [](const AITacticalGroup& g)
+    {
+        return g.unit_ids.empty();
+    }), enemy_ai_groups.end());
+}
+
+void SpellMap::AttachUnassignedEnemyUnits()
+{
+    for (auto* unit : units)
+    {
+        if (!unit || !unit->is_enemy || unit->isDead() || FindEnemyAIGroupForUnit(unit))
+            continue;
+
+        MapUnitType behavior = _normalize_enemy_behavior(unit);
+        AITacticalGroup* best = nullptr;
+        double best_dist = 6.0;
+        for (auto& group : enemy_ai_groups)
+        {
+            if (group.behavior != behavior)
+                continue;
+            for (int uid : group.unit_ids)
+            {
+                MapUnit* mate = GetUnit(uid);
+                if (!mate || mate->isDead())
+                    continue;
+                double d = unit->coor.Distance(mate->coor);
+                if (d < best_dist)
+                {
+                    best_dist = d;
+                    best = &group;
+                }
+            }
+        }
+
+        if (best)
+        {
+            best->unit_ids.push_back(unit->id);
+            continue;
+        }
+
+        AITacticalGroup group;
+        group.id = next_enemy_ai_group_id++;
+        group.behavior = behavior;
+        group.unit_ids.push_back(unit->id);
+        if (behavior == MapUnitType::WaitForContact) group.order = AIGroupOrder::WAIT_CONTACT;
+        else if (behavior == MapUnitType::ToughDefence) group.order = AIGroupOrder::SUICIDE_DEFENCE;
+        else if (behavior == MapUnitType::PatrolUnit) group.order = AIGroupOrder::SCOUT;
+        enemy_ai_groups.push_back(std::move(group));
+    }
+}
+
+void SpellMap::EnsureEnemyAIGroups()
+{
+    if (!enemy_ai_groups_initialized)
+        BuildEnemyAIGroups();
+    else
+    {
+        PruneEnemyAIGroups();
+        AttachUnassignedEnemyUnits();
+        RefreshEnemyAIGroupStats();
+    }
+}
+
+void SpellMap::RefreshEnemyAIGroupStats()
+{
+    for (auto& group : enemy_ai_groups)
+    {
+        int strongest_score = INT_MIN;
+        int leader_score = INT_MIN;
+        group.strongest_unit_id = -1;
+        group.leader_unit_id = -1;
+        group.strength = 0;
+        group.speed = INT_MAX;
+
+        for (int uid : group.unit_ids)
+        {
+            MapUnit* u = GetUnit(uid);
+            if (!u || u->isDead() || !u->unit)
+                continue;
+
+            const int atk = (std::max)({ u->GetAttack(MapUnit::TARGET_TYPE::LIGHT),
+                                         u->GetAttack(MapUnit::TARGET_TYPE::ARMOR),
+                                         u->GetAttack(MapUnit::TARGET_TYPE::AIR) });
+            const int hp = (std::max)(1, u->man);
+            const int score = atk + u->GetDefence() + hp;
+            group.strength += score;
+            group.speed = (std::min)(group.speed, (std::max)(1, u->unit->ap));
+            if (score > strongest_score)
+            {
+                strongest_score = score;
+                group.strongest_unit_id = u->id;
+            }
+            const int lscore = u->experience_level * 100000 + u->experience;
+            if (lscore > leader_score)
+            {
+                leader_score = lscore;
+                group.leader_unit_id = u->id;
+            }
+        }
+        if (group.speed == INT_MAX)
+            group.speed = 0;
+    }
+}
+
+bool SpellMap::GroupHasDirectContact(AITacticalGroup& group, MapUnit** nearest_target)
+{
+    MapUnit* nearest = nullptr;
+    double nearest_dist = 1e30;
+    for (int uid : group.unit_ids)
+    {
+        MapUnit* observer = GetUnit(uid);
+        if (!observer || observer->isDead())
+            continue;
+        for (auto* target : units)
+        {
+            if (!target || target->is_enemy || target->isDead())
+                continue;
+            if (!unit_view->HasDirectSight(observer, target->coor))
+                continue;
+            double d = observer->coor.Distance(target->coor);
+            if (d < nearest_dist)
+            {
+                nearest_dist = d;
+                nearest = target;
+            }
+        }
+    }
+    if (nearest)
+        group.contacted = true;
+    if (nearest_target)
+        *nearest_target = nearest;
+    return nearest != nullptr;
+}
+
+MapUnit* SpellMap::FindNearestPlayerUnit(MapXY from, bool require_contact, const AITacticalGroup* observer_group)
+{
+    MapUnit* best = nullptr;
+    double best_dist = 1e30;
+    for (auto* target : units)
+    {
+        if (!target || target->is_enemy || target->isDead())
+            continue;
+        if (require_contact)
+        {
+            bool seen = false;
+            if (observer_group)
+            {
+                for (int uid : observer_group->unit_ids)
+                {
+                    MapUnit* observer = GetUnit(uid);
+                    if (observer && !observer->isDead() && unit_view->HasDirectSight(observer, target->coor))
+                    {
+                        seen = true;
+                        break;
+                    }
+                }
+            }
+            if (!seen)
+                continue;
+        }
+        double d = from.Distance(target->coor);
+        if (d < best_dist)
+        {
+            best_dist = d;
+            best = target;
+        }
+    }
+    return best;
+}
+
+double SpellMap::EstimateAIGroupStrengthRatio(const AITacticalGroup& attackers, const std::vector<MapUnit*>& defenders) const
+{
+    double own_effect = 0.0;
+    double enemy_effect = 0.0;
+
+    for (int uid : attackers.unit_ids)
+    {
+        MapUnit* a = nullptr;
+        for (auto* u : units) if (u && u->id == uid) { a = u; break; }
+        if (!a || a->isDead() || !a->unit)
+            continue;
+
+        // DOS strength evaluation never lets damaged companies contribute less
+        // than one half of nominal combat value.
+        double ah = (a->unit->GetHP() > 0) ? (double)a->man / (double)a->unit->GetHP() : 1.0;
+        ah = (std::max)(0.5, (std::min)(1.0, ah));
+
+        for (auto* d : defenders)
+        {
+            if (!d || d->is_enemy || d->isDead() || !d->unit)
+                continue;
+            double dh = (d->unit->GetHP() > 0) ? (double)d->man / (double)d->unit->GetHP() : 1.0;
+            dh = (std::max)(0.5, (std::min)(1.0, dh));
+
+            const double aatk = (double)a->GetAttack(d);
+            const double ddef = (double)(std::max)(1, d->GetDefence());
+            const double datk = (double)d->GetAttack(a);
+            const double adef = (double)(std::max)(1, a->GetDefence());
+            own_effect += ah * (aatk / ddef);
+            enemy_effect += dh * (datk / adef);
+        }
+    }
+
+    if (own_effect <= 0.000001)
+        return enemy_effect <= 0.000001 ? 1.0 : 0.0;
+    if (enemy_effect <= 0.000001)
+        return 2.0;
+    return own_effect / enemy_effect;
+}
+
+void SpellMap::ConsolidateIdleEnemyGroups()
+{
+    // SPELCROS.EXE 0x9ac57: collect all live groups with no order and fewer
+    // than 20 companies, calculate pairwise tactical distance, sort by
+    // distance and join the nearest still-free pair when their combined size
+    // does not exceed 20.  Both groups receive order 7 and point at each
+    // other; the normal JOIN completion merges them once they meet.
+    struct Pair
+    {
+        int a = -1;
+        int b = -1;
+        double distance = 0.0;
+    };
+
+    std::vector<int> idle;
+    idle.reserve(enemy_ai_groups.size());
+    for (int i = 0; i < (int)enemy_ai_groups.size(); ++i)
+    {
+        const auto& g = enemy_ai_groups[i];
+        if (g.order == AIGroupOrder::NONE && !g.unit_ids.empty() && g.unit_ids.size() < 20)
+            idle.push_back(i);
+    }
+    if (idle.size() <= 1)
+        return;
+
+    std::vector<Pair> pairs;
+    for (size_t ia = 0; ia < idle.size(); ++ia)
+    {
+        const MapXY ca = GetAIGroupCenter(enemy_ai_groups[idle[ia]]);
+        if (!ca.IsSelected())
+            continue;
+        for (size_t ib = ia + 1; ib < idle.size(); ++ib)
+        {
+            const MapXY cb = GetAIGroupCenter(enemy_ai_groups[idle[ib]]);
+            if (!cb.IsSelected())
+                continue;
+            pairs.push_back({ idle[ia], idle[ib], ca.Distance(cb) });
+        }
+    }
+    std::sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y)
+    {
+        return x.distance < y.distance;
+    });
+
+    std::vector<uint8_t> consumed(enemy_ai_groups.size(), 0);
+    const size_t max_pairs = idle.size() / 2;
+    size_t selected = 0;
+    for (const auto& p : pairs)
+    {
+        if (selected >= max_pairs)
+            break;
+        if (p.a < 0 || p.b < 0 || p.a >= (int)enemy_ai_groups.size() || p.b >= (int)enemy_ai_groups.size())
+            continue;
+        if (consumed[p.a] || consumed[p.b])
+            continue;
+
+        auto& a = enemy_ai_groups[p.a];
+        auto& b = enemy_ai_groups[p.b];
+        if (a.order != AIGroupOrder::NONE || b.order != AIGroupOrder::NONE)
+            continue;
+        if (a.unit_ids.size() + b.unit_ids.size() > 20)
+            continue;
+
+        const int aid = a.id;
+        const int bid = b.id;
+        SetGroupOrder(a, AIGroupOrder::JOIN, -1, bid);
+        SetGroupOrder(b, AIGroupOrder::JOIN, -1, aid);
+        consumed[p.a] = consumed[p.b] = 1;
+        ++selected;
+    }
+}
+
+void SpellMap::PlanEnemyAIGroups()
+{
+    EnsureEnemyAIGroups();
+    RefreshEnemyAIGroupStats();
+
+    auto alliance = BuildAllianceClusters();
+    if (alliance.empty())
+        return;
+
+    // Original late-battle rule: if the largest remaining Other Side group has
+    // at most two members, every surviving group switches to order 14.
+    size_t max_group_size = 0;
+    for (const auto& g : enemy_ai_groups)
+        max_group_size = (std::max)(max_group_size, g.unit_ids.size());
+    if (max_group_size > 0 && max_group_size <= 2)
+    {
+        for (auto& g : enemy_ai_groups)
+        {
+            MapXY center = GetAIGroupCenter(g);
+            MapUnit* target = FindNearestPlayerUnit(center, false, nullptr);
+            SetGroupOrder(g, AIGroupOrder::KAMIKAZE_MOVE_ATTACK, target ? target->id : -1);
+            g.contacted = true;
+        }
+        return;
+    }
+
+    // Complete pending JOIN/RETREAT when the groups have reached each other.
+    for (size_t i = 0; i < enemy_ai_groups.size(); ++i)
+    {
+        auto& g = enemy_ai_groups[i];
+        if (g.order != AIGroupOrder::JOIN && g.order != AIGroupOrder::RETREAT)
+            continue;
+        AITacticalGroup* dst = FindEnemyAIGroupById(g.target_group_id);
+        if (!dst || dst == &g)
+        {
+            SetGroupOrder(g, AIGroupOrder::NONE);
+            continue;
+        }
+        MapXY a = GetAIGroupCenter(g), b = GetAIGroupCenter(*dst);
+        if (a.IsSelected() && b.IsSelected() && a.Distance(b) < 6.0)
+        {
+            if (g.order == AIGroupOrder::JOIN)
+            {
+                const int source_id = g.id;
+                dst->unit_ids.insert(dst->unit_ids.end(), g.unit_ids.begin(), g.unit_ids.end());
+                dst->contacted = dst->contacted || g.contacted;
+                g.unit_ids.clear();
+                for (auto& other : enemy_ai_groups)
+                    if (other.target_group_id == source_id)
+                        other.target_group_id = dst->id;
+            }
+            else
+            {
+                // USTUP shares the target-group movement path with JOIN but does
+                // not merge.  Reaching the cover group ends the retreat.
+                SetGroupOrder(g, AIGroupOrder::STATIC_DEFENCE);
+            }
+        }
+    }
+    PruneEnemyAIGroups();
+    RefreshEnemyAIGroupStats();
+
+    // First resolve groups which already have contact or a fixed DEF order.
+    for (auto& group : enemy_ai_groups)
+    {
+        MapUnit* seen_target = nullptr;
+        const bool direct_contact = GroupHasDirectContact(group, &seen_target);
+        if (seen_target)
+            group.target_unit_id = seen_target->id;
+
+        // Fixed mission-start orders recovered from the executable.
+        if (group.order == AIGroupOrder::WAIT_CONTACT)
+        {
+            if (!direct_contact)
+                continue;
+            SetGroupOrder(group, AIGroupOrder::NONE, seen_target ? seen_target->id : -1);
+            group.contacted = true;
+        }
+        if (group.order == AIGroupOrder::SUICIDE_DEFENCE)
+            continue;
+        if (group.order == AIGroupOrder::SCOUT && !direct_contact)
+            continue;
+        if (group.order == AIGroupOrder::SCOUT && direct_contact)
+            SetGroupOrder(group, AIGroupOrder::NONE, seen_target ? seen_target->id : -1);
+
+        const bool committed_move = (group.order == AIGroupOrder::MOVE_TO || group.order == AIGroupOrder::JOIN ||
+                                     group.order == AIGroupOrder::RETREAT || group.order == AIGroupOrder::DEEP_SCOUT ||
+                                     group.order == AIGroupOrder::MOVE_ATTACK);
+        if (committed_move && !direct_contact)
+            continue;
+
+        // A NormalUnit group which has never seen the Alliance stays at order 0
+        // for now.  The original planner assigns authored tactical points,
+        // MOVE_ATTACK or group consolidation in later passes below; it does not
+        // give each company omniscient nearest-player knowledge.
+        if (!direct_contact && !group.contacted)
+            continue;
+
+        MapXY center = GetAIGroupCenter(group);
+        MapUnit* target = seen_target;
+        if (!target && group.target_unit_id >= 0)
+        {
+            target = GetUnit(group.target_unit_id);
+            if (target && (target->is_enemy || target->isDead()))
+                target = nullptr;
+        }
+        if (!target)
+            target = FindNearestPlayerUnit(center, false, nullptr);
+        if (!target)
+            continue;
+
+        std::vector<MapUnit*> defenders;
+        for (auto& cluster : alliance)
+        {
+            if (std::find(cluster.begin(), cluster.end(), target) != cluster.end())
+            {
+                defenders = cluster;
+                break;
+            }
+        }
+        if (defenders.empty())
+            defenders.push_back(target);
+
+        const double ratio = EstimateAIGroupStrengthRatio(group, defenders);
+        if (ratio >= 0.8)
+        {
+            SetGroupOrder(group, ratio >= 1.2 ? AIGroupOrder::FREE_ATTACK : AIGroupOrder::BOUND_ATTACK, target->id);
+        }
+        else if (ratio >= 0.5)
+        {
+            // A contacted group that cannot currently win an aggressive exchange
+            // must not become a helpless stationary target outside its own weapon
+            // envelope.  The previous order-4 mapping made exactly that happen:
+            // long-range Alliance fire could wake a group, the group would advance
+            // for a turn, then re-plan to STATIC_DEFENCE and simply dig in while
+            // being shot from beyond its range.
+            //
+            // Keep the defensive intent, but use the original order 5 semantics:
+            // close only until the target enters the group's effective fire range,
+            // then hold ground and fight.  Mission-authored fixed defence orders
+            // (SUICIDE_DEFENCE) remain untouched.
+            SetGroupOrder(group, AIGroupOrder::MOBILE_DEFENCE, target->id);
+        }
+        else
+        {
+            // USTUP stores a friendly group as the destination.
+            AITacticalGroup* refuge = nullptr;
+            double best = 1e30;
+            for (auto& other : enemy_ai_groups)
+            {
+                if (&other == &group || other.unit_ids.empty())
+                    continue;
+                if (other.strength <= group.strength)
+                    continue;
+                MapXY oc = GetAIGroupCenter(other);
+                if (!center.IsSelected() || !oc.IsSelected())
+                    continue;
+                double d = center.Distance(oc);
+                if (d < best)
+                {
+                    best = d;
+                    refuge = &other;
+                }
+            }
+            if (refuge)
+            {
+                SetGroupOrder(group, AIGroupOrder::RETREAT, -1, refuge->id);
+            }
+            else
+            {
+                // A weak group with nowhere to retreat may hold only if at least
+                // one surviving member can actually engage the known target from
+                // its current position.  The previous unconditional STATIC_DEFENCE
+                // fallback was fatal for the Other Side's range-1 troops (Orcs,
+                // Ka-orcs, Wolves, etc.): after contact they could freeze several
+                // tiles away, entrench to level 6 and let ranged Alliance units
+                // destroy them without ever attempting to close the distance.
+                //
+                // Mission-authored fixed defenders are represented by
+                // SUICIDE_DEFENCE and are intentionally unaffected by this rule.
+                bool can_hold_and_fire = false;
+                for (int uid : group.unit_ids)
+                {
+                    MapUnit* defender = GetUnit(uid);
+                    if (!defender || defender->isDead() || !defender->unit || !target->unit)
+                        continue;
+                    if (!defender->unit->canAttack(target->unit))
+                        continue;
+
+                    const double d = defender->coor.Distance(target->coor);
+                    const int range = defender->GetFireRange();
+                    if (range <= 0 || d > (double)range)
+                        continue;
+                    if (defender->unit->isIndirectFire() && target->unit->isLand() && d <= 2.0)
+                        continue;
+
+                    can_hold_and_fire = true;
+                    break;
+                }
+
+                SetGroupOrder(group,
+                    can_hold_and_fire ? AIGroupOrder::STATIC_DEFENCE : AIGroupOrder::MOBILE_DEFENCE,
+                    target->id);
+            }
+        }
+        group.contacted = true;
+    }
+
+    // DOS planner pass around 0x9a243: map-authored Other Side counter-attack
+    // positions are assigned one-by-one to the closest still-unordered group as
+    // order 10 (PRESUN NA MIESTO).  These are not patrol waypoints; they are a
+    // distinct tactical-planning layer and therefore are only consumed here.
+    std::vector<int> claimed_posts;
+    for (const auto& g : enemy_ai_groups)
+        if (g.order == AIGroupOrder::MOVE_TO && g.target_point_index >= 0)
+            claimed_posts.push_back(g.target_point_index);
+
+    for (int pi = 0; pi < (int)counter_attack_post_enemy.size(); ++pi)
+    {
+        if (std::find(claimed_posts.begin(), claimed_posts.end(), pi) != claimed_posts.end())
+            continue;
+        AITacticalGroup* best_group = nullptr;
+        double best_dist = 1e30;
+        for (auto& g : enemy_ai_groups)
+        {
+            if (g.order != AIGroupOrder::NONE || g.behavior != MapUnitType::NormalUnit || g.contacted)
+                continue;
+            MapXY center = GetAIGroupCenter(g);
+            if (!center.IsSelected())
+                continue;
+            const double d = center.Distance(counter_attack_post_enemy[pi]);
+            if (d < best_dist)
+            {
+                best_dist = d;
+                best_group = &g;
+            }
+        }
+        if (best_group)
+        {
+            SetGroupOrder(*best_group, AIGroupOrder::MOVE_TO, -1, -1, pi);
+            claimed_posts.push_back(pi);
+        }
+    }
+
+    // DOS planner pass around 0x9a38a: from the groups still at order 0, choose
+    // a group which is strong enough against the principal Alliance cluster and
+    // assign order 11 (PRESUN S UTOKOM).  The executable then chooses the
+    // nearest qualifying group.  Use the same 0.8 combat-ratio gate recovered
+    // from the attack planner rather than a remake-only aggression threshold.
+    const std::vector<MapUnit*>* principal = nullptr;
+    int principal_strength = INT_MIN;
+    for (auto& cluster : alliance)
+    {
+        int score = 0;
+        for (auto* u : cluster)
+        {
+            if (!u || u->isDead() || !u->unit)
+                continue;
+            score += (std::max)({ u->GetAttack(MapUnit::TARGET_TYPE::LIGHT),
+                                  u->GetAttack(MapUnit::TARGET_TYPE::ARMOR),
+                                  u->GetAttack(MapUnit::TARGET_TYPE::AIR) }) + u->GetDefence() + (std::max)(1, u->man);
+        }
+        if (score > principal_strength)
+        {
+            principal_strength = score;
+            principal = &cluster;
+        }
+    }
+
+    if (principal && !principal->empty())
+    {
+        const MapXY pc = GetAllianceClusterCenter(*principal);
+        AITacticalGroup* assault = nullptr;
+        double best_dist = 1e30;
+        for (auto& g : enemy_ai_groups)
+        {
+            if (g.order != AIGroupOrder::NONE || g.behavior != MapUnitType::NormalUnit || g.contacted)
+                continue;
+            if (EstimateAIGroupStrengthRatio(g, *principal) <= 0.8)
+                continue;
+            MapXY gc = GetAIGroupCenter(g);
+            if (!gc.IsSelected() || !pc.IsSelected())
+                continue;
+            const double d = gc.Distance(pc);
+            if (d < best_dist)
+            {
+                best_dist = d;
+                assault = &g;
+            }
+        }
+        if (assault)
+        {
+            MapUnit* target = nullptr;
+            double td = 1e30;
+            const MapXY gc = GetAIGroupCenter(*assault);
+            for (auto* u : *principal)
+            {
+                if (!u || u->isDead())
+                    continue;
+                const double d = gc.IsSelected() ? gc.Distance(u->coor) : 0.0;
+                if (d < td) { td = d; target = u; }
+            }
+            SetGroupOrder(*assault, AIGroupOrder::MOVE_ATTACK, target ? target->id : -1);
+        }
+    }
+
+    // Any NormalUnit groups which remain unassigned are handled by the
+    // order-0 consolidation pattern recovered from 0x9ac57.
+    ConsolidateIdleEnemyGroups();
+}
+
+MapXY SpellMap::ResolveEnemyGroupGoal(AITacticalGroup& group)
+{
+    if (group.order == AIGroupOrder::JOIN || group.order == AIGroupOrder::RETREAT)
+    {
+        AITacticalGroup* target_group = FindEnemyAIGroupById(group.target_group_id);
+        return target_group ? GetAIGroupCenter(*target_group) : MapXY();
+    }
+
+    if (group.order == AIGroupOrder::MOVE_TO)
+    {
+        if (group.target_point_index >= 0 && group.target_point_index < (int)counter_attack_post_enemy.size())
+            return counter_attack_post_enemy[group.target_point_index];
+        if (group.target_pos.IsSelected())
+            return group.target_pos;
+    }
+
+    if (group.order == AIGroupOrder::FREE_ATTACK || group.order == AIGroupOrder::BOUND_ATTACK ||
+        group.order == AIGroupOrder::MOVE_ATTACK || group.order == AIGroupOrder::KAMIKAZE_MOVE_ATTACK ||
+        group.order == AIGroupOrder::MOBILE_DEFENCE)
+    {
+        MapUnit* target = GetUnit(group.target_unit_id);
+        if (target && !target->is_enemy && !target->isDead())
+            return target->coor;
+    }
+
+    if (group.order == AIGroupOrder::SCOUT || group.order == AIGroupOrder::DEEP_SCOUT || group.order == AIGroupOrder::RANDOM_MOVE)
+    {
+        MapXY center = GetAIGroupCenter(group);
+        if (!group.target_pos.IsSelected() || (center.IsSelected() && center.Distance(group.target_pos) < 2.0))
+        {
+            // Orders 1/6/9 choose their own exploratory destination.  Do not
+            // reuse the DTA counter-attack-position layer as patrol waypoints.
+            if (x_size > 2 && y_size > 2)
+                group.target_pos = MapXY(1 + rand() % (x_size - 2), 1 + rand() % (y_size - 2));
+        }
+        return group.target_pos;
+    }
+
+    return MapXY();
+}
+
+MapUnit* SpellMap::SelectGroupAttackTarget(MapUnit* enemy, const AITacticalGroup& group)
+{
+    if (!enemy || enemy->GetFireCount() <= 0)
+        return nullptr;
+
+    unit_view->CalcAttackRange(enemy, true);
+    MapUnit* preferred = GetUnit(group.target_unit_id);
+    auto attackable = [&](MapUnit* target) -> bool
+    {
+        if (!target || target->is_enemy || target->isDead() || !target->unit)
+            return false;
+        const int pos = ConvXY(target->coor);
+        if (pos < 0 || pos >= (int)enemy->attack_map.size() || !enemy->attack_map[pos])
+            return false;
+        if (!enemy->unit->canAttack(target->unit))
+            return false;
+        if (enemy->unit->isIndirectFire() && target->unit->isLand() && enemy->coor.Distance(target->coor) <= 2)
+            return false;
+        return true;
+    };
+
+    if (attackable(preferred))
+        return preferred;
+
+    MapUnit* best = nullptr;
+    int best_effect = INT_MIN;
+    double best_dist = 1e30;
+    for (auto* target : units)
+    {
+        if (!attackable(target))
+            continue;
+        // Keep target selection tied to actual weapon effectiveness; remove the
+        // remake-only wounded/artillery/value heuristics.
+        const int effect = enemy->GetAttack(target) - target->GetDefence();
+        const double dist = enemy->coor.Distance(target->coor);
+        if (effect > best_effect || (effect == best_effect && dist < best_dist))
+        {
+            best_effect = effect;
+            best_dist = dist;
+            best = target;
+        }
+    }
+    return best;
+}
+
+bool SpellMap::MoveEnemyToward(MapUnit* enemy, MapXY goal, bool stop_in_attack_range)
+{
+    if (!enemy || !goal.IsSelected() || enemy->action_points <= 0)
+        return false;
+
+    auto tile_free = [&](MapXY t) -> bool
+    {
+        if (!t.IsSelected() || t.x < 0 || t.y < 0 || t.x >= x_size || t.y >= y_size)
+            return false;
+        int pxy = ConvXY(const_cast<MapXY&>(t));
+        for (auto* other = Lunit[pxy]; other; other = other->next)
+        {
+            if (other == enemy)
+                continue;
+            if (!other->unit)
+                continue;
+            if ((enemy->unit->isAir() && other->unit->isAir()) || (!enemy->unit->isAir() && !other->unit->isAir()))
+                return false;
+        }
+        return true;
+    };
+
+    std::vector<MapXY> destinations;
+    destinations.reserve(9);
+    if (tile_free(goal))
+        destinations.push_back(goal);
+    for (int dir = 0; dir < 8; ++dir)
+    {
+        MapXY t = GetNeighborTile8D(goal, dir);
+        if (tile_free(t))
+            destinations.push_back(t);
+    }
+
+    MapXY best_advance;
+    int best_remaining = INT_MAX;
+    int best_cost = INT_MAX;
+    const int fire_range = enemy->GetFireRange();
+
+    for (auto dest : destinations)
+    {
+        const int saved_ap = enemy->action_points;
+        enemy->action_points = 200000;
+        auto path = unit_range->FindPath(enemy, dest);
+        enemy->action_points = saved_ap;
+        if (path.size() < 2)
+            continue;
+
+        MapXY advance = enemy->coor;
+        int cost = 0;
+        for (int i = 1; i < (int)path.size(); ++i)
+        {
+            if (path[i].g_cost > enemy->action_points)
+                break;
+            advance = path[i].pos;
+            cost = path[i].g_cost;
+            if (stop_in_attack_range && fire_range > 0)
+            {
+                const double d = advance.Distance(goal);
+                const bool min_ok = !(enemy->unit->isIndirectFire() && d <= 2.0);
+                if (d <= fire_range && min_ok)
+                    break;
+            }
+        }
+        if (advance == enemy->coor)
+            continue;
+        int remaining = (int)advance.Distance(goal);
+        if (remaining < best_remaining || (remaining == best_remaining && cost < best_cost))
+        {
+            best_remaining = remaining;
+            best_cost = cost;
+            best_advance = advance;
+        }
+    }
+
+    return best_advance.IsSelected() && StartMove_NoRangeCheck(enemy, best_advance);
+}
+
+bool SpellMap::MoveEnemyRandomly(MapUnit* enemy, const AITacticalGroup& group)
+{
+    (void)group;
+    if (!enemy || enemy->action_points <= 0)
+        return false;
+    std::vector<MapXY> candidates;
+    for (int dir = 0; dir < 8; ++dir)
+    {
+        MapXY t = GetNeighborTile8D(enemy->coor, dir);
+        if (t.IsSelected())
+            candidates.push_back(t);
+    }
+    while (!candidates.empty())
+    {
+        size_t idx = (size_t)(rand() % candidates.size());
+        MapXY t = candidates[idx];
+        candidates.erase(candidates.begin() + idx);
+        if (StartMove_NoRangeCheck(enemy, t))
+            return true;
+    }
+    return false;
+}
+
 void SpellMap::StartEnemyTurn()
 {
     if (enemy_turn_running)
@@ -7084,101 +8291,57 @@ void SpellMap::StartEnemyTurn()
 
     enemy_turn_prev_selection = unit_selection;
     enemy_turn_prev_sel_mod = unit_selection_mod;
+    enemy_turn_list.clear();
 
-	enemy_turn_list.clear();
+    // Dead companies cannot remain members of persistent tactical groups.
+    CleanupDeadUnits();
 
-	// --- Safety cleanup: remove any dead units lingering in the units list ---
-	CleanupDeadUnits();
+    for (auto* u : units)
+    {
+        if (!u)
+            continue;
+        if (u->is_enemy)
+            u->ResetAP();
+        else
+        {
+            // Alliance keeps unspent AP as the reserve for original defensive fire.
+            if (u->panic_turns == 1)
+                u->panic_turns = 0;
+        }
+    }
 
-	for (auto* u : units)
-	{
-		if (u && u->is_enemy)
-		{
-			// decay aggro memory once per enemy phase
-			if (u->ai_aggro_ttl > 0)
-			{
-				u->ai_aggro_ttl--;
-				if (u->ai_aggro_ttl <= 0)
-					u->ai_aggro_attacker_id = -1;
-			}
-			u->ResetAP(); // enemy starts with full AP
-			enemy_turn_list.push_back(u);
-		}
-		else if (u && !u->is_enemy)
-		{
-			// prevent player actions during enemy phase
-			if (u->panic_turns == 1)
-				u->panic_turns = 0;
-			u->action_points = 0;
-		}
-	}
+    // Reconcile persistent Other Side groups with event-created reinforcements,
+    // then let the original-style planner assign/validate group orders.
+    EnsureEnemyAIGroups();
+    PlanEnemyAIGroups();
 
-	// --- Enemy level scaling ---
-	// Enemy levels are defined in the map DEF files (AddUnit parameter 4).
-	// Do NOT override them here. The DEF-defined levels are authoritative.
+    // Execute in group order rather than raw map order.  This is important: the
+    // DOS AI plans for a group first and its member companies execute that plan.
+    for (auto& group : enemy_ai_groups)
+    {
+        for (int uid : group.unit_ids)
+        {
+            MapUnit* u = GetUnit(uid);
+            if (u && u->is_enemy && !u->isDead())
+                enemy_turn_list.push_back(u);
+        }
+    }
 
-	// --- Enemy shared vision ---
-	// Before enemy turn starts, enemies that can see player units share that info
-	// with nearby friendly units. This runs once per enemy turn.
-	for (auto* spotter : units)
-	{
-		if (!spotter || !spotter->is_enemy || spotter->isDead()) continue;
-		for (auto* player_u : units)
-		{
-			if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
-			if (spotter->coor.Distance(player_u->coor) <= (double)spotter->unit->sdir)
-			{
-				AggroEnemiesAround(spotter->coor, player_u->coor, -1, spotter->unit->sdir + 3, 3);
-			}
-		}
-	}
+    // Any malformed/unassigned enemy still gets a turn, but should normally have
+    // been attached above.
+    for (auto* u : units)
+    {
+        if (!u || !u->is_enemy || u->isDead())
+            continue;
+        if (std::find(enemy_turn_list.begin(), enemy_turn_list.end(), u) == enemy_turn_list.end())
+            enemy_turn_list.push_back(u);
+    }
 
-	// --- Compute alertness via sight chains ---
-	// Phase 1: mark enemies that directly see a player unit
-	for (auto* enemy : enemy_turn_list)
-	{
-		enemy->ai_alerted = false;
-		for (auto* player_u : units)
-		{
-			if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
-			if (enemy->coor.Distance(player_u->coor) <= (double)enemy->unit->sdir)
-			{
-				enemy->ai_alerted = true;
-				break;
-			}
-		}
-	}
-	// Phase 2: BFS propagation - enemy that can see an alerted enemy becomes alerted too
-	{
-		bool changed = true;
-		while (changed)
-		{
-			changed = false;
-			for (auto* enemy : enemy_turn_list)
-			{
-				if (enemy->ai_alerted) continue;
-				for (auto* other : enemy_turn_list)
-				{
-					if (!other->ai_alerted) continue;
-					if (enemy->coor.Distance(other->coor) <= (double)enemy->unit->sdir)
-					{
-						enemy->ai_alerted = true;
-						changed = true;
-						break;
-					}
-				}
-			}
-		}
-	}
-
-	enemy_turn_idx = 0;
-	enemy_turn_running = true;
-
-	// hide enemy in player view until they make contact again
-	unit_selection_mod = true;
+    enemy_turn_idx = 0;
+    enemy_turn_running = true;
+    unit_selection_mod = true;
 
     ReleaseMap();
-
     InvalidateHUDbuttons();
 }
 
@@ -7192,6 +8355,7 @@ void SpellMap::EndEnemyTurn()
 
 	// clear any pending reaction fire
 	reaction_fire_queue.clear();
+	reaction_fire_active = false;
 	reaction_fire_restore_selection = nullptr;
 
 	// Remove any dead units that weren't cleaned up during attack processing
@@ -7449,849 +8613,303 @@ bool SpellMap::PanicTurnStep()
 
 bool SpellMap::EnemyTurnStep()
 {
-	// Schedule exactly one enemy action; returns true when something was scheduled.
-	// Key: enemy_turn_idx does NOT advance until the current unit has exhausted
-	// all useful actions (attack + move), enabling multi-action per turn.
-	if (!enemy_turn_running)
-		return(false);
-
-	LockMap();
-
-	// --- Endgame hunt detection ---
-	// When very few enemies remain, all units switch to aggressive hunting
-	// to prevent the frustrating "last enemy hiding in a corner" scenario.
-	int alive_enemies = 0;
-	int alive_players = 0;
-	for (auto* u : units)
-	{
-		if (!u) continue;
-		if (u->is_enemy) alive_enemies++;
-		else alive_players++;
-	}
-	bool endgame_hunt = (alive_enemies > 0 && alive_enemies <= 2 && alive_players > 0);
-
-	while (enemy_turn_idx < enemy_turn_list.size())
-	{
-		MapUnit* enemy = enemy_turn_list[enemy_turn_idx];
-		if (!enemy || !_ptr_in_units_list(units, enemy))
-		{
-			enemy_turn_idx++;
-			continue;
-		}
-
-		// skip if already busy or has no AP
-		if (IsUnitBusy(enemy) || enemy->action_points <= 0)
-		{
-			enemy_turn_idx++;
-			continue;
-		}
-
-		// enemy actions are driven by the selected unit state machine -> temporarily select this enemy
-		unit_selection = enemy;
-		unit_selection_mod = true;
-
-		// 1) try attack (scored target selection)
-		unit_view->CalcAttackRange(enemy, true);
-
-		MapUnit* best_target = nullptr;
-		double best_score = -1e9;
-
-		for (auto* u : units)
-		{
-			if (!u || u->is_enemy)
-				continue;
-
-			// skip dead units (not yet extracted from map)
-			if (u->isDead())
-				continue;
-
-			auto pos = ConvXY(u->coor);
-			if (!unit_view->attack_map[pos])
-				continue;
-
-			if (!enemy->unit->canAttack(u->unit))
-				continue;
-
-			// indirect fire: enforce minimum range for ground targets
-			if (enemy->unit->isIndirectFire() && u->unit->isLand())
-			{
-				if (enemy->coor.Distance(u->coor) <= 2)
-					continue;
-			}
-
-			// --- Scored target selection ---
-			double score = 0.0;
-
-			// attack/defense ratio: prefer targets we can damage effectively
-			double atk = (double)enemy->GetAttack(u);
-			double def = (double)u->GetDefence();
-			double atk_ratio = (def > 0) ? (atk / def) : 3.0;
-			score += 10.0 * (std::min)(atk_ratio, 5.0);
-
-			// prefer wounded targets (finish them off)
-			double hp_max = (double)u->unit->GetHP();
-			double hp_cur = (double)u->man;
-			double health_pct = (hp_max > 0) ? (hp_cur / hp_max) : 1.0;
-			score += 15.0 * (1.0 - health_pct);
-
-			// distance preference (closer targets strongly preferred to prevent bypassing front-line)
-			double dist = enemy->coor.Distance(u->coor);
-			score -= 3.0 * dist;
-
-			// penalize entrenched targets (harder to damage)
-			score -= 4.0 * u->dig_level;
-
-			// prefer high-value targets: artillery, long-range units
-			if (u->unit->isIndirectFire())
-				score += 8.0;
-			if (u->GetFireRange() >= 6)
-				score += 4.0;
-
-			// prefer threatening targets (high attack values)
-			int max_target_atk = (std::max)({u->unit->attack_light, u->unit->attack_armored, u->unit->attack_air});
-			score += 0.1 * max_target_atk;
-
-			if (score > best_score)
-			{
-				best_score = score;
-				best_target = u;
-			}
-		}
-
-		if (best_target && StartAttack_NoHUD(enemy, best_target))
-		{
-			// don't advance index: come back for more actions after animation
-			ReleaseMap();
-			return(true);
-		}
-
-		// 1b) auto-land for "air units that can't attack from air" (e.g. Magotar)
-		// Magotar should primarily SCOUT, not rush to land.
-		// Landing only in specific conditions:
-		//   - endgame hunt mode (one of last enemies)
-		//   - adjacent target is critically weak (< 30% HP) and isolated
-		//   - no other enemy ground units are alive (no scouting role)
-		if (enemy->unit->isAir() && enemy->unit->isActionLand() && enemy->CanSpecAction())
-		{
-			// count friendly ground units (determines if Magotar has a scouting role)
-			int friendly_ground_count = 0;
-			for (auto* u : units)
-			{
-				if (u && u->is_enemy && u != enemy && u->unit && u->unit->isLand() && !u->isDead())
-					friendly_ground_count++;
-			}
-			bool has_scout_role = (friendly_ground_count > 0);
-
-			// find adjacent player ground unit
-			MapUnit* adj = nullptr;
-			for (auto* u : units)
-			{
-				if (!u || u->is_enemy || u->isDead()) continue;
-				if (!u->unit || !u->unit->isLand()) continue;
-				if (enemy->coor.Distance(u->coor) <= 1)
-				{
-					adj = u;
-					break;
-				}
-			}
-
-			// decide whether to land
-			bool should_land = false;
-			if (adj)
-			{
-				auto morph_type = spelldata->units->GetUnit(enemy->unit->action_params[2]);
-				if (morph_type && morph_type->canAttack(adj->unit))
-				{
-					double adj_health = (adj->unit->GetHP() > 0) ? (double)adj->man / adj->unit->GetHP() : 1.0;
-
-					// count player threats near landing spot
-					int player_threats_nearby = 0;
-					for (auto* u : units)
-					{
-						if (!u || u->is_enemy || u->isDead()) continue;
-						if (u == adj) continue;
-						if (u->unit && u->unit->isLand() && enemy->coor.Distance(u->coor) <= 3)
-							player_threats_nearby++;
-					}
-
-					if (endgame_hunt)
-						should_land = true; // endgame: land and fight
-					else if (!has_scout_role)
-						should_land = true; // no friendly ground units: scouting is pointless
-					else if (adj_health < 0.30 && player_threats_nearby == 0)
-						should_land = true; // safe opportunistic kill on isolated weak target
-				}
-			}
-
-			if (should_land && adj)
-			{
-				auto morph_type = spelldata->units->GetUnit(enemy->unit->action_params[2]);
-
-				auto has_land_unit = [&](MapXY t) -> bool
-					{
-						auto pxy = ConvXY(t);
-						for (auto* tu = Lunit[pxy]; tu; tu = tu->next)
-						{
-							if (tu == enemy) continue;
-							if (tu->unit && tu->unit->isLand())
-								return true;
-						}
-						return false;
-					};
-
-				auto has_air_unit_other = [&](MapXY t) -> bool
-					{
-						auto pxy = ConvXY(t);
-						for (auto* tu = Lunit[pxy]; tu; tu = tu->next)
-						{
-							if (tu == enemy) continue;
-							if (tu->unit && tu->unit->isAir())
-								return true;
-						}
-						return false;
-					};
-
-				auto can_land_at = [&](const MapXY& t) -> bool
-				{
-					if (!const_cast<MapXY&>(t).IsSelected())
-						return false;
-
-					if (has_land_unit(t))
-						return false;
-
-					auto pxy = ConvXY(const_cast<MapXY&>(t));
-					if (!morph_type->isWalk() && tiles[pxy].flags == 0x90)
-						return false;
-					if (!morph_type->isHover() && tiles[pxy].flags == 0x60)
-						return false;
-					if (tiles[pxy].flags && tiles[pxy].flags != 0x90 && tiles[pxy].flags != 0x60)
-						return false;
-
-					return true;
-				};
-
-				bool can_land_here = can_land_at(enemy->coor);
-
-				if (can_land_here)
-				{
-					enemy->action_points -= enemy->unit->action_ap;
-					enemy->PlayAction();
-
-					enemy->altitude = 100;
-					enemy->action_state = MapUnit::ACTION_STATE::AIR_LAND;
-
-					enemy->in_animation = enemy->unit->gr_base;
-					enemy->frame_stop = enemy->in_animation ? enemy->in_animation->anim.frames : 0;
-					enemy->frame = 0;
-					if (enemy->in_animation)
-						enemy->azimuth = enemy->in_animation->GetAnimAzim(enemy->in_animation->GetStaticAngle(enemy->azimuth));
-
-					enemy->ClearDigLevel();
-					enemy->ResetTurnsCounter();
-
-					ReleaseMap();
-					return true;
-				}
-
-				// cannot land here -> move towards nearest landable neighbor
-				auto find_path_unbounded = [&](MapXY dest) -> std::vector<AStarNode>
-					{
-						int ap_saved = enemy->action_points;
-						enemy->action_points = 200000;
-						auto path = unit_range->FindPath(enemy, dest);
-						enemy->action_points = ap_saved;
-						return path;
-					};
-
-				MapXY best_advance;
-				best_advance.Clear();
-				int best_rem = INT_MAX;
-				int best_cost = INT_MAX;
-
-				for (int dir = 0; dir < 8; dir++)
-				{
-					MapXY land_tile = GetNeighborTile8D(adj->coor, dir);
-					if (!land_tile.IsSelected())
-						continue;
-					if (!can_land_at(land_tile))
-						continue;
-					if (has_air_unit_other(land_tile))
-						continue;
-
-					auto path = find_path_unbounded(land_tile);
-					if (path.size() < 2)
-						continue;
-
-					MapXY advance = enemy->coor;
-					int adv_cost = 0;
-					for (int i = 1; i < (int)path.size(); i++)
-					{
-						if (path[i].g_cost <= enemy->action_points)
-						{
-							advance = path[i].pos;
-							adv_cost = path[i].g_cost;
-						}
-						else
-							break;
-					}
-
-					if (advance == enemy->coor)
-						continue;
-
-					int rem = advance.Distance(land_tile);
-					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
-					{
-						best_rem = rem;
-						best_cost = adv_cost;
-						best_advance = advance;
-					}
-				}
-
-				if (best_advance.IsSelected() && StartMove_NoRangeCheck(enemy, best_advance))
-				{
-					ReleaseMap();
-					return true;
-				}
-			}
-
-			// Magotar SCOUTING: if not landing, actively scout and share intel
-				// Fly around the map, discover player units, set aggro on nearby friendly ground units
-				// HP-based behavior: if damaged, retreat to safety (hide in fog) instead of scouting aggressively
-				if (has_scout_role && enemy->action_points > 0)
-				{
-					// calculate HP ratio for self-preservation decisions
-					double own_hp_ratio = (enemy->unit->GetHP() > 0) ? (double)enemy->man / enemy->unit->GetHP() : 1.0;
-
-					// first: check if we can see any player units and share intel with nearby friendlies
-					bool sees_any_player = false;
-					for (auto* player_u : units)
-					{
-						if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
-						if (enemy->coor.Distance(player_u->coor) <= (double)(enemy->unit->sdir + 1))
-						{
-							sees_any_player = true;
-							// spotted a player unit! Set aggro on nearby friendly ground units
-							AggroEnemiesAround(enemy->coor, player_u->coor, -1, 12, 4);
-						}
-					}
-
-					// find nearest player unit for distance reference
-					MapUnit* scout_target = nullptr;
-					double scout_dist = 1e9;
-					for (auto* u : units)
-					{
-						if (!u || u->is_enemy || u->isDead()) continue;
-						double d = enemy->coor.Distance(u->coor);
-						if (d < scout_dist) { scout_dist = d; scout_target = u; }
-					}
-
-					if (scout_target)
-					{
-						auto tile_free_for_air = [&](const MapXY& t) -> bool
-						{
-							if (!const_cast<MapXY&>(t).IsSelected())
-								return false;
-							auto pxy = ConvXY(const_cast<MapXY&>(t));
-							auto tile_unit = Lunit[pxy];
-							while (tile_unit)
-							{
-								if (tile_unit != enemy && tile_unit->unit && tile_unit->unit->isAir())
-									return false;
-								tile_unit = tile_unit->next;
-							}
-							return true;
-						};
-
-						auto find_path_unbounded_scout = [&](const MapXY& dest) -> std::vector<AStarNode>
-						{
-							int ap_saved = enemy->action_points;
-							enemy->action_points = 200000;
-							auto path = unit_range->FindPath(enemy, dest);
-							enemy->action_points = ap_saved;
-							return path;
-						};
-
-						// HP-based distance thresholds:
-						// - 100% HP: aggressive scouting, 3-6 tiles from nearest player
-						// - <100% HP: retreat to fog of war, hide far away
-						double ideal_dist_min, ideal_dist_max;
-						if (own_hp_ratio < 1.0)
-						{
-							// DAMAGED: flee to safety, hide in fog of war
-							ideal_dist_min = 10.0;
-							ideal_dist_max = 16.0;
-						}
-						else
-						{
-							// FULL HP: aggressive scouting
-							ideal_dist_min = 3.0;
-							ideal_dist_max = 6.0;
-						}
-
-						MapXY best_scout_tile;
-						best_scout_tile.Clear();
-						int best_scout_rem = INT_MAX;
-						int best_scout_cost = INT_MAX;
-
-						MapXY goal = scout_target->coor;
-
-						// try positions around the target at ideal distance
-						for (int dir = 0; dir < 8; dir++)
-						{
-							// try several distances along each direction
-							MapXY t = goal;
-							for (int step = 0; step < (int)ideal_dist_max + 2; step++)
-							{
-								t = GetNeighborTile8D(t, dir);
-								if (!t.IsSelected()) break;
-
-								double d = t.Distance(goal);
-								if (d < ideal_dist_min || d > ideal_dist_max) continue;
-								if (!tile_free_for_air(t)) continue;
-
-								auto path = find_path_unbounded_scout(t);
-								if (path.size() < 2) continue;
-
-								MapXY advance = enemy->coor;
-								int adv_cost = 0;
-								for (int i = 1; i < (int)path.size(); i++)
-								{
-									if (path[i].g_cost <= enemy->action_points)
-									{
-										advance = path[i].pos;
-										adv_cost = path[i].g_cost;
-									}
-									else
-										break;
-								}
-
-								if (advance == enemy->coor) continue;
-
-								int rem = (int)advance.Distance(t);
-								if (rem < best_scout_rem || (rem == best_scout_rem && adv_cost < best_scout_cost))
-								{
-									best_scout_rem = rem;
-									best_scout_cost = adv_cost;
-									best_scout_tile = advance;
-								}
-							}
-						}
-
-						if (best_scout_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_scout_tile))
-						{
-							ReleaseMap();
-							return(true);
-						}
-					}
-				}
-		}
-
-
-		// 2) if this unit was attacked recently -> chase last-known attacker position (ignore LOS)
-		//    BUT: if a closer player unit exists, redirect to that unit
-		//    This prevents enemies from walking past front-line to chase back-line attackers
-		if (enemy->ai_aggro_ttl > 0)
-		{
-			MapXY goal;
-			goal.Clear();
-
-			if (enemy->ai_aggro_attacker_id >= 0)
-			{
-				MapUnit* attacker = GetUnit(enemy->ai_aggro_attacker_id);
-				if (attacker && !attacker->is_enemy)
-					goal = attacker->coor;
-			}
-			if (!goal.IsSelected())
-				goal = enemy->ai_aggro_pos;
-
-			// invalid goal -> drop aggro and fall through to movement phase
-			if (!goal.IsSelected())
-			{
-				enemy->ai_aggro_ttl = 0;
-				enemy->ai_aggro_attacker_id = -1;
-			}
-			else
-			{
-				// Redirect aggro to closer player unit if one is significantly nearer
-				double aggro_dist = enemy->coor.Distance(goal);
-				for (auto* u : units)
-				{
-					if (!u || u->is_enemy || u->isDead()) continue;
-					double d = enemy->coor.Distance(u->coor);
-					if (d < aggro_dist * 0.7)
-					{
-						goal = u->coor;
-						aggro_dist = d;
-					}
-				}
-				auto tile_free_for = [&](const MapXY& t) -> bool
-				{
-					if (!(t.x >= 0 && t.y >= 0))
-						return false;
-
-					auto pxy = ConvXY(const_cast<MapXY&>(t));
-					auto tile_unit = Lunit[pxy];
-					while (tile_unit)
-					{
-						if ((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
-							(!enemy->unit->isAir() && !tile_unit->unit->isAir()))
-						{
-							return false;
-						}
-						tile_unit = tile_unit->next;
-					}
-					return true;
-				};
-
-				auto find_path_unbounded = [&](const MapXY& dest) -> std::vector<AStarNode>
-				{
-					int ap_saved = enemy->action_points;
-					enemy->action_points = 200000;
-					auto path = unit_range->FindPath(enemy, dest);
-					enemy->action_points = ap_saved;
-					return path;
-				};
-
-				// candidates: neighbors around goal (preferred), and goal itself (if empty)
-				std::vector<MapXY> cand;
-				cand.reserve(9);
-
-				for (int dir = 0; dir < 8; dir++)
-				{
-					MapXY t = GetNeighborTile8D(goal, dir);
-					if (tile_free_for(t))
-						cand.push_back(t);
-				}
-				if (tile_free_for(goal))
-					cand.push_back(goal);
-
-				MapXY best_tile;
-				best_tile.Clear();
-				int best_rem = INT_MAX;
-				int best_cost = INT_MAX;
-
-				for (auto& dest : cand)
-				{
-					auto path = find_path_unbounded(dest);
-					if (path.size() < 2)
-						continue;
-
-					// advance as far as possible this turn
-					MapXY advance = enemy->coor;
-					int adv_cost = 0;
-					for (int i = 1; i < (int)path.size(); i++)
-					{
-						if (path[i].g_cost <= enemy->action_points)
-						{
-							advance = path[i].pos;
-							adv_cost = path[i].g_cost;
-						}
-						else
-							break;
-					}
-
-					if (advance == enemy->coor)
-						continue;
-
-					int rem = advance.Distance(goal);
-					if (rem < best_rem || (rem == best_rem && adv_cost < best_cost))
-					{
-						best_rem = rem;
-						best_cost = adv_cost;
-						best_tile = advance;
-					}
-				}
-
-				if (best_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_tile))
-				{
-					ReleaseMap();
-					return(true);
-				}
-			}
-			// could not move via aggro -> fall through to active movement below
-		}
-
-// 3) Air intel sharing: any air unit flying near player units shares positions
-// with friendly ground units (simulates original Spellcross scouting feel)
-if (enemy->unit->isAir() && enemy->action_points > 0)
+    // Schedule exactly one action.  enemy_turn_idx stays on the current company
+    // while its movement/attack animation runs, so a company may move and then
+    // fire (or fire repeatedly while AP remains) under one persistent group order.
+    if (!enemy_turn_running)
+        return false;
+
+    LockMap();
+
+    while (enemy_turn_idx < enemy_turn_list.size())
+    {
+        MapUnit* enemy = enemy_turn_list[enemy_turn_idx];
+        if (!enemy || !_ptr_in_units_list(units, enemy) || enemy->isDead())
+        {
+            ++enemy_turn_idx;
+            continue;
+        }
+        if (IsUnitBusy(enemy))
+        {
+            // EnemyTurnStep() may encounter a company that already owns a pending
+            // movement/attack/action state while another (usually the previous)
+            // company is still selected.  Tick() only advances attack/action states
+            // for the selected unit, so returning here without switching selection
+            // deadlocks the enemy phase forever: the outer driver keeps seeing the
+            // non-busy old selection and immediately calls us again for the same
+            // busy company.
+            //
+            // Hand control of the state machine to the unit that is actually busy.
+            // Movement is safe as well: the multi-move driver deliberately skips the
+            // selected unit and the ordinary selected-unit state machine continues it.
+            if (unit_selection != enemy)
+            {
+                unit_selection = enemy;
+                unit_selection_mod = true;
+                g_attack_map_dirty_for = enemy;
+            }
+
+            ReleaseMap();
+            return true;
+        }
+        if (enemy->action_points <= 0)
+        {
+            ++enemy_turn_idx;
+            continue;
+        }
+
+        AITacticalGroup* group = FindEnemyAIGroupForUnit(enemy);
+        if (!group)
+        {
+            ++enemy_turn_idx;
+            continue;
+        }
+
+        unit_selection = enemy;
+        unit_selection_mod = true;
+
+        // WAIT_FOR_CONTACT is genuinely dormant.  The planner releases order 13
+        // only after real terrain-aware direct sight, not by geometric radius.
+        if (group->order == AIGroupOrder::WAIT_CONTACT)
+        {
+            ++enemy_turn_idx;
+            continue;
+        }
+
+        // Every active/defending order may exploit a legal target already in
+        // weapon range.  Target selection is weapon-effectiveness based; the old
+        // remake-only wounded/artillery/value scoring is intentionally gone.
+        MapUnit* attack_target = SelectGroupAttackTarget(enemy, *group);
+        if (attack_target && StartAttack_NoHUD(enemy, attack_target))
+        {
+            ReleaseMap();
+            return true;
+        }
+
+        // Original fixed defence orders hold ground.  They still attack above.
+        if (group->order == AIGroupOrder::SUICIDE_DEFENCE ||
+            group->order == AIGroupOrder::STATIC_DEFENCE)
+        {
+            ++enemy_turn_idx;
+            continue;
+        }
+
+        bool moved = false;
+        MapXY goal;
+        switch (group->order)
+        {
+        case AIGroupOrder::RANDOM_MOVE:
+            moved = MoveEnemyRandomly(enemy, *group);
+            break;
+
+        case AIGroupOrder::SCOUT:
+        case AIGroupOrder::DEEP_SCOUT:
+        case AIGroupOrder::MOVE_TO:
+        case AIGroupOrder::JOIN:
+        case AIGroupOrder::RETREAT:
+            goal = ResolveEnemyGroupGoal(*group);
+            if (goal.IsSelected())
+                moved = MoveEnemyToward(enemy, goal, false);
+            break;
+
+        case AIGroupOrder::FREE_ATTACK:
+        case AIGroupOrder::BOUND_ATTACK:
+        case AIGroupOrder::MOVE_ATTACK:
+        case AIGroupOrder::KAMIKAZE_MOVE_ATTACK:
+            goal = ResolveEnemyGroupGoal(*group);
+            if (goal.IsSelected())
+                moved = MoveEnemyToward(enemy, goal, true);
+            break;
+
+        case AIGroupOrder::MOBILE_DEFENCE:
+            // Mobile defence closes only far enough to establish a firing
+            // position.  Do not clamp the stop distance to two tiles: melee /
+            // range-1 units (Ka-orcs, Orcs, etc.) would otherwise halt one tile
+            // outside their legal attack range and become passive targets again.
+            // MoveEnemyToward(..., true) already handles the indirect-fire
+            // minimum range while choosing the actual stopping hex.
+            goal = ResolveEnemyGroupGoal(*group);
+            if (goal.IsSelected())
+            {
+                const double dist = enemy->coor.Distance(goal);
+                const int fire_range = (std::max)(1, enemy->GetFireRange());
+                if (dist > fire_range)
+                    moved = MoveEnemyToward(enemy, goal, true);
+            }
+            break;
+
+        case AIGroupOrder::NONE:
+        default:
+            // A NormalUnit group with no current order has no omniscient
+            // individual fallback.  The group planner will assign it next phase.
+            break;
+        }
+
+        if (moved)
+        {
+            // Keep the index: after movement (and any defensive fire interrupt)
+            // this same company gets a chance to execute the remaining order/AP.
+            ReleaseMap();
+            return true;
+        }
+
+        ++enemy_turn_idx;
+    }
+
+    ReleaseMap();
+    return false;
+}
+
+// Original Spellcross initiative used for defensive fire.
+// SPELCROS.EXE reads JEDNOTKY.DEF byte +0x45 (our SpellUnitRec::res3), adds the
+// zero-based experience rank (0..11), then adds a random value 0..5 for each
+// side before comparing them.  MapUnit stores the experience level as 1..12,
+// hence the -1 conversion here.
+int SpellMap::GetReactionInitiative(const MapUnit* unit) const
 {
-	for (auto* player_u : units)
-	{
-		if (!player_u || player_u->is_enemy || player_u->isDead()) continue;
-		if (enemy->coor.Distance(player_u->coor) <= (double)(enemy->unit->sdir + 1))
-		{
-			AggroEnemiesAround(enemy->coor, player_u->coor, -1, 12, 3);
-		}
-	}
+    if (!unit || !unit->unit)
+        return 0;
+    const int exp_rank = std::clamp(unit->experience_level - 1, 0, 11);
+    return unit->unit->res3 + exp_rank;
 }
 
-// ======================================================================
-// PHASE 4: ACTIVE MOVEMENT TOWARD TARGETS
-// ======================================================================
-// Ground units only advance when they have contact with player units:
-// - Direct sight on a player unit, or
-// - Chain-of-sight through other alerted enemy units, or
-// - Aggro from being attacked recently
-// Air units always scout freely. ToughDefence always holds position.
+// Check defensive/opportunity fire after ONE movement step.
+// The original executable calls its reaction-candidate routine from movement
+// processing (for both sides), not after an ordinary attack.  A defender is a
+// candidate only when the mover has just entered that defender's direct sight,
+// the mover is simultaneously inside the defender's legal fire area, and the
+// defender still has AP for at least one shot.
+void SpellMap::CheckReactionFire(MapUnit* moving_unit, MapXY previous_pos)
 {
-	bool should_advance = true;
+    if (!moving_unit || moving_unit->isDead() || !moving_unit->unit)
+        return;
 
-	// ATTACK PRIORITY: Don't move if unit still has shots left and a valid target
-	// was found in range. Stay and shoot.
-	if (enemy->GetFireCount() > 0 && best_target != nullptr)
-		should_advance = false;
+    // Never overlap two reaction sequences. Movement is paused while the first
+    // sequence is being animated and resumes after selection is restored.
+    if (!reaction_fire_queue.empty() || reaction_fire_active)
+        return;
 
-	// ToughDefence: hold position unless endgame hunt forces aggressive behavior
-	if (enemy->behave == MapUnitType::ToughDefence && !endgame_hunt)
-		should_advance = false;
+    struct Candidate
+    {
+        MapUnit* shooter = nullptr;
+        int shots = 0;
+        int priority = 0;
+    };
+    std::vector<Candidate> candidates;
 
-	// Ground units: only advance if alerted (sight chain) or aggroed (was attacked)
-	if (should_advance && !enemy->unit->isAir() && !endgame_hunt)
-	{
-		if (!enemy->ai_alerted && enemy->ai_aggro_ttl <= 0)
-			should_advance = false;
-	}
+    for (auto* shooter : units)
+    {
+        if (!shooter || shooter == moving_unit || shooter->isDead() || !shooter->unit)
+            continue;
+        if (shooter->is_enemy == moving_unit->is_enemy)
+            continue;
+        if (!shooter->isActive() || IsUnitBusy(shooter))
+            continue;
 
-	if (should_advance && enemy->action_points > 0)
-	{
-		// find nearest player unit visible to this enemy or its alerted sight chain
-		MapUnit* goal_unit = nullptr;
-		double goal_dist = 1e9;
-		for (auto* u : units)
-		{
-			if (!u || u->is_enemy || u->isDead()) continue;
+        const int shots = shooter->GetFireCount();
+        if (shots <= 0)
+            continue;
+        if (!shooter->unit->canAttack(moving_unit->unit))
+            continue;
 
-			bool visible_to_chain = false;
+        // Opportunity fire is a contact event: entering already-visible range
+        // later does not retrigger it.  Teleport movement passes an invalid old
+        // position, which intentionally means "previously unseen".
+        const bool seen_now = unit_view->HasDirectSight(shooter, moving_unit->coor);
+        if (!seen_now)
+            continue;
+        if (previous_pos.IsSelected() && unit_view->HasDirectSight(shooter, previous_pos))
+            continue;
 
-			// air units and endgame hunt: allow global knowledge
-			if (enemy->unit->isAir() || endgame_hunt)
-			{
-				visible_to_chain = true;
-			}
-			// aggro target: enemy knows last attacker position
-			else if (enemy->ai_aggro_ttl > 0)
-			{
-				visible_to_chain = true;
-			}
-			else
-			{
-				// check if this player unit is within sight of any alerted enemy
-				for (auto* spotter : enemy_turn_list)
-				{
-					if (!spotter->ai_alerted) continue;
-					if (spotter->coor.Distance(u->coor) <= (double)spotter->unit->sdir)
-					{
-						visible_to_chain = true;
-						break;
-					}
-				}
-			}
+        // Use the normal attack-range calculator as the authoritative weapon
+        // legality/LOS/slope/min-range check.  Direct sight above is separate
+        // because indirect weapons may fire farther than they can personally see.
+        unit_view->CalcAttackRange(shooter, true);
+        const int target_mxy = ConvXY(moving_unit->coor);
+        if (target_mxy < 0 || target_mxy >= (int)shooter->attack_map.size() || !shooter->attack_map[target_mxy])
+            continue;
 
-			if (!visible_to_chain) continue;
+        // Original surprise/initiative contest:
+        //   (base initiative + experience rank + random 0..5)
+        // Defender fires only on a strict win.
+        const int defender_roll = GetReactionInitiative(shooter) + (rand() % 6);
+        const int mover_roll = GetReactionInitiative(moving_unit) + (rand() % 6);
+        if (defender_roll <= mover_roll)
+            continue;
 
-			double d = enemy->coor.Distance(u->coor);
-			if (d < goal_dist) { goal_dist = d; goal_unit = u; }
-		}
+        // The DOS code keeps all successful candidates and subsequently prefers
+        // the one with the strongest available attack.  This score is a close
+        // equivalent using the remake's resolved attack value and remaining shots.
+        const int priority = std::max(0, shooter->GetAttack(moving_unit)) * shots;
+        candidates.push_back({ shooter, shots, priority });
+    }
 
-		if (goal_unit)
-		{
-			auto tile_free_for_move = [&](const MapXY& t) -> bool
-			{
-				if (!(t.x >= 0 && t.y >= 0))
-					return false;
-				auto pxy = ConvXY(const_cast<MapXY&>(t));
-				auto tile_unit = Lunit[pxy];
-				while (tile_unit)
-				{
-					if (tile_unit != enemy &&
-						((enemy->unit->isAir() && tile_unit->unit->isAir()) ||
-						 (!enemy->unit->isAir() && !tile_unit->unit->isAir())))
-						return false;
-					tile_unit = tile_unit->next;
-				}
-				return true;
-			};
+    if (candidates.empty())
+        return;
 
-			auto find_path_unbounded_move = [&](const MapXY& dest) -> std::vector<AStarNode>
-			{
-				int ap_saved = enemy->action_points;
-				enemy->action_points = 200000;
-				auto path = unit_range->FindPath(enemy, dest);
-				enemy->action_points = ap_saved;
-				return path;
-			};
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b)
+    {
+        if (a.priority != b.priority)
+            return a.priority < b.priority; // vector is consumed from the back
+        return a.shooter->id < b.shooter->id;
+    });
 
-			MapXY goal = goal_unit->coor;
-			std::vector<MapXY> move_cand;
-			move_cand.reserve(9);
-			for (int dir = 0; dir < 8; dir++)
-			{
-				MapXY t = GetNeighborTile8D(goal, dir);
-				if (tile_free_for_move(t))
-					move_cand.push_back(t);
-			}
-			if (tile_free_for_move(goal))
-				move_cand.push_back(goal);
-
-			MapXY best_move_tile;
-			best_move_tile.Clear();
-			int best_move_rem = INT_MAX;
-			int best_move_cost = INT_MAX;
-
-			for (auto& dest : move_cand)
-			{
-				auto path = find_path_unbounded_move(dest);
-				if (path.size() < 2)
-					continue;
-
-				MapXY advance = enemy->coor;
-				int adv_cost = 0;
-				for (int i = 1; i < (int)path.size(); i++)
-				{
-					if (path[i].g_cost <= enemy->action_points)
-					{
-						advance = path[i].pos;
-						adv_cost = path[i].g_cost;
-					}
-					else
-						break;
-				}
-
-				if (advance == enemy->coor)
-					continue;
-
-				int rem = (int)advance.Distance(goal);
-				if (rem < best_move_rem || (rem == best_move_rem && adv_cost < best_move_cost))
-				{
-					best_move_rem = rem;
-					best_move_cost = adv_cost;
-					best_move_tile = advance;
-				}
-			}
-
-			if (best_move_tile.IsSelected() && StartMove_NoRangeCheck(enemy, best_move_tile))
-			{
-				// movement scheduled - don't advance index: after move, try attack from new position
-				ReleaseMap();
-				return(true);
-			}
-		}
-	}
+    // Capture the full defensive volley at the instant of contact.  Each queued
+    // entry is one shot; AP is still deducted by the normal attack state machine.
+    // Highest-priority defender is placed last and therefore fires first.
+    for (const auto& c : candidates)
+        for (int shot = 0; shot < c.shots; ++shot)
+            reaction_fire_queue.push_back({ c.shooter, moving_unit, c.priority });
 }
 
-// nothing more to do for this unit
-enemy_turn_idx++;
-continue;
-	}
-
-	ReleaseMap();
-	return(false);
-}
-
-// Aggro all enemy units within radius around 'center' (including center if you want),
-// using attacker position as last-known target.
-void SpellMap::AggroEnemiesAround(MapXY center, MapXY attacker_pos, int attacker_id, int radius, int ttl)
-{
-	for (auto* u : units)
-	{
-		if (!u) continue;
-		if (!u->is_enemy) continue;
-
-		if (u->coor.Distance(center) > radius)
-			continue;
-
-		// don't shorten existing aggro
-		if (u->ai_aggro_ttl < ttl)
-		{
-			u->ai_aggro_pos = attacker_pos;
-			u->ai_aggro_ttl = ttl;
-			u->ai_aggro_attacker_id = attacker_id;
-		}
-	}
-}
-
-// Check if any player unit can reaction-fire at the given enemy unit.
-// Called after enemy attack/move completes. Queues reaction fire entries.
-void SpellMap::CheckReactionFire(MapUnit* enemy_unit)
-{
-	if (!enemy_unit || !enemy_unit->is_enemy || enemy_unit->isDead())
-		return;
-
-	for (auto* player : units)
-	{
-		if (!player || player->is_enemy || player->isDead())
-			continue;
-
-		// player unit needs leftover fire AP from previous turn
-		if (player->GetFireCount() <= 0)
-			continue;
-
-		// must be able to attack this enemy type
-		if (!player->unit->canAttack(enemy_unit->unit))
-			continue;
-
-		// range check: player unit must have the enemy within fire range
-		double dist = player->coor.Distance(enemy_unit->coor);
-		if (dist > (double)player->GetFireRange())
-			continue;
-
-		// indirect fire minimum range
-		if (player->unit->isIndirectFire() && enemy_unit->unit->isLand())
-		{
-			if (dist <= 2.0)
-				continue;
-		}
-
-		// avoid duplicate entries
-		bool already_queued = false;
-		for (auto& rf : reaction_fire_queue)
-		{
-			if (rf.shooter == player && rf.target == enemy_unit)
-			{
-				already_queued = true;
-				break;
-			}
-		}
-		if (!already_queued)
-			reaction_fire_queue.push_back({ player, enemy_unit });
-	}
-}
-
-// Process one reaction fire entry. Returns true if an attack was started.
+// Process one defensive-fire shot. Returns true if an attack animation started.
 bool SpellMap::ProcessReactionFire()
 {
-	while (!reaction_fire_queue.empty())
-	{
-		auto entry = reaction_fire_queue.back();
-		reaction_fire_queue.pop_back();
+    while (!reaction_fire_queue.empty())
+    {
+        auto entry = reaction_fire_queue.back();
+        reaction_fire_queue.pop_back();
 
-		// validate both units are still alive and in the units list
-		if (!_ptr_in_units_list(units, entry.shooter) || entry.shooter->isDead())
-			continue;
-		if (!_ptr_in_units_list(units, entry.target) || entry.target->isDead())
-			continue;
-		if (entry.shooter->GetFireCount() <= 0)
-			continue;
+        if (!_ptr_in_units_list(units, entry.shooter) || entry.shooter->isDead())
+            continue;
+        if (!_ptr_in_units_list(units, entry.target) || entry.target->isDead())
+            continue;
+        if (entry.shooter->GetFireCount() <= 0)
+            continue;
+        if (!entry.shooter->unit->canAttack(entry.target->unit))
+            continue;
+        if (!unit_view->HasDirectSight(entry.shooter, entry.target->coor))
+            continue;
 
-		// temporarily switch selection to the player unit doing reaction fire
-		reaction_fire_restore_selection = unit_selection;
-		unit_selection = entry.shooter;
-		unit_selection_mod = true;
+        unit_view->CalcAttackRange(entry.shooter, true);
+        const int target_mxy = ConvXY(entry.target->coor);
+        if (target_mxy < 0 || target_mxy >= (int)entry.shooter->attack_map.size() || !entry.shooter->attack_map[target_mxy])
+            continue;
 
-		if (StartAttack_NoHUD(entry.shooter, entry.target))
-			return true;
+        // Save the unit whose movement was interrupted only once; subsequent
+        // shots must not replace it with the previous reaction shooter.
+        if (!reaction_fire_active)
+        {
+            reaction_fire_restore_selection = unit_selection;
+            reaction_fire_active = true;
+        }
 
-		// attack couldn't start (LOS blocked etc) - restore and try next
-		unit_selection = reaction_fire_restore_selection;
-		unit_selection_mod = true;
-		reaction_fire_restore_selection = nullptr;
-	}
-	return false;
+        unit_selection = entry.shooter;
+        unit_selection_mod = true;
+        g_attack_map_dirty_for = entry.shooter;
+
+        if (StartAttack_NoHUD(entry.shooter, entry.target))
+            return true;
+    }
+    return false;
 }
 
 // attack target (unit or object)
 int SpellMap::Attack(MapXY pos, int prefer_air)
 {
+    if (isGameMode() && (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty()))
+        return(1);
+
     if (IsGroupMode())
         return(0);
 
@@ -8325,39 +8943,18 @@ int SpellMap::Attack(MapXY pos, int prefer_air)
 			return(1);
 	}
 
-	//// AI aggro: if player attacks enemy unit, enemy will chase attacker even without LOS
-	//if (target && !unit->is_enemy && target->is_enemy)
-	//{
-	//	target->ai_aggro_pos = unit->coor;
-	//	target->ai_aggro_ttl = 5;
-	//	target->ai_aggro_attacker_id = unit->id;
-	//}
-	//unit->attack_target = NULL;
-	//unit->attack_target_obj.Clear();
-
-	// AI aggro: if player attacks enemy unit, aggro target + nearby enemies (<= 5 hexes)
+	// Being attacked is a real contact event.  Wake only the attacked unit's
+	// tactical group; do not broadcast remake-only radius aggro or omniscient
+	// attacker knowledge to unrelated groups.
 	if (target && !unit->is_enemy && target->is_enemy)
 	{
-		const int ttl = 5;
-		const int radius = 5;
-
-		MapXY center = target->coor;
-
-		// aggro all nearby enemy units (including the target itself)
-		for (auto* u : units)   // pokud se ten seznam u tebe nejmenuje "units", dej sem spr�vn� (nap�. m_units)
+		EnsureEnemyAIGroups();
+		if (auto* group = FindEnemyAIGroupForUnit(target))
 		{
-			if (!u) continue;
-			if (!u->is_enemy) continue;
-
-			if (u->coor.Distance(center) > radius)
-				continue;
-
-			// don't shorten existing aggro
-			if (u->ai_aggro_ttl < ttl)
-				u->ai_aggro_ttl = ttl;
-
-			u->ai_aggro_pos = unit->coor;
-			u->ai_aggro_attacker_id = unit->id;
+			group->contacted = true;
+			group->target_unit_id = unit->id;
+			if (group->order == AIGroupOrder::WAIT_CONTACT)
+				SetGroupOrder(*group, AIGroupOrder::NONE, unit->id);
 		}
 	}
 
@@ -8369,6 +8966,7 @@ int SpellMap::Attack(MapXY pos, int prefer_air)
 		// --- kamikaze atack is processed via special actions		
 		unit->attack_target = target;
 		unit->altitude = 100;
+		unit->action_step = 0;
 		unit->action_state = MapUnit::ACTION_STATE::KAMIKAZE;
 
 		// play attack sound (if exist)
@@ -8399,6 +8997,8 @@ int SpellMap::Attack(MapXY pos, int prefer_air)
 MapUnit* SpellMap::CanSelectUnit(MapXY pos)
 {
 	if (!isGameMode())
+		return(NULL);
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return(NULL);
 	if (!pos.IsSelected())
 		return(NULL);
@@ -8796,7 +9396,7 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 			skill_fraction_pix = 51 * (unit->experience - skill_frac_base) / (skill_frac_next - skill_frac_base);
 		}
 		for (int y = 0; y < 2; y++)
-			memset(&buf[hud_left + ix_ref + 5 + (hud_top + y + 77) * buf_x_size], 235, min(max(skill_fraction_pix, 1), 51));
+			memset(&buf[hud_left + ix_ref + 5 + (hud_top + y + 77) * buf_x_size], 235, (std::min)((std::max)(skill_fraction_pix, 1), 51));
 
 		const struct { int x; int y; } exp_mark[2][12] = { {	{1,81},{11,81},{21,81},{31,81},{41,81},{51,81},
 															{1,90},{11,90},{21,90},{31,90},{41,90},{51,90}},
@@ -9000,6 +9600,8 @@ int SpellMap::RenderHUDrect(uint8_t* buf, uint8_t* buf_end, int buf_x_size, int 
 // HUD button event handlers
 void SpellMap::OnHUDnextUnit()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	if (units.empty())
 		return;
 
@@ -9025,6 +9627,8 @@ void SpellMap::OnHUDnextUnit()
 }
 void SpellMap::OnHUDnextUnfinishedUnit()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	InvalidateHUDbuttons();
 }
 void SpellMap::OnHUDswitchAirLand()
@@ -9039,8 +9643,12 @@ void SpellMap::OnHUDswitchUnitHUD()
 }
 void SpellMap::OnHUDswitchEndTurn()
 {
-	// End player turn and start enemy turn (game mode)
+	// Do not let player input advance phases while a scripted phase or defensive
+	// fire sequence owns the tactical state machine.
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 
+	// End player turn and start enemy turn (game mode)
 	FinishUnits();
 
 	// start scripted enemy phase
@@ -9050,6 +9658,8 @@ void SpellMap::OnHUDswitchEndTurn()
 // heal unit HUD button pressed
 void SpellMap::OnHUDhealUnit()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
 		return;
@@ -9059,6 +9669,8 @@ void SpellMap::OnHUDhealUnit()
 // turret toggle HUD button pressed
 void SpellMap::OnHUDturretToggle()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
 		return;
@@ -9085,6 +9697,8 @@ void SpellMap::OnHUDturretToggle()
 // radar toggle HUD button pressed
 void SpellMap::OnHUDradarToggle()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
 		return;
@@ -9119,6 +9733,8 @@ void SpellMap::OnHUDradarToggle()
 // aircraft land/takeoff HUD button pressed
 void SpellMap::OnHUDairLandTakeOff()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
 		return;
@@ -9158,6 +9774,8 @@ void SpellMap::OnHUDairLandTakeOff()
 // switch to/from fortres HUD button callback
 void SpellMap::OnHUDfortresToggle()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
 		return;
@@ -9191,6 +9809,8 @@ void SpellMap::OnHUDfortresToggle()
 // create new unit HUD button pressed
 void SpellMap::OnHUDcreateUnit()
 {
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
 		return;
@@ -9534,7 +10154,7 @@ int SpellMap::ViewRange::PrepareUnitsViewMaskCore()
 						h += map->tiles[mxy].elev * Sprite::TILE_ELEVATION;
 
 						// store basic elevation (without objects)
-						view_mask_0[mxx + m + (myy + n) * view_mask_x_size] = (unsigned)max(h, 0.0);
+						view_mask_0[mxx + m + (myy + n) * view_mask_x_size] = (unsigned)(std::max)(h, 0.0);
 						view_map[mxx + m + (myy + n) * view_mask_x_size] = mxy;
 
 						// include L2 objects to mask
@@ -9557,7 +10177,7 @@ int SpellMap::ViewRange::PrepareUnitsViewMaskCore()
 							if (n > 0 && n < tile_size - 1 && m > 0 && m < tile_size - 2)
 								h += Sprite::TILE_ELEVATION;
 						}
-						view_mask[mxx + m + (myy + n) * view_mask_x_size] = (unsigned)max(h, 0.0);
+						view_mask[mxx + m + (myy + n) * view_mask_x_size] = (unsigned)(std::max)(h, 0.0);
 					}
 				}
 			}
@@ -9582,7 +10202,7 @@ wxBitmap* SpellMap::ViewRange::ExportUnitsViewZmap()
 	// get max Z
 	int max_h = 0;
 	for (auto& tile_h : view_mask)
-		max_h = max(max_h, (int)tile_h);
+		max_h = (std::max)(max_h, (int)tile_h);
 	int gain = 65535 / max_h;
 
 	// render 24bit RGB data to raw bmp buffer
@@ -9874,6 +10494,130 @@ int SpellMap::ViewRange::CalcAttackRange(MapUnit* unit, bool immediate)
 	return(0);
 }
 
+
+// Side-effect-free direct-sight test for a single tile.  Defensive fire in the
+// original game is a visibility event first and a weapon-range event second, so
+// indirect-fire attack maps alone are not sufficient here.  This deliberately
+// uses the same terrain mask, range rule and multisampled ray test as Worker().
+bool SpellMap::ViewRange::HasDirectSight(MapUnit* unit, MapXY pos)
+{
+	if (!map || !unit || !unit->unit || !pos.IsSelected())
+		return(false);
+	if (pos.x < 0 || pos.y < 0 || pos.x >= map->x_size || pos.y >= map->y_size)
+		return(false);
+	if (!unit->coor.IsSelected())
+		return(false);
+
+	// Keep the height mask coherent with the normal view worker.  Map loading and
+	// terrain edits normally prepare it already; the fallback is only for unusual
+	// direct calls before the first view task has run.
+	WaitIdle();
+	if (view_mask.empty() || view_map.empty())
+	{
+		PrepareUnitsViewMask(true);
+		WaitIdle();
+	}
+	if (view_mask.empty() || view_map.empty())
+		return(false);
+
+	MapXY ref_pos = unit->coor;
+	if (ref_pos == pos)
+		return(true);
+
+	const int ref_mxy = map->ConvXY(ref_pos);
+	const int next_mxy = map->ConvXY(pos);
+	if (ref_mxy < 0 || next_mxy < 0 || ref_mxy >= (int)map->tiles.size() || next_mxy >= (int)map->tiles.size())
+		return(false);
+
+	const int ref_alt = map->tiles[ref_mxy].elev;
+	const int next_alt = map->tiles[next_mxy].elev;
+
+	// Radar visibility in the normal Spellcross view code is omnidirectional and
+	// ignores terrain rays.  Preserve that behaviour if an armed transformed unit
+	// ever combines radar with a weapon.
+	if (unit->radar_up && unit->unit->isActionToggleRadar())
+	{
+		const int radar_range = unit->unit->action_params[2];
+		return((pos.Distance(ref_pos) - 0.5) <= radar_range);
+	}
+
+	// Looking downhill may extend sight by the elevation difference; this is the
+	// exact range rule used by the normal view worker.
+	const int view = unit->unit->sdir + (std::max)(ref_alt - next_alt, 0);
+	if ((pos.Distance(ref_pos) - 0.5) > view)
+		return(false);
+
+	const int msx_ofs[4] = { 0,-1,-1, 0 };
+	const int msy_ofs[4] = { 0, 0,-1,-1 };
+	const int ms_count = 4;
+	const int ms_count_min = 1;
+	const int msx_org_ofs[4] = { 0,-1,-1, 0 };
+	const int msy_org_ofs[4] = { 0, 0,-1,-1 };
+	const int ms_org_count = 4;
+
+	auto target_pix = GetUnitsViewTilePixels(pos, false);
+	for (auto& target_pos : target_pix)
+	{
+		int rays_hit = 0;
+		for (int org = 0; org < ms_org_count; ++org)
+		{
+			auto [x0b, y0b, z0b] = GetUnitsViewTileCenter(ref_pos);
+			int x0 = x0b + msx_org_ofs[org];
+			int y0 = y0b + msy_org_ofs[org];
+			int z0 = (int)z0b + (unit->unit->isAir() ? 100 : 15);
+
+			int x1 = target_pos.x;
+			int y1 = target_pos.y;
+			int z1 = target_pos.z + 8;
+
+			int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+			int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+			int dz = abs(z1 - z0), sz = z0 < z1 ? 1 : -1;
+			int dm = (std::max)((std::max)(dx, dy), dz), i = dm;
+			x1 = y1 = z1 = dm / 2;
+
+			for (;;)
+			{
+				// These offsets stay inside the one-pixel padded view mask for all
+				// points generated by GetUnitsViewTilePixels().
+				auto [tile_id, ignored_h] = GetUnitsViewMask(x0, y0, ref_mxy);
+				int pass = 0;
+				for (int k = 0; k < ms_count; ++k)
+				{
+					auto [ms_tile_id, ms_hx] = GetUnitsViewMask(x0 + msx_ofs[k], y0 + msy_ofs[k], ref_mxy);
+					(void)ms_tile_id;
+					if (z0 >= ms_hx)
+					{
+						if (++pass >= ms_count_min)
+							break;
+					}
+				}
+
+				if (tile_id == next_mxy)
+				{
+					++rays_hit;
+					break;
+				}
+				if (pass < ms_count_min)
+					break;
+
+				if (i-- == 0)
+					break;
+				x1 -= dx; if (x1 < 0) { x1 += dm; x0 += sx; }
+				y1 -= dy; if (y1 < 0) { y1 += dm; y0 += sy; }
+				z1 -= dz; if (z1 < 0) { z1 += dm; z0 += sz; }
+			}
+
+			// Worker() considers a target tile visible once two origin rays make
+			// it through to any sampled target point.
+			if (rays_hit >= 2)
+				return(true);
+		}
+	}
+
+	return(false);
+}
+
 // return new contact and optional unread events, does not wait to complete calcs (thread safe)
 int SpellMap::ViewRange::GetResults(std::vector<SpellMapEventRec*>* events)
 {
@@ -10161,7 +10905,7 @@ void SpellMap::ViewRange::Worker()
 			else
 			{
 				// sight range can expand when looking downhill
-				view = ref_view + max(ref_alt - next_alt, 0);
+				view = ref_view + (std::max)(ref_alt - next_alt, 0);
 			}
 
 			// visible?
@@ -10275,7 +11019,7 @@ void SpellMap::ViewRange::Worker()
 						int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
 						int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
 						int dz = abs(z1 - z0), sz = z0 < z1 ? 1 : -1;
-						int dm = max(max(dx, dy), dz), i = dm; // maximum difference
+						int dm = (std::max)((std::max)(dx, dy), dz), i = dm; // maximum difference
 						x1 = y1 = z1 = dm / 2; // error offset
 
 						int last_tile_id = -1;
@@ -10839,6 +11583,99 @@ void SpellMap::RecalculateTacticalFormations()
 	}
 }
 
+// A dead unit may still be owned by an active attack/action state machine.
+// In particular the attacker keeps attack_target alive through HIT/DIE/UPDATE so
+// the original hit/death animation can finish before the target is removed.
+// Deleting such a unit from the generic end-of-tick cleanup creates a classic
+// use-after-free: the next Tick() still dereferences attack_target.
+bool SpellMap::IsUnitProtectedFromCleanup(const MapUnit* candidate) const
+{
+	if (!candidate)
+		return false;
+
+	for (auto* owner : units)
+	{
+		if (!owner || owner == candidate || owner->attack_target != candidate)
+			continue;
+
+		if (owner->attack_state != MapUnit::ATTACK_STATE::IDLE ||
+			owner->action_state == MapUnit::ACTION_STATE::KAMIKAZE ||
+			owner->action_state == MapUnit::ACTION_STATE::KAMIKAZE_EXPLOSION)
+			return true;
+	}
+
+	return false;
+}
+
+// Stop an attack whose unit target disappeared through an external path (event,
+// scripted removal, cleanup, etc.).  This is a safety net; the normal attack
+// UPDATE path still owns and removes its target itself.
+void SpellMap::AbortAttackOnMissingTarget(MapUnit* attacker)
+{
+	if (!attacker)
+		return;
+
+	attacker->attack_target = nullptr;
+	attacker->attack_target_obj.Clear();
+	attacker->attack_fire_pnm = nullptr;
+	attacker->attack_fire_frame = 0;
+	attacker->attack_proj_step = 0;
+	attacker->attack_proj_delay = 0;
+	attacker->in_animation = nullptr;
+	attacker->frame = 0;
+	attacker->frame_stop = 0;
+	attacker->attack_state = MapUnit::ATTACK_STATE::IDLE;
+}
+
+// Remove transient raw-pointer references before a MapUnit leaves the tactical
+// roster.  Queued reaction entries are raw pointers too, so drop those entries
+// rather than allowing a later defensive-fire pass to observe freed storage.
+void SpellMap::InvalidateRuntimeReferencesToUnit(MapUnit* victim, MapUnit* preserve_owner)
+{
+	if (!victim)
+		return;
+
+	reaction_fire_queue.erase(
+		std::remove_if(reaction_fire_queue.begin(), reaction_fire_queue.end(),
+			[victim](const ReactionFireEntry& e)
+			{
+				return e.shooter == victim || e.target == victim;
+			}),
+		reaction_fire_queue.end());
+
+	if (reaction_fire_restore_selection == victim)
+		reaction_fire_restore_selection = nullptr;
+	if (enemy_turn_prev_selection == victim)
+		enemy_turn_prev_selection = nullptr;
+	if (panic_turn_restore_selection == victim)
+		panic_turn_restore_selection = nullptr;
+
+	for (auto* owner : units)
+	{
+		if (!owner || owner == victim || owner == preserve_owner || owner->attack_target != victim)
+			continue;
+
+		// A special kamikaze sequence also uses attack_target directly from its
+		// ACTION_STATE path.  If the target is removed externally, cancel that
+		// sequence instead of leaving another dangling pointer.
+		if (owner->action_state == MapUnit::ACTION_STATE::KAMIKAZE ||
+			owner->action_state == MapUnit::ACTION_STATE::KAMIKAZE_EXPLOSION)
+		{
+			owner->action_state = MapUnit::ACTION_STATE::IDLE;
+			owner->hide = false;
+			owner->altitude = 100;
+		}
+
+		AbortAttackOnMissingTarget(owner);
+	}
+
+	if (unit_selection == victim)
+	{
+		unit_selection = nullptr;
+		unit_selection_mod = true;
+	}
+}
+
 // Remove any dead units (man==0) still lingering in the units list.
 // Must be called outside of iteration over the units vector.
 void SpellMap::CleanupDeadUnits()
@@ -10846,7 +11683,7 @@ void SpellMap::CleanupDeadUnits()
 	std::vector<MapUnit*> dead_list;
 	for (auto* u : units)
 	{
-		if (u && u->isDead())
+		if (u && u->isDead() && !IsUnitProtectedFromCleanup(u))
 			dead_list.push_back(u);
 	}
 	for (auto* dead : dead_list)
@@ -10986,51 +11823,55 @@ int SpellMap::Tick()
 	// get ref. unit
 	auto* unit = GetSelectedUnit();
 
+	// === Defensive/opportunity fire driver ===
+	// This is deliberately outside the enemy-turn driver: the original game uses
+	// the same mechanism in both directions.  A queued reaction interrupts the
+	// mover, plays all eligible defensive shots, then restores the interrupted
+	// selection so movement can continue from the exact same state.
+	if (isGameMode())
+	{
+		if (!reaction_fire_active && !reaction_fire_queue.empty())
+		{
+			ProcessReactionFire();
+			unit = GetSelectedUnit();
+		}
+		else if (reaction_fire_active && (!unit || !IsUnitBusy(unit)))
+		{
+			if (!reaction_fire_queue.empty())
+			{
+				ProcessReactionFire();
+				unit = GetSelectedUnit();
+			}
+
+			// No more valid shots: return control to the unit/action that was
+			// interrupted.  The mover may have died during defensive fire.
+			if (reaction_fire_active && reaction_fire_queue.empty() && (!unit || !IsUnitBusy(unit)))
+			{
+				MapUnit* restore = reaction_fire_restore_selection;
+				reaction_fire_active = false;
+				reaction_fire_restore_selection = nullptr;
+				if (!_ptr_in_units_list(units, restore) || (restore && restore->isDead()))
+					restore = nullptr;
+				unit_selection = restore;
+				unit_selection_mod = true;
+				g_attack_map_dirty_for = restore;
+				unit = restore;
+				InvalidateHUDbuttons();
+			}
+		}
+	}
+
 	// === Enemy turn driver ===
-	if (enemy_turn_running)
+	if (enemy_turn_running && !reaction_fire_active && reaction_fire_queue.empty())
 	{
 		int safety = 0;
-		// if no unit is currently animating, schedule next enemy action
+		// If no unit is currently animating, schedule the next enemy action.
+		// Reaction candidates are generated per movement tile by the common unit
+		// movement state machine, not here after an arbitrary completed action.
 		while (enemy_turn_running && (!unit || !IsUnitBusy(unit)) && safety < 50)
 		{
-			// --- Reaction fire: after enemy action completes, player units may fire back ---
-			if (!reaction_fire_queue.empty())
-			{
-				if (ProcessReactionFire())
-				{
-					// reaction fire attack started - let it animate
-					unit = GetSelectedUnit();
-					break;
-				}
-			}
-
-			// restore selection after reaction fire completed
-			if (reaction_fire_restore_selection)
-			{
-				unit_selection = reaction_fire_restore_selection;
-				unit_selection_mod = true;
-				reaction_fire_restore_selection = nullptr;
-			}
-
-			// check reaction fire for the enemy that just finished its action
-			// (unit is now at final position after move/attack animation completed)
-			MapUnit* last_acting = GetSelectedUnit();
-			if (last_acting && last_acting->is_enemy && !last_acting->isDead())
-				CheckReactionFire(last_acting);
-
-			// process any newly queued reaction fire before next enemy step
-			if (!reaction_fire_queue.empty())
-			{
-				if (ProcessReactionFire())
-				{
-					unit = GetSelectedUnit();
-					break;
-				}
-			}
-
 			if (!EnemyTurnStep())
 			{
-				// no more enemy actions -> back to player
 				EndEnemyTurn();
 				break;
 			}
@@ -11132,6 +11973,10 @@ int SpellMap::Tick()
 		LockMap();
 		for (auto* mu : units)
 		{
+			// Once any group member triggers defensive fire, freeze every other
+			// mover until the reaction sequence has completed.
+			if (reaction_fire_active || !reaction_fire_queue.empty())
+				break;
 			if (!mu) continue;
 			if (mu == unit) continue; // keep selected unit handled by the original state machine below
 			if (mu->move_state == MapUnit::MOVE_STATE::IDLE) continue;
@@ -11249,6 +12094,11 @@ int SpellMap::Tick()
 									if (trig_event->CheckUnitInPos(true))
 										event_list.push_back(trig_event);
 
+								// Teleport has no traversed intermediate tile. Treat reappearance as
+								// entering sight from an unseen position, as the DOS movement path does.
+								if (isGameMode())
+									CheckReactionFire(unit, MapXY());
+
 								// done					
 								unit->in_animation = NULL;
 								unit->azimuth = 0x0A; // azimuth matching teleport animation which has only one azimumth
@@ -11351,6 +12201,11 @@ int SpellMap::Tick()
 								if (trig_event->CheckUnitInPos(true))
 									event_list.push_back(trig_event);
 
+							// Original defensive fire is evaluated after every movement tile,
+							// for either side, at the instant the mover enters new direct sight.
+							if (isGameMode())
+								CheckReactionFire(unit, this_pos);
+
 
 							if (unit->in_animation)
 							{
@@ -11413,6 +12268,16 @@ int SpellMap::Tick()
 		}
 		ReleaseMap();
 	}
+
+	// A non-selected group member may have entered enemy sight above. Start the
+	// first defensive shot before the ordinary selected-unit state machine gets a
+	// chance to advance another mover in the same tick.
+	if (isGameMode() && !reaction_fire_active && !reaction_fire_queue.empty())
+	{
+		ProcessReactionFire();
+		unit = GetSelectedUnit();
+	}
+
 // === Unit state machine ===
 	LockMap();
 	if (unit->move_state != MapUnit::MOVE_STATE::IDLE)
@@ -11528,6 +12393,9 @@ int SpellMap::Tick()
 						if (trig_event->CheckUnitInPos(true))
 							event_list.push_back(trig_event);
 
+					if (isGameMode())
+						CheckReactionFire(unit, MapXY());
+
 					// done					
 					unit->in_animation = NULL;
 					unit->azimuth = 0x0A; // azimuth matching teleport animation which has only one azimumth
@@ -11630,6 +12498,10 @@ int SpellMap::Tick()
 					if (trig_event->CheckUnitInPos(true))
 						event_list.push_back(trig_event);
 
+				// Evaluate symmetric defensive fire on this exact movement step.
+				if (isGameMode())
+					CheckReactionFire(unit, this_pos);
+
 
 				if (unit->in_animation)
 				{
@@ -11678,10 +12550,31 @@ int SpellMap::Tick()
 	{
 		// === UNIT ATTACK ===
 
-		// target unit/position
+		// attack_target is a raw pointer because the original state machine keeps
+		// it across multiple animation ticks.  Never dereference it unless the
+		// target still belongs to the tactical roster.  External events/removals
+		// are allowed to invalidate a target between ticks.
 		MapUnit* target = unit->attack_target;
-		MapXY target_pos = (target) ? (target->coor) : (unit->attack_target_obj);
-		auto* target_obj = &tiles[ConvXY(target_pos)];
+		if (target && (!_ptr_in_units_list(units, target) || !target->unit))
+		{
+			AbortAttackOnMissingTarget(unit);
+			update = true;
+		}
+		else if (!target && ConvXY(unit->attack_target_obj) < 0)
+		{
+			// A unit-target attack may lose its target asynchronously (cleanup/event/
+			// reaction fire).  attack_target_obj is only valid for real map-object
+			// attacks; for unit attacks it is deliberately Clear() == (-1,-1).
+			// Never reinterpret that sentinel as tiles[-1].
+			AbortAttackOnMissingTarget(unit);
+			update = true;
+		}
+		else
+		{
+			// target unit/position
+			MapXY target_pos = (target) ? (target->coor) : (unit->attack_target_obj);
+			int target_mxy = ConvXY(target_pos);
+			auto* target_obj = &tiles[target_mxy];
 
 		auto* sprite = tiles[ConvXY(unit->coor)].L1;
 		int slope_id = sprite->GetSlope() - 'A';
@@ -12073,7 +12966,7 @@ int SpellMap::Tick()
 					// the tactical roster. The original statistics count destroyed
 					// companies, not only corpses still present at mission end.
 					RecordMissionLoss(target);
-					auto dead = ExtractUnit(target);
+					auto dead = ExtractUnit(target, unit);
 					if (dead)
 					{
 						// kill unit
@@ -12127,11 +13020,13 @@ int SpellMap::Tick()
 			// idle
 			unit->attack_state = MapUnit::ATTACK_STATE::IDLE;
 
-			// after enemy attack completes, re-hide attacker if outside player view
-			if (enemy_turn_running && unit->is_enemy)
+			// after an enemy attack (normal AI or defensive fire), re-hide the
+			// attacker if it is outside the player's current view.
+			if (unit->is_enemy)
 				HideEnemiesOutsidePlayerView(this, unit_view);
 
 			update = true;
+		}
 		}
 
 	}
@@ -12316,78 +13211,107 @@ int SpellMap::Tick()
 		else if (unit->action_state == MapUnit::ACTION_STATE::KAMIKAZE)
 		{
 			// kamikaze attack: drop
-
-			// fast drop
-			unit->altitude -= 10;
-			if (unit->altitude <= 20)
+			MapUnit* kamikaze_target = unit->attack_target;
+			if (!kamikaze_target || !_ptr_in_units_list(units, kamikaze_target))
 			{
-				// reached ground: kaboom!
+				// Scripted removal of the target must not leave the diving unit with
+				// a dangling pointer.  Cancel safely and restore its visible state.
+				AbortAttackOnMissingTarget(unit);
+				unit->action_state = MapUnit::ACTION_STATE::IDLE;
+				unit->hide = false;
+				unit->altitude = 100;
+			}
+			else
+			{
+				// fast drop
+				unit->altitude -= 10;
+				if (unit->altitude <= 20)
+				{
+					// reached ground: kaboom!
+					unit->hide = true;
 
-				// hide attacker unit till actually destroyed
-				unit->hide = true;
+					// start explosion PNM; action_step==0 means impact damage has
+					// not yet been applied.  This also supports attacks with no PNM.
+					kamikaze_target->attack_hit_pnm = unit->GetTargetHitPNM(kamikaze_target);
+					kamikaze_target->attack_hit_frame = 0;
+					kamikaze_target->attack_state = MapUnit::ATTACK_STATE::HIT;
+					unit->action_step = 0;
+					unit->action_state = MapUnit::ACTION_STATE::KAMIKAZE_EXPLOSION;
 
-				// start explosion PNM
-				unit->attack_target->attack_hit_pnm = unit->GetTargetHitPNM(unit->attack_target);
-				unit->attack_target->attack_hit_frame = 0;
-				unit->attack_target->attack_state = MapUnit::ATTACK_STATE::HIT;
-				unit->action_state = MapUnit::ACTION_STATE::KAMIKAZE_EXPLOSION;
-
-				// play explosion sound
-				unit->PlayHit(unit->attack_target);
+					// play explosion sound
+					unit->PlayHit(kamikaze_target);
+				}
 			}
 			update = true;
 		}
 		else if (unit->action_state == MapUnit::ACTION_STATE::KAMIKAZE_EXPLOSION)
 		{
-			// kamikaze attack: explosion
-
-			if (unit->attack_target->attack_hit_pnm)
-				unit->attack_target->attack_hit_frame++;
-			if (unit->attack_target->attack_hit_pnm && unit->attack_target->attack_hit_frame >= unit->attack_target->attack_hit_pnm->frames.size())
+			// kamikaze attack: explosion.  The normal attack state machine may
+			// remove a killed target before this action resumes, so nullptr is a
+			// valid post-impact state here.
+			MapUnit* kamikaze_target = unit->attack_target;
+			if (kamikaze_target && !_ptr_in_units_list(units, kamikaze_target))
 			{
-				// hit anim done:
-				unit->attack_target->attack_hit_pnm = NULL;
-				unit->attack_target->attack_state = MapUnit::ATTACK_STATE::IDLE;
+				unit->attack_target = nullptr;
+				kamikaze_target = nullptr;
+			}
 
-				// unmark target unit
-				unit->attack_target->is_target = false;
+			bool impact_ready = false;
+			if (kamikaze_target && unit->action_step == 0)
+			{
+				if (kamikaze_target->attack_hit_pnm)
+				{
+					kamikaze_target->attack_hit_frame++;
+					if (kamikaze_target->attack_hit_frame >= (int)kamikaze_target->attack_hit_pnm->frames.size())
+					{
+						kamikaze_target->attack_hit_pnm = NULL;
+						kamikaze_target->attack_state = MapUnit::ATTACK_STATE::IDLE;
+						kamikaze_target->is_target = false;
+						impact_ready = true;
+					}
+				}
+				else
+				{
+					// Some kamikaze target classes have no hit PNM.  The impact still
+					// happens immediately instead of silently doing zero damage.
+					impact_ready = true;
+				}
+			}
 
-				// apply damage to target
-				MapUnit::AttackResult hit = MapUnit::AttackResult::Hit;
-				hit = unit->DamageTarget(unit->attack_target);
-
-				// play hit sound
-				unit->PlayHit(unit->attack_target, hit != MapUnit::AttackResult::Missed);
-
-				// play target hit sound if applicable
+			if (kamikaze_target && impact_ready && unit->action_step == 0)
+			{
+				unit->action_step = 1;
+				MapUnit::AttackResult hit = unit->DamageTarget(kamikaze_target);
+				unit->PlayHit(kamikaze_target, hit != MapUnit::AttackResult::Missed);
 				if (hit == MapUnit::AttackResult::Hit)
-					unit->attack_target->PlayBeingHit();
+					kamikaze_target->PlayBeingHit();
 				else if (hit == MapUnit::AttackResult::Kill)
-					unit->attack_target->PlayDie();
+					kamikaze_target->PlayDie();
 
-				// process dammage to target
+				// Reuse the ordinary target death/update sequence.  CleanupDeadUnits
+				// now keeps this target alive until that sequence is finished.
 				unit->attack_state = MapUnit::ATTACK_STATE::DIE_INIT;
 			}
 
-			if (!unit->attack_target->attack_hit_pnm && unit->AreSoundsDone())
+			// After the ordinary UPDATE step a killed target is intentionally gone
+			// and attack_target is nullptr.  Once impact sounds are done, destroy the
+			// kamikaze attacker without touching the former target again.
+			if ((!kamikaze_target || unit->action_step > 0) &&
+				unit->attack_state == MapUnit::ATTACK_STATE::IDLE && unit->AreSoundsDone())
 			{
-				// waiting to finish sound
 				unit->action_state = MapUnit::ACTION_STATE::IDLE;
 
-				// save references before destroying attacker
 				MapUnit* parent_ref = unit->parent;
-
-				// destroy attacker unit
 				if (parent_ref)
-					SelectUnit(parent_ref); // switch to parent
+					SelectUnit(parent_ref);
 				else
-					OnHUDnextUnit(); // or switch to next unit
+					OnHUDnextUnit();
+
 				RemoveUnit(unit);
-				// unit is now deleted - do NOT access it
+				unit = nullptr; // RemoveUnit() deleted it; protect the rest of Tick().
 
 				unit_view->RestoreUnitsView();
 				SortUnits();
-
 				InvalidateHUDbuttons();
 			}
 
@@ -12544,9 +13468,8 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 	LockMap();
 	if (uid != units.end())
 	{
-		// delete unit
-		if (GetSelectedUnit() == unit)
-			SelectUnit(NULL);
+		// Clear every transient raw pointer before freeing the MapUnit.
+		InvalidateRuntimeReferencesToUnit(unit);
 		delete unit;
 		units.erase(uid);
 	}
@@ -12558,8 +13481,7 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 			auto evt_unit = evt->ExtractUnit(unit);
 			if (evt_unit)
 			{
-				if (GetSelectedUnit() == unit)
-					SelectUnit(NULL);
+				InvalidateRuntimeReferencesToUnit(unit);
 				delete unit;
 				break;
 			}
@@ -12581,7 +13503,7 @@ int SpellMap::RemoveUnit(MapUnit* unit, bool from_events)
 }
 
 // extracts unit from map units list, but not deletes it (used to move unit elsewhere)
-MapUnit* SpellMap::ExtractUnit(MapUnit* unit)
+MapUnit* SpellMap::ExtractUnit(MapUnit* unit, MapUnit* preserve_owner)
 {
 	HaltUnitRanging(true);
 
@@ -12592,6 +13514,10 @@ MapUnit* SpellMap::ExtractUnit(MapUnit* unit)
 		ResumeUnitRanging(false);
 		return(NULL); // not found
 	}
+
+	// Remove transient raw-pointer references before this object can be moved
+	// elsewhere or deleted by the caller.
+	InvalidateRuntimeReferencesToUnit(unit, preserve_owner);
 
 	// remove from list
 	units.erase(uid);
@@ -12828,14 +13754,14 @@ int SpellMap::AssignUnitID(MapUnit* unit)
 		if (!unit->is_event)
 		{
 			// non event units - start at 50
-			id = max(id, 50);
+			id = (std::max)(id, 50);
 		}
 		else
 		{
 			// event units start at 0, 48-49 reserved for SpecUnit, then continues from 100
 			if (unit->spec_type == MapUnitType::Values::SpecUnit)
 			{
-				id = max(id, 48);
+				id = (std::max)(id, 48);
 				if (id > 49)
 				{
 					// ###error - original spelcros cannot handle more than two SpecUnits!
@@ -12998,6 +13924,7 @@ int SpellMap::MissionStartEvent()
 				delete new_unit;
 				continue;
 			}
+			AdjustEnemyExperienceForDifficulty(new_unit);
 			unit.is_placed = true;
 			if (!is_selected && !new_unit->is_enemy)
 			{
@@ -13044,6 +13971,7 @@ int SpellMap::ProcEventsList(SpellMapEventsList& list)
 				delete new_unit;
 				continue;
 			}
+			AdjustEnemyExperienceForDifficulty(new_unit);
 		}
 
 		// show messages
@@ -13156,8 +14084,14 @@ int SpellMap::UpdateEventUnit(SpellMapEventRec* evt, MapUnit* unit)
 // update destructible tiles after HP modification (changes graphics, eventually alters surrounding tiles (bridges))
 vector<MapXY> SpellMap::UpdateDestructible(MapXY target_pos)
 {
-	// target tile
+	// Never index tiles with an invalid/sentinel map position.  ConvXY() returns
+	// -1 for out-of-map coordinates; the old code turned that into tiles[-1],
+	// which later surfaced as an access violation in MapSprite::UpdateDestructible().
 	int mxy = ConvXY(target_pos);
+	if (mxy < 0 || mxy >= (int)tiles.size())
+		return {};
+
+	// target tile
 	auto* tile = &tiles[mxy];
 
 	// list of destroyed positions
@@ -13295,6 +14229,9 @@ void SpellMap::SavedState::Clear()
 		delete unit;
 	units.clear();
 	units_view.clear();
+	enemy_ai_groups.clear();
+	next_enemy_ai_group_id = 1;
+	enemy_ai_groups_initialized = false;
 	sel_unit = NULL;
 	tiles.clear();
 	if (events)
@@ -13330,13 +14267,17 @@ int SpellMap::Saves::Clear(int count)
 	for (auto& save : saves)
 		delete save;
 	saves.clear();
-	max_saves = count;
+	max_saves = (std::max)(0, count);
 	return(0);
+}
+void SpellMap::Saves::SetLimit(int count)
+{
+	max_saves = (std::max)(0, count);
 }
 // how many times can we save?
 int SpellMap::Saves::canSave()
 {
-	return(max_saves - saves.size());
+	return (std::max)(0, max_saves - (int)saves.size());
 }
 // can load state?
 int SpellMap::Saves::canLoad()
@@ -13397,6 +14338,11 @@ int SpellMap::Saves::Save(SpellMap::SavedState* slot)
 	map->unit_view->ResultLock(true);
 	save->units_view = map->unit_view->view;
 	map->unit_view->ResultLock(false);
+
+	// Other Side group/order state is part of the tactical position.
+	save->enemy_ai_groups = map->enemy_ai_groups;
+	save->next_enemy_ai_group_id = map->next_enemy_ai_group_id;
+	save->enemy_ai_groups_initialized = map->enemy_ai_groups_initialized;
 
 	map->ReleaseMap();
 
@@ -13495,6 +14441,22 @@ int SpellMap::Saves::Load(SpellMap::SavedState* save)
 	map->unit_view->view_mem = save->units_view;
 	map->unit_view->ResultLock(false);
 	map->unit_view->PrepareUnitsViewMask();
+
+	// restore persistent Other Side tactical orders
+	map->enemy_ai_groups = save->enemy_ai_groups;
+	map->next_enemy_ai_group_id = save->next_enemy_ai_group_id;
+	map->enemy_ai_groups_initialized = save->enemy_ai_groups_initialized;
+	if (map->enemy_ai_groups_initialized)
+	{
+		map->PruneEnemyAIGroups();
+		map->AttachUnassignedEnemyUnits();
+		map->RefreshEnemyAIGroupStats();
+	}
+	else
+	{
+		map->enemy_ai_groups.clear();
+		map->next_enemy_ai_group_id = 1;
+	}
 
 	map->ReleaseMap();
 

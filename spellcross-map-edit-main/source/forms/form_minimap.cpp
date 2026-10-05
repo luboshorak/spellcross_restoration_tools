@@ -22,7 +22,7 @@ FormMiniMap::FormMiniMap(wxPanel* parent,wxWindowID win_id,SpellData* spell_data
         // resize to fit
         wxImage img = m_minimap.bmp->ConvertToImage();
         delete m_minimap.bmp;
-        double scale = min((double)MAX_MINIMAP_X/xs,(double)MAX_MINIMAP_Y/ys);
+        double scale = (std::min)((double)MAX_MINIMAP_X/xs,(double)MAX_MINIMAP_Y/ys);
         xs = (int)(scale*xs);
         ys = (int)(scale*ys);
         img.Rescale(xs,ys,wxIMAGE_QUALITY_HIGH);
@@ -156,7 +156,7 @@ void FormMiniMap::OnPaintTab(wxPaintEvent& event)
     scroll_x -= m_minimap.source_x_ofs;
     scroll_y -= m_minimap.source_y_ofs;
     wxPoint c1 = wxPoint(corn->x_size + scroll_x*bmp_x/m_minimap.source_x,corn->y_size + scroll_y*bmp_y/m_minimap.source_y);
-    wxPoint c2 = wxPoint(min(corn->x_size + (scroll_x+surf_x)*bmp_x/m_minimap.source_x,bmp->GetWidth()-corn->x_size), min(corn->y_size + (scroll_y+surf_y)*bmp_y/m_minimap.source_y,bmp->GetHeight()-corn->y_size));
+    wxPoint c2 = wxPoint((std::min)(corn->x_size + (scroll_x+surf_x)*bmp_x/m_minimap.source_x,bmp->GetWidth()-corn->x_size), (std::min)(corn->y_size + (scroll_y+surf_y)*bmp_y/m_minimap.source_y,bmp->GetHeight()-corn->y_size));
     pdc.SetBrush(wxBrush(wxColor(0,0,0),wxBRUSHSTYLE_TRANSPARENT));
     pdc.SetPen(wxPen(wxColor(255,0,0),3));
     pdc.DrawRectangle(c1.x,c1.y,c2.x-c1.x,c2.y-c1.y);

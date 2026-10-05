@@ -3,6 +3,7 @@
 
 #include <wx/rawbmp.h>
 #include <wx/window.h>
+#include <algorithm>
 
 
 FormMapOptions::FormMapOptions(wxPanel* parent,wxWindowID win_id,SpellMap* spell_map)
@@ -65,7 +66,7 @@ FormMapOptions::FormMapOptions(wxPanel* parent,wxWindowID win_id,SpellMap* spell
     scroll_gamma->Bind(wxEVT_SCROLL_LINEUP,&FormMapOptions::OnScroll,this,wxID_SCROLL_GAMMA);
     scroll_gamma->Bind(wxEVT_SCROLL_LINEDOWN,&FormMapOptions::OnScroll,this,wxID_SCROLL_GAMMA);
     scroll_gamma->SetRange(20-7+1);
-    int gamma = min((int)(m_spell_map->GetGamma()*10.0-7.0),20-7);
+    int gamma = (std::min)((int)(m_spell_map->GetGamma()*10.0-7.0),20-7);
     scroll_gamma->SetThumbPosition(gamma);
 
     // music volume scrollbar (pos=32,182 sz=132,16)

@@ -21,21 +21,21 @@ class MapXY
 public:
 	int x;
 	int y;
-	int IsSelected() {return(x >= 0 && y >= 0);};
-	int IsEqual(int x, int y) {return(this->x == x && this->y == y);};
+	int IsSelected() const {return(x >= 0 && y >= 0);};
+	int IsEqual(int x, int y) const {return(this->x == x && this->y == y);};
 	MapXY() {x=-1;y=-1;};
 	MapXY(int xpos, int ypos) { x=xpos;y=ypos; };
 	void Clear() { x=-1;y=-1; };
 	// geometric distance of tile
-	double Distance(MapXY mxy) { return(Distance(mxy.x,mxy.y)); };
-	double Distance(int xx, int yy)
+	double Distance(MapXY mxy) const { return(Distance(mxy.x,mxy.y)); };
+	double Distance(int xx, int yy) const
 	{		
 		auto [dx,dy] = this->RelativePos(xx,yy);
 		return(sqrt(dx*dx + dy*dy));
 	};
 	// realtive position of tile <dx,dy>
-	std::tuple<double,double> RelativePos(MapXY mxy) {return RelativePos(mxy.x,mxy.y);};
-	std::tuple<double,double> RelativePos(int xx,int yy)
+	std::tuple<double,double> RelativePos(MapXY mxy) const {return RelativePos(mxy.x,mxy.y);};
+	std::tuple<double,double> RelativePos(int xx,int yy) const
 	{
 		int xx1 = xx * 2 + (((yy & 1) != 0) ? 0 : 1);
 		int yy1 = yy * 1;
@@ -44,8 +44,8 @@ public:
 		return std::tuple(0.707106*(double)(xx1-xx2),0.707106*(double)(yy1-yy2));
 	};
 	// angle of <xx,yy> from this pos
-	double Angle(MapXY mxy) {return Angle(mxy.x, mxy.y);};
-	double Angle(int xx, int yy)
+	double Angle(MapXY mxy) const {return Angle(mxy.x, mxy.y);};
+	double Angle(int xx, int yy) const
 	{
 		int xx1 = xx * 2 + (((yy & 1) != 0) ? 0 : 1);
 		int yy1 = yy * 1;

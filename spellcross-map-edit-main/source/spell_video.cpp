@@ -618,9 +618,9 @@ int SpellVideo::GetFrameID(double time)
 		return(-1);
 	int id;
 	if(isDP2())
-		id = max((int)(time*fps),0);
+		id = (std::max)((int)(time*fps),0);
 	else
-		id = min(max((int)(time*fps), 0), (int)frames.size()-1);	
+		id = (std::min)((std::max)((int)(time*fps), 0), (int)frames.size()-1);	
 	return(id);
 }
 

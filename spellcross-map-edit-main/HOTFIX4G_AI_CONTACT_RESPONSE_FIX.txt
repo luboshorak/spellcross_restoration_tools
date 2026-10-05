@@ -1,0 +1,22 @@
+Spellcross 0.7.9 hotfix4g - AI contact/defence response fix
+
+Reproduction snapshot: divne.scsave
+- enemy group 2: units 54 + 55 (Ka-orcs, type 38, fire range 1)
+- group state: contacted=1, target_unit_id=67, order=STATIC_DEFENCE (4)
+- positions: #54=(5,27), #55=(4,30), target #67=(5,22)
+- result: group knows the player target but is outside its weapon range; STATIC_DEFENCE
+  forbids movement, so it idles/digs while the player keeps shooting it.
+
+Fixes:
+1) PlanEnemyAIGroups(): the 0.5..0.8 strength-ratio branch now selects
+   MOBILE_DEFENCE (5) instead of STATIC_DEFENCE (4). This preserves defensive
+   intent but allows a contacted group to close only enough to return fire.
+   Mission-authored fixed defence (SUICIDE_DEFENCE) is unchanged.
+
+2) EnemyTurnStep(): MOBILE_DEFENCE no longer clamps its stopping distance to
+   at least 2 tiles. Range-1 units (Orcs/Ka-orcs) must be allowed to close to
+   range 1; otherwise they stop one tile outside their legal attack range.
+   The existing MoveEnemyToward(..., true) logic remains responsible for
+   indirect-fire minimum-range handling.
+
+This hotfix includes the hotfix4f enemy-turn deadlock correction unchanged.

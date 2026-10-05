@@ -234,6 +234,13 @@ typedef struct{
 class SpellMap
 {
 public:
+	enum class GameDifficulty : int
+	{
+		EASY = 0,
+		NORMAL = 1,
+		HARD = 2
+	};
+
 	struct MissionLossStats
 	{
 		int alliance_light = 0;
@@ -276,6 +283,71 @@ public:
 		size_t enemy_turn_idx = 0;
 		MapUnit* enemy_turn_prev_selection = nullptr;
 		int enemy_turn_prev_sel_mod = false;
+
+		// Original Spellcross tactical AI is group/order based.  The DEF behaviour
+		// value only chooses the group's initial order; subsequent orders are
+		// persistent tactical state selected by the planner.  Numeric values are
+		// the original DOS order ids recovered from SPELCROS.EXE.
+		enum class AIGroupOrder : uint16_t
+		{
+			NONE = 0,
+			RANDOM_MOVE = 1,
+			FREE_ATTACK = 2,
+			BOUND_ATTACK = 3,
+			STATIC_DEFENCE = 4,
+			MOBILE_DEFENCE = 5,
+			SCOUT = 6,
+			JOIN = 7,
+			RETREAT = 8,
+			DEEP_SCOUT = 9,
+			MOVE_TO = 10,
+			MOVE_ATTACK = 11,
+			SUICIDE_DEFENCE = 12,
+			WAIT_CONTACT = 13,
+			KAMIKAZE_MOVE_ATTACK = 14
+		};
+
+		struct AITacticalGroup
+		{
+			int id = 0;
+			MapUnitType behavior = MapUnitType::NormalUnit;
+			AIGroupOrder order = AIGroupOrder::NONE;
+			std::vector<int> unit_ids;
+			int target_group_id = -1;      // friendly group for JOIN/RETREAT
+			int target_unit_id = -1;       // representative Alliance target
+			int target_point_index = -1;   // DTA L5 tactical point
+			MapXY target_pos;
+			int leader_unit_id = -1;
+			int strongest_unit_id = -1;
+			int speed = 0;
+			int strength = 0;
+			bool contacted = false;
+		};
+
+		std::vector<AITacticalGroup> enemy_ai_groups;
+		int next_enemy_ai_group_id = 1;
+		bool enemy_ai_groups_initialized = false;
+
+		void EnsureEnemyAIGroups();
+		void BuildEnemyAIGroups();
+		void PruneEnemyAIGroups();
+		void AttachUnassignedEnemyUnits();
+		void RefreshEnemyAIGroupStats();
+		void PlanEnemyAIGroups();
+		void ConsolidateIdleEnemyGroups();
+		AITacticalGroup* FindEnemyAIGroupForUnit(const MapUnit* unit);
+		AITacticalGroup* FindEnemyAIGroupById(int id);
+		MapUnit* FindNearestPlayerUnit(MapXY from, bool require_contact, const AITacticalGroup* observer_group = nullptr);
+		bool GroupHasDirectContact(AITacticalGroup& group, MapUnit** nearest_target = nullptr);
+		double EstimateAIGroupStrengthRatio(const AITacticalGroup& attackers, const std::vector<MapUnit*>& defenders) const;
+		MapXY GetAIGroupCenter(const AITacticalGroup& group) const;
+		MapXY GetAllianceClusterCenter(const std::vector<MapUnit*>& cluster) const;
+		std::vector<std::vector<MapUnit*>> BuildAllianceClusters() const;
+		MapUnit* SelectGroupAttackTarget(MapUnit* enemy, const AITacticalGroup& group);
+		bool MoveEnemyToward(MapUnit* enemy, MapXY goal, bool stop_in_attack_range);
+		bool MoveEnemyRandomly(MapUnit* enemy, const AITacticalGroup& group);
+		MapXY ResolveEnemyGroupGoal(AITacticalGroup& group);
+		void SetGroupOrder(AITacticalGroup& group, AIGroupOrder order, int target_unit_id = -1, int target_group_id = -1, int target_point_index = -1);
 		// panic turn state (player units fleeing automatically)
 		bool panic_turn_running = false;
 		std::vector<MapUnit*> panic_turn_list;
@@ -291,18 +363,26 @@ public:
 		bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
 		bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
 		bool IsUnitBusy(MapUnit* unit);
-		// reaction fire: player units automatically fire back during enemy turn
-		struct ReactionFireEntry { MapUnit* shooter; MapUnit* target; };
+		// Original Spellcross defensive/opportunity fire. Either side may react
+		// when a moving opponent enters previously unseen direct sight while the
+		// defender still has enough AP for at least one shot.
+		struct ReactionFireEntry { MapUnit* shooter; MapUnit* target; int priority = 0; };
 		std::vector<ReactionFireEntry> reaction_fire_queue;
+		bool reaction_fire_active = false;
 		MapUnit* reaction_fire_restore_selection = nullptr;
-		void CheckReactionFire(MapUnit* enemy_unit);
+		void CheckReactionFire(MapUnit* moving_unit, MapXY previous_pos);
 		bool ProcessReactionFire();
+		int GetReactionInitiative(const MapUnit* unit) const;
 		// map state
 		bool is_valid;
 		// last error string
 		std::string last_error;
 		// game mode
-		int game_mode;		
+		int game_mode;
+		// Original Spellcross difficulty is a persistent 0/1/2 engine value.
+		GameDifficulty game_difficulty = GameDifficulty::NORMAL;
+		void AdjustEnemyExperienceForDifficulty(MapUnit* unit);
+		void ApplyDifficultyEnemyExperience();
 		// render surface
 		int surf_x;
 		int surf_y;
@@ -473,7 +553,6 @@ public:
 		void HaltUnitRanging(bool clear_tasks=false);
 		void ResumeUnitRanging(bool resume=true);
 
-		void AggroEnemiesAround(MapXY center, MapXY attacker_pos, int attacker_id, int radius, int ttl);
 
 		// default scroller
 		TScroll scroller;
@@ -491,7 +570,11 @@ public:
 		// layers:
 		vector<MapSprite> tiles; // terrain tiles map (L1+L2)
 		vector<MapLayer3> L3; // ANM list
-		vector<MapLayer4> L4; // PNM list				
+		vector<MapLayer4> L4; // PNM list
+		// Original DTA layers L5/L6: tactical counter-attack/planning positions.
+		// They are consumed by the original group AI and must survive load/save.
+		vector<MapXY> counter_attack_post_enemy;
+		vector<MapXY> counter_attack_post_player;
 		vector<MapXY> start; // start tiles list
 		vector<MapXY> escape; // escape tiles list
 		vector<MapXY> target; // target tiles list
@@ -592,6 +675,8 @@ public:
 			int StoreUnitsView(bool immediate=false);
 			int RestoreUnitsView(bool immediate=false);
 			int CalcAttackRange(MapUnit *unit, bool immediate=false);
+			// Side-effect-free single-tile LOS query using the same terrain ray test.
+			bool HasDirectSight(MapUnit* unit, MapXY pos);
 
 		private:
 
@@ -744,6 +829,10 @@ public:
 			SpellMapEvents* events;
 			// view mask
 		 vector<int> units_view;
+			// persistent Other Side tactical-group state
+			vector<AITacticalGroup> enemy_ai_groups;
+			int next_enemy_ai_group_id = 1;
+			bool enemy_ai_groups_initialized = false;
 			
 			SavedState();
 			~SavedState();
@@ -760,7 +849,8 @@ public:
 		public:
 			Saves(SpellMap *parent);
 			~Saves();
-			int Clear(int count=4);			
+			int Clear(int count=10);
+			void SetLimit(int count);
 			int canSave();
 			int canLoad();			
 			int Save(SpellMap::SavedState* slot=NULL);
@@ -776,6 +866,9 @@ public:
 		~SpellMap();
 		int SetGameMode(int new_mode);
 		int isGameMode();
+		void SetGameDifficulty(GameDifficulty difficulty);
+		GameDifficulty GetGameDifficulty() const { return game_difficulty; };
+		int GetTacticalSaveLimit() const;
 		void Close();
 		int Create(SpellData* spelldata,const char* terr_name,int x,int y);
 		int Load(wstring &path, SpellData* spelldata);
@@ -874,7 +967,7 @@ public:
 
 		MapUnit* GetUnit(int id);		
 		int RemoveUnit(MapUnit* unit,bool from_events=false);		
-		MapUnit* ExtractUnit(MapUnit* unit);
+		MapUnit* ExtractUnit(MapUnit* unit, MapUnit* preserve_owner = nullptr);
 		int RemoveAllUnits();		
 		int AddUnit(MapUnit* unit);		
 		MapUnit* CreateUnit(MapUnit* parent=NULL,SpellUnitRec* new_type=NULL);
@@ -925,6 +1018,9 @@ public:
 		};
 		int FinishUnits();
 		void CleanupDeadUnits();
+		bool IsUnitProtectedFromCleanup(const MapUnit* unit) const;
+		void InvalidateRuntimeReferencesToUnit(MapUnit* unit, MapUnit* preserve_owner = nullptr);
+		void AbortAttackOnMissingTarget(MapUnit* attacker);
 		// Re-evaluate live battalion/regiment/brigade bonuses after any tactical
 		// formation member (especially a commander host) leaves the battlefield.
 		void RecalculateTacticalFormations();

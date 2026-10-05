@@ -28,6 +28,7 @@
 #include "wx/dcgraph.h"
 #include "wx/dcbuffer.h"
 #include <wx/rawbmp.h>
+#include <algorithm>
 
 
 using namespace std;
@@ -2996,8 +2997,8 @@ SpellObject::SpellObject(vector<MapXY> &xy,vector<Sprite*> &L1_list,vector<Sprit
 	MapXY ref(1<<30, 1<<30);	
 	for(int k = 0; k < xy.size(); k++)
 	{
-		ref.x = min(xy[k].x, ref.x);
-		ref.y = min(xy[k].y, ref.y);
+		ref.x = (std::min)(xy[k].x, ref.x);
+		ref.y = (std::min)(xy[k].y, ref.y);
 	}		
 	// ref tile is on even tile
 	bool y_is_even = !(ref.y & 1);
@@ -3013,8 +3014,8 @@ SpellObject::SpellObject(vector<MapXY> &xy,vector<Sprite*> &L1_list,vector<Sprit
 		if(!y_is_even && (xy[k].y&1))
 			pos.x--; // aligning zig-zag tile x-offsets
 		sprite_pos.push_back(pos);
-		ref2.x = min(pos.x, ref2.x);
-		ref2.y = min(pos.y, ref2.y);
+		ref2.x = (std::min)(pos.x, ref2.x);
+		ref2.y = (std::min)(pos.y, ref2.y);
 
 		// tile sprite pointers
 		Sprite *L1 = L1_list[k];
@@ -3123,9 +3124,9 @@ int SpellObject::RenderObjectGlyph()
 	int x_ref = 1<<30;
 	for(int k = 0; k < sprite_pos.size(); k++)
 	{
-		x_ref = min(sprite_pos[k].x*80 + ((sprite_pos[k].y & 1)?0:40),x_ref);
-		x_size = max(sprite_pos[k].x*80 + ((sprite_pos[k].y & 1)?0:40)+80,x_size);
-		y_size = max(sprite_pos[k].y*24 + 48,y_size);
+		x_ref = (std::min)(sprite_pos[k].x*80 + ((sprite_pos[k].y & 1)?0:40),x_ref);
+		x_size = (std::max)(sprite_pos[k].x*80 + ((sprite_pos[k].y & 1)?0:40)+80,x_size);
+		y_size = (std::max)(sprite_pos[k].y*24 + 48,y_size);
 	}
 	x_ref = -x_ref;
 	x_size += x_ref;	

@@ -1445,9 +1445,23 @@ bool MainFrame::LoadMapFromDefPath(const std::wstring& def_path, const std::vect
             unit->ResetAP();
             // entry.health is percentage (0-100), convert to actual man count based on unit_rec->cnt
             if (entry.health > 0 && entry.health <= 100)
-                unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+            {
+                if (unit_rec->isSingleMan())
+                {
+                    unit->man = 1;
+                    unit->damage_remainder = std::clamp((100 - entry.health) * 10, 0, 999);
+                }
+                else
+                {
+                    unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+                    unit->damage_remainder = 0;
+                }
+            }
             else
+            {
                 unit->man = unit_rec->cnt;
+                unit->damage_remainder = 0;
+            }
             unit->wounded = 0;
 
             if (spell_map->PlaceUnit(unit))
@@ -1673,9 +1687,23 @@ bool MainFrame::LoadGeneratedStrategicBattleFromDtaPath(const std::wstring& dta_
             unit->upgrade_range_bonus = entry.upgrade_range_bonus;
             unit->ResetAP();
             if (entry.health > 0 && entry.health <= 100)
-                unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+            {
+                if (unit_rec->isSingleMan())
+                {
+                    unit->man = 1;
+                    unit->damage_remainder = std::clamp((100 - entry.health) * 10, 0, 999);
+                }
+                else
+                {
+                    unit->man = std::max(1, (unit_rec->cnt * entry.health + 50) / 100);
+                    unit->damage_remainder = 0;
+                }
+            }
             else
+            {
                 unit->man = unit_rec->cnt;
+                unit->damage_remainder = 0;
+            }
             unit->wounded = 0;
 
             if (spell_map->PlaceUnit(unit))
@@ -1743,7 +1771,7 @@ void MainFrame::SetGameModeUI(bool enable_game_mode)
 
         // reset map runtime state
         if(spell_map->saves)
-            spell_map->saves->Clear();
+            spell_map->saves->Clear(spell_map->GetTacticalSaveLimit());
         if(spell_map->events)
             spell_map->events->ResetEvents();
         if(spell_map->saves)
@@ -1911,6 +1939,11 @@ bool MyApp::OnInit()
     // cleanly in the main menu instead of showing a bogus map-load error.
     wstring map_path = char2wstring(ini.GetValue("STATE","last_map",""));
     spell_map = new SpellMap();
+    int startupDifficulty = std::clamp((int)ini.GetLongValue("STATE", "game_difficulty", 1), 0, 2);
+    if (spell_data && spell_data->units && spell_data->units->IsEnglish() &&
+        startupDifficulty == (int)SpellMap::GameDifficulty::EASY)
+        startupDifficulty = (int)SpellMap::GameDifficulty::NORMAL;
+    spell_map->SetGameDifficulty((SpellMap::GameDifficulty)startupDifficulty);
     if(!map_path.empty())
     {
         std::error_code mapEc;
@@ -1946,8 +1979,8 @@ bool MyApp::OnInit()
     int disp_x_size;
     int disp_y_size;
     wxDisplaySize(&disp_x_size,&disp_y_size);
-    win_x_size = min(win_x_size,disp_x_size);
-    win_y_size = min(win_y_size,disp_y_size);
+    win_x_size = (std::min)(win_x_size,disp_x_size);
+    win_y_size = (std::min)(win_y_size,disp_y_size);
                 
     // --- run main form    
     // main window frame
@@ -1974,7 +2007,10 @@ int MyApp::OnExit()
     // OnInit can now legitimately stop during the first-run source wizard, so
     // keep shutdown safe even when game objects have not been created yet.
     if (spell_map)
+    {
         ini.SetValue("STATE","last_map",wstring2string(spell_map->GetTopPath()).c_str());
+        ini.SetLongValue("STATE", "game_difficulty", (long)spell_map->GetGameDifficulty());
+    }
 
     // store sound/midi volumes
     if (spell_data && spell_data->sounds && spell_data->sounds->channels)
@@ -2167,6 +2203,16 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     wxMenu* menuOptions = new wxMenu;
     menuOptions->Append(ID_OptionsAudio, "&Audio...", "Audio volume settings");
     menuOptions->Append(ID_OptionsScreen, "&Screen...", "Brightness settings");
+    auto* menuDifficulty = new wxMenu;
+    const bool englishDifficultyMenu = spell_data && spell_data->units && spell_data->units->IsEnglish();
+    // Original Czech UI: Easy / Normal / Hard.  Original English UI contains
+    // only two DIFF entries; its selector maps them to engine modes 1/2, i.e.
+    // Normal / Hard.
+    if(!englishDifficultyMenu)
+        menuDifficulty->AppendRadioItem(ID_OptionsDifficultyEasy, "&Easy");
+    menuDifficulty->AppendRadioItem(ID_OptionsDifficultyNormal, "&Normal");
+    menuDifficulty->AppendRadioItem(ID_OptionsDifficultyHard, "&Hard");
+    menuOptions->AppendSubMenu(menuDifficulty, "Game &Difficulty");
 
     // Main menu
     wxMenuBar* menuBar = new wxMenuBar;    
@@ -2326,6 +2372,8 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
     Bind(wxEVT_MENU,&MainFrame::OnAddUnit,this,ID_AddUnit);
     Bind(wxEVT_MENU,&MainFrame::OnOptionsAudio,this,ID_OptionsAudio);
     Bind(wxEVT_MENU,&MainFrame::OnOptionsScreen,this,ID_OptionsScreen);
+    Bind(wxEVT_MENU,&MainFrame::OnOptionsDifficulty,this,ID_OptionsDifficultyEasy,ID_OptionsDifficultyHard);
+    SyncDifficultyMenu();
 
     spell_map->SetMessageInterface(bind(&MainFrame::ShowMessage,this,placeholders::_1,placeholders::_2,placeholders::_3), bind(&MainFrame::CheckMessageState,this));    
     
@@ -2394,6 +2442,40 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
 void MainFrame::OnSaveGameState(wxCommandEvent& event)
 {
     (void)ShowUnifiedSaveGameDialog(this);
+}
+
+void MainFrame::SyncDifficultyMenu()
+{
+    if(!spell_map || !GetMenuBar())
+        return;
+    const int d = (int)spell_map->GetGameDifficulty();
+    if(GetMenuBar()->FindItem(ID_OptionsDifficultyEasy))
+        GetMenuBar()->Check(ID_OptionsDifficultyEasy, d == (int)SpellMap::GameDifficulty::EASY);
+    if(GetMenuBar()->FindItem(ID_OptionsDifficultyNormal))
+        GetMenuBar()->Check(ID_OptionsDifficultyNormal, d == (int)SpellMap::GameDifficulty::NORMAL);
+    if(GetMenuBar()->FindItem(ID_OptionsDifficultyHard))
+        GetMenuBar()->Check(ID_OptionsDifficultyHard, d == (int)SpellMap::GameDifficulty::HARD);
+}
+
+void MainFrame::SetGameDifficulty(SpellMap::GameDifficulty difficulty)
+{
+    if(!spell_map)
+        return;
+    if(spell_data && spell_data->units && spell_data->units->IsEnglish() &&
+       difficulty == SpellMap::GameDifficulty::EASY)
+        difficulty = SpellMap::GameDifficulty::NORMAL;
+    spell_map->SetGameDifficulty(difficulty);
+    SyncDifficultyMenu();
+    if(m_strategicLevel && m_strategicLevel->GetMenuBar())
+        m_strategicLevel->SyncDifficultyMenu();
+}
+
+void MainFrame::OnOptionsDifficulty(wxCommandEvent& event)
+{
+    SpellMap::GameDifficulty d = SpellMap::GameDifficulty::NORMAL;
+    if(event.GetId() == ID_OptionsDifficultyEasy) d = SpellMap::GameDifficulty::EASY;
+    else if(event.GetId() == ID_OptionsDifficultyHard) d = SpellMap::GameDifficulty::HARD;
+    SetGameDifficulty(d);
 }
 
 void MainFrame::OnOptionsAudio(wxCommandEvent& event)
@@ -3911,9 +3993,12 @@ void MainFrame::OnTimer(wxTimerEvent& event)
                     earned.unit_id = u->unit->type_id;
                     earned.count = 1;
                     const int maxMan = u->unit->cnt;
-                    earned.health = maxMan > 0
-                        ? std::max(1, (u->man * 100 + maxMan / 2) / maxMan)
-                        : 100;
+                    if (u->unit->isSingleMan())
+                        earned.health = std::clamp((1000 - u->damage_remainder + 5) / 10, 1, 100);
+                    else
+                        earned.health = maxMan > 0
+                            ? std::max(1, (u->man * 100 + maxMan / 2) / maxMan)
+                            : 100;
                     earned.extra = u->name.empty() ? "-" : u->name;
                     earned.experience = std::max(0, u->experience);
                     earned.experience_level = std::clamp(u->experience_level > 0
@@ -6317,8 +6402,8 @@ void MainFrame::LoadToolsetRibbon(Terrain *terr)
                 auto [x, y] = size[k];
                 if (!objects[k])
                 {
-                    x_max = max(x_max, x);
-                    y_max = max(y_max, y);
+                    x_max = (std::max)(x_max, x);
+                    y_max = (std::max)(y_max, y);
                 }
                 aspect += (double)x / (double)y;
             }

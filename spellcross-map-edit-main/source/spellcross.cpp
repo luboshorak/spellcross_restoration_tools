@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <regex>
 #include <filesystem>
+#include <algorithm>
 
 
 //using namespace std;
@@ -229,7 +230,7 @@ SpellClassFile::SpellClassFile(string text,string regexp_head,int reg_index_item
 			if(reg_index_item >= 0)
 			{
 				cls.index = std::stoi(cls.head[reg_index_item]);
-				max_id = max(max_id,cls.index);
+				max_id = (std::max)(max_id,cls.index);
 				list.resize(max_id+1);
 				list[cls.index] = cls;
 			}
@@ -1109,9 +1110,9 @@ int SpellData::GenerateSpecialTiles()
 			}
 			if(x_last < 0 || x_first < 0)
 				continue;
-			for(int x = x_first + fxgap; x <= min(x_first + fxgap + fwidth,x_last - fxgap); x++)
+			for(int x = x_first + fxgap; x <= (std::min)(x_first + fxgap + fwidth,x_last - fxgap); x++)
 				spr->SetPixel(x,y,sel_color);
-			for(int x = x_last - fxgap; x >= max(x_last - fxgap - fwidth,x_first + fxgap); x--)
+			for(int x = x_last - fxgap; x >= (std::max)(x_last - fxgap - fwidth,x_first + fxgap); x--)
 				spr->SetPixel(x,y,sel_color);
 		}*/
 		for(int x = sel->x_ofs+3; x < sel->x_ofs + sel->x_size - 3; x++)
@@ -1131,9 +1132,9 @@ int SpellData::GenerateSpecialTiles()
 			}
 			if(y_last <= -1000 || y_first <= -1000)
 				continue;
-			for(int y = y_first + fygap; y <= min(y_first + fygap + fwidth,y_last - fygap); y++)
+			for(int y = y_first + fygap; y <= (std::min)(y_first + fygap + fwidth,y_last - fygap); y++)
 				sel->SetPixel(x,y,sel_color);
-			for(int y = y_last - fygap; y >= max(y_last - fygap - fwidth,y_first + fygap); y--)
+			for(int y = y_last - fygap; y >= (std::max)(y_last - fygap - fwidth,y_first + fygap); y--)
 				sel->SetPixel(x,y,sel_color);
 		}
 

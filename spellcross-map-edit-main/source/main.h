@@ -115,6 +115,8 @@ public:
     void SetGameModeUI(bool enable_game_mode);
     // Access the current tactical map (used by strategic level for battle results)
     SpellMap* GetSpellMap() const { return spell_map; }
+    SpellMap::GameDifficulty GetGameDifficulty() const { return spell_map ? spell_map->GetGameDifficulty() : SpellMap::GameDifficulty::NORMAL; }
+    void SetGameDifficulty(SpellMap::GameDifficulty difficulty);
 
     bool m_mission_end_flow = false;
     SpellMap::MissionEndRequest m_mission_end_req;
@@ -206,6 +208,8 @@ private:
     void OnLoadGameState(wxCommandEvent& event);
     void OnOptionsAudio(wxCommandEvent& event);
     void OnOptionsScreen(wxCommandEvent& event);
+    void OnOptionsDifficulty(wxCommandEvent& event);
+    void SyncDifficultyMenu();
 
     void OnResetUnitView(wxCommandEvent& event);
     void OnSelectUnitView(wxCommandEvent& event);
@@ -484,7 +488,10 @@ enum
     ID_ViewMIDI,
     ID_EditTileFlags,
     ID_OptionsAudio,
-    ID_OptionsScreen
+    ID_OptionsScreen,
+    ID_OptionsDifficultyEasy,
+    ID_OptionsDifficultyNormal,
+    ID_OptionsDifficultyHard
 };
 
 

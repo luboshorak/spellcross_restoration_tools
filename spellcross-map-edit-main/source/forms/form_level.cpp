@@ -352,6 +352,17 @@ namespace
     constexpr int kOptSliderTrackW = 140;              // x=47..186
     constexpr int kOptSliderThumbW = 10;
 
+    // The original tactical-resolution selector is not meaningful in the remake.
+    // Reuse that native framed panel for the user-requested persistent game
+    // difficulty selector instead of hiding the setting in the wx menubar.
+    constexpr OriginalUiRect kOptDifficultyInner {241, 345, 152, 62};
+    constexpr OriginalUiRect kOptDifficultyTitle {241, 348, 152, 18};
+    constexpr OriginalUiRect kOptDifficultyEasy  {244, 377, 42, 18};
+    constexpr OriginalUiRect kOptDifficultyNormal{286, 377, 64, 18};
+    constexpr OriginalUiRect kOptDifficultyHard  {350, 377, 40, 18};
+    constexpr OriginalUiRect kOptDifficultyNormalEn{258, 377, 70, 18};
+    constexpr OriginalUiRect kOptDifficultyHardEn  {330, 377, 54, 18};
+
     constexpr OriginalUiRect kOptQuickTitle {434, 339, 74, 18};
     constexpr OriginalUiRect kOptQuickOn    {434, 357, 74, 18};
     constexpr OriginalUiRect kOptQuickOff   {434, 375, 74, 18};
@@ -2712,7 +2723,8 @@ static bool LoadStrategicStateFile(
     StrategicLevelFrame::LossStats* lossStats,
     StrategicLevelFrame::MissionStats* missionStats,
     std::string* out_level_def,
-    std::string* out_timestamp);
+    std::string* out_timestamp,
+    int* out_difficulty);
 
 static void SaveStrategicStateFile(
     const std::filesystem::path& path,
@@ -2734,6 +2746,7 @@ static void SaveStrategicStateFile(
     const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
     const StrategicLevelFrame::LossStats* lossStats,
     const StrategicLevelFrame::MissionStats* missionStats,
+    int difficulty,
     const std::string& timestamp);
 
 void StrategicLevelFrame::BuildMenu()
@@ -2752,6 +2765,13 @@ void StrategicLevelFrame::BuildMenu()
     auto* options = new wxMenu();
     options->Append(ID_MENU_OPTIONS_AUDIO, (L"&Audio...\tCtrl+O"));
     options->Append(ID_MENU_OPTIONS_SCREEN, (L"&Screen...\tCtrl+B"));
+    auto* difficulty = new wxMenu();
+    const bool englishDifficultyMenu = m_spellData && m_spellData->units && m_spellData->units->IsEnglish();
+    if(!englishDifficultyMenu)
+        difficulty->AppendRadioItem(ID_MENU_OPTIONS_DIFFICULTY_EASY, L"&Easy");
+    difficulty->AppendRadioItem(ID_MENU_OPTIONS_DIFFICULTY_NORMAL, L"&Normal");
+    difficulty->AppendRadioItem(ID_MENU_OPTIONS_DIFFICULTY_HARD, L"&Hard");
+    options->AppendSubMenu(difficulty, L"Game &Difficulty");
     bar->Append(options, "&Options");
 
     auto* game = new wxMenu();
@@ -2766,11 +2786,14 @@ void StrategicLevelFrame::BuildMenu()
     bar->Append(strategicUi, "Strategic &UI");
 
     SetMenuBar(bar);
+    SyncDifficultyMenu();
 
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnSaveGame, this, ID_MENU_SAVE_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnLoadGame, this, ID_MENU_LOAD_GAME);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsAudio, this, ID_MENU_OPTIONS_AUDIO);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsScreen, this, ID_MENU_OPTIONS_SCREEN);
+    Bind(wxEVT_MENU, &StrategicLevelFrame::OnOptionsDifficulty, this,
+        ID_MENU_OPTIONS_DIFFICULTY_EASY, ID_MENU_OPTIONS_DIFFICULTY_HARD);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnToggleGameMode, this, ID_MENU_GAME_MODE_TOGGLE);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnStrategicUiCurrent, this, ID_MENU_STRATEGIC_UI_CURRENT);
     Bind(wxEVT_MENU, &StrategicLevelFrame::OnStrategicUiOriginal, this, ID_MENU_STRATEGIC_UI_ORIGINAL);
@@ -4909,9 +4932,55 @@ void StrategicLevelFrame::RefreshOriginalStrategicView()
             OriginalCenteredTextY(font, kOptSoundTitle.y, kOptSoundTitle.h),
             green, kOptSoundTitle.w, true);
 
-        // The obsolete tactical-resolution selector is intentionally not
-        // populated.  It has no live text, selection or hit action in the
-        // remake.
+        // Game difficulty.  The DOS OPTIONS artwork contains a now-obsolete
+        // tactical-resolution panel here.  Preserve its metal frame, repaint
+        // only the green CRT interior, and use that native space for the
+        // persistent difficulty selector requested by the restoration.
+        OriginalFillRect(image, kOptDifficultyInner.x, kOptDifficultyInner.y,
+            kOptDifficultyInner.w, kOptDifficultyInner.h, wxColour(4, 28, 4));
+        for (int gx = kOptDifficultyInner.x + 1;
+             gx < kOptDifficultyInner.x + kOptDifficultyInner.w; gx += 12)
+            OriginalVLine(image, gx, kOptDifficultyInner.y + 1,
+                kOptDifficultyInner.y + kOptDifficultyInner.h - 2, wxColour(16, 62, 16));
+        for (int gy = kOptDifficultyInner.y + 1;
+             gy < kOptDifficultyInner.y + kOptDifficultyInner.h; gy += 12)
+            OriginalHLine(image, kOptDifficultyInner.x + 1,
+                kOptDifficultyInner.x + kOptDifficultyInner.w - 2, gy, wxColour(16, 62, 16));
+
+        OriginalDrawSpellText(image, font, L"Game Difficulty", kOptDifficultyTitle.x,
+            OriginalCenteredTextY(font, kOptDifficultyTitle.y, kOptDifficultyTitle.h),
+            green, kOptDifficultyTitle.w, true);
+
+        const int difficultyValue = m_main
+            ? static_cast<int>(m_main->GetGameDifficulty())
+            : static_cast<int>(SpellMap::GameDifficulty::NORMAL);
+        const bool englishDifficulty = m_spellData && m_spellData->units && m_spellData->units->IsEnglish();
+        if (!englishDifficulty)
+        {
+            OriginalDrawSpellText(image, font, L"Easy", kOptDifficultyEasy.x,
+                OriginalCenteredTextY(font, kOptDifficultyEasy.y, kOptDifficultyEasy.h),
+                difficultyValue == static_cast<int>(SpellMap::GameDifficulty::EASY) ? selected : green,
+                kOptDifficultyEasy.w, true);
+            OriginalDrawSpellText(image, font, L"Normal", kOptDifficultyNormal.x,
+                OriginalCenteredTextY(font, kOptDifficultyNormal.y, kOptDifficultyNormal.h),
+                difficultyValue == static_cast<int>(SpellMap::GameDifficulty::NORMAL) ? selected : green,
+                kOptDifficultyNormal.w, true);
+            OriginalDrawSpellText(image, font, L"Hard", kOptDifficultyHard.x,
+                OriginalCenteredTextY(font, kOptDifficultyHard.y, kOptDifficultyHard.h),
+                difficultyValue == static_cast<int>(SpellMap::GameDifficulty::HARD) ? selected : green,
+                kOptDifficultyHard.w, true);
+        }
+        else
+        {
+            OriginalDrawSpellText(image, font, L"Normal", kOptDifficultyNormalEn.x,
+                OriginalCenteredTextY(font, kOptDifficultyNormalEn.y, kOptDifficultyNormalEn.h),
+                difficultyValue == static_cast<int>(SpellMap::GameDifficulty::NORMAL) ? selected : green,
+                kOptDifficultyNormalEn.w, true);
+            OriginalDrawSpellText(image, font, L"Hard", kOptDifficultyHardEn.x,
+                OriginalCenteredTextY(font, kOptDifficultyHardEn.y, kOptDifficultyHardEn.h),
+                difficultyValue == static_cast<int>(SpellMap::GameDifficulty::HARD) ? selected : green,
+                kOptDifficultyHardEn.w, true);
+        }
 
         // Quick Help live overlay inside STROPT.QH #2.  These sub-rectangles
         // are aligned to the original runtime overlay rather than offsetting
@@ -6117,12 +6186,48 @@ void StrategicLevelFrame::OnOriginalStrategicLeftDown(wxMouseEvent& ev)
                     m_spellData->sounds->channels->SetVolume(p / 100.0);
             })) return;
 
-            // STROPT.QH #1 intentionally has no action in the remake:
-            // tactical resolution switching is not supported. Consume clicks
-            // inside the original rectangle so it remains a deliberately empty
-            // panel rather than accidentally falling through to another action.
+            // Difficulty selector occupies the original, otherwise-unused
+            // tactical-resolution panel.  English data expose the original two
+            // engine modes (Normal/Hard); Czech data expose all three.
             if (wxRect(kOptResolution.x, kOptResolution.y, kOptResolution.w, kOptResolution.h).Contains(lx, ly))
+            {
+                if (!m_main)
+                    return;
+                const bool englishDifficulty = m_spellData && m_spellData->units && m_spellData->units->IsEnglish();
+                SpellMap::GameDifficulty chosen = m_main->GetGameDifficulty();
+                bool changed = false;
+                if (!englishDifficulty && wxRect(kOptDifficultyEasy.x, kOptDifficultyEasy.y,
+                    kOptDifficultyEasy.w, kOptDifficultyEasy.h).Contains(lx, ly))
+                {
+                    chosen = SpellMap::GameDifficulty::EASY;
+                    changed = true;
+                }
+                else if ((!englishDifficulty && wxRect(kOptDifficultyNormal.x, kOptDifficultyNormal.y,
+                             kOptDifficultyNormal.w, kOptDifficultyNormal.h).Contains(lx, ly)) ||
+                         ( englishDifficulty && wxRect(kOptDifficultyNormalEn.x, kOptDifficultyNormalEn.y,
+                             kOptDifficultyNormalEn.w, kOptDifficultyNormalEn.h).Contains(lx, ly)))
+                {
+                    chosen = SpellMap::GameDifficulty::NORMAL;
+                    changed = true;
+                }
+                else if ((!englishDifficulty && wxRect(kOptDifficultyHard.x, kOptDifficultyHard.y,
+                             kOptDifficultyHard.w, kOptDifficultyHard.h).Contains(lx, ly)) ||
+                         ( englishDifficulty && wxRect(kOptDifficultyHardEn.x, kOptDifficultyHardEn.y,
+                             kOptDifficultyHardEn.w, kOptDifficultyHardEn.h).Contains(lx, ly)))
+                {
+                    chosen = SpellMap::GameDifficulty::HARD;
+                    changed = true;
+                }
+
+                if (changed)
+                {
+                    m_main->SetGameDifficulty(chosen);
+                    SyncDifficultyMenu();
+                    SaveStrategicState();
+                    refreshRestored();
+                }
                 return;
+            }
 
             if (wxRect(kOptQuickHelp.x, kOptQuickHelp.y, kOptQuickHelp.w, kOptQuickHelp.h).Contains(lx, ly))
             {
@@ -6943,6 +7048,7 @@ void StrategicLevelFrame::SaveStrategicGameToPath(const std::filesystem::path& p
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         &m_lossStats, &m_stats,
+        m_main ? (int)m_main->GetGameDifficulty() : (int)SpellMap::GameDifficulty::NORMAL,
         /*timestamp*/NowIsoLocal());
 
     g_missionFlowPersistSave = prevMF;
@@ -6977,6 +7083,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
 
     std::string loaded_level_def;
     std::string ts;
+    int loadedDifficulty = m_main ? (int)m_main->GetGameDifficulty() : (int)SpellMap::GameDifficulty::NORMAL;
 
     int loadedResearchActiveId = -1;
     int loadedResearchActiveIndex = -1;
@@ -7017,7 +7124,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         &m_lossStats, &m_stats,
-        &loaded_level_def, &ts))
+        &loaded_level_def, &ts, &loadedDifficulty))
     {
         g_missionFlowPersistLoad = prevMFL;
         g_hierarchyPersistLoad = prevHL;
@@ -7031,6 +7138,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
     g_hierarchyPersistLoad = prevHL;
     g_unitStatePersistLoad = prevUL;
     g_researchPersistLoad = prevRL;
+    if (m_main) m_main->SetGameDifficulty((SpellMap::GameDifficulty)std::clamp(loadedDifficulty, 0, 2));
     m_unitStates = std::move(loadedUnitStates);
     m_researchActiveId = loadedResearchActiveId;
     m_researchActiveIndex = loadedResearchActiveIndex;
@@ -7096,6 +7204,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         std::unordered_map<int, TerritoryResourceState> terrRes;
         LossStats loadedLossStats2{};
         MissionStats loadedMissionStats2{};
+        int loadedDifficulty2 = loadedDifficulty;
 
         int resActiveId2 = -1;
         int resActiveIndex2 = -1;
@@ -7125,7 +7234,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
 
         if (!LoadStrategicStateFile(path, lvl, turn, money, research, selTerr, pl, terrMission, terrLaunch,
             units, playerCmds2, availCmds2, windowStart2, genCount2, gm2, owned2, terrRes,
-            &loadedLossStats2, &loadedMissionStats2, &def2, &ts2))
+            &loadedLossStats2, &loadedMissionStats2, &def2, &ts2, &loadedDifficulty2))
         {
             g_hierarchyPersistLoad = prevHL2;
             g_unitStatePersistLoad = prevUL2;
@@ -7138,6 +7247,7 @@ void StrategicLevelFrame::LoadStrategicGameFromSlot(int slot, bool notify)
         g_unitStatePersistLoad = prevUL2;
         g_researchPersistLoad = prevRL2;
 
+        if (m_main) m_main->SetGameDifficulty((SpellMap::GameDifficulty)std::clamp(loadedDifficulty2, 0, 2));
         auto* win = new StrategicLevelFrame(m_main, lvl, /*skipAutosave=*/true);
         win->m_lossStats = loadedLossStats2;
         win->m_stats = loadedMissionStats2;
@@ -7436,6 +7546,33 @@ void StrategicLevelFrame::OnToggleGameMode(wxCommandEvent& ev)
 
 }
 
+
+void StrategicLevelFrame::SyncDifficultyMenu()
+{
+    if(!GetMenuBar())
+        return;
+    const int d = (m_main && m_main->GetSpellMap())
+        ? (int)m_main->GetGameDifficulty()
+        : (int)SpellMap::GameDifficulty::NORMAL;
+    if(GetMenuBar()->FindItem(ID_MENU_OPTIONS_DIFFICULTY_EASY))
+        GetMenuBar()->Check(ID_MENU_OPTIONS_DIFFICULTY_EASY, d == (int)SpellMap::GameDifficulty::EASY);
+    if(GetMenuBar()->FindItem(ID_MENU_OPTIONS_DIFFICULTY_NORMAL))
+        GetMenuBar()->Check(ID_MENU_OPTIONS_DIFFICULTY_NORMAL, d == (int)SpellMap::GameDifficulty::NORMAL);
+    if(GetMenuBar()->FindItem(ID_MENU_OPTIONS_DIFFICULTY_HARD))
+        GetMenuBar()->Check(ID_MENU_OPTIONS_DIFFICULTY_HARD, d == (int)SpellMap::GameDifficulty::HARD);
+}
+
+void StrategicLevelFrame::OnOptionsDifficulty(wxCommandEvent& ev)
+{
+    if(!m_main)
+        return;
+    SpellMap::GameDifficulty d = SpellMap::GameDifficulty::NORMAL;
+    if(ev.GetId() == ID_MENU_OPTIONS_DIFFICULTY_EASY) d = SpellMap::GameDifficulty::EASY;
+    else if(ev.GetId() == ID_MENU_OPTIONS_DIFFICULTY_HARD) d = SpellMap::GameDifficulty::HARD;
+    m_main->SetGameDifficulty(d);
+    SyncDifficultyMenu();
+    SaveStrategicState();
+}
 
 void StrategicLevelFrame::OnOptionsAudio(wxCommandEvent& ev)
 {
@@ -15720,7 +15857,8 @@ static bool LoadStrategicStateFile(
     StrategicLevelFrame::LossStats* lossStats,
     StrategicLevelFrame::MissionStats* missionStats,
     std::string* out_level_def = nullptr,
-    std::string* out_timestamp = nullptr)
+    std::string* out_timestamp = nullptr,
+    int* out_difficulty = nullptr)
 
 {
     units.clear();
@@ -15764,6 +15902,7 @@ static bool LoadStrategicStateFile(
 
     if (out_level_def) out_level_def->clear();
     if (out_timestamp) out_timestamp->clear();
+    if (out_difficulty) *out_difficulty = (int)SpellMap::GameDifficulty::NORMAL;
 
     std::ifstream f(path);
     if (!f)
@@ -15804,6 +15943,9 @@ static bool LoadStrategicStateFile(
 
     if (std::regex_search(data, m, std::regex("\"selected_territory\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
         selected_territory = std::stoi(m[1].str());
+
+    if (out_difficulty && std::regex_search(data, m, std::regex("\"difficulty\"\\s*:\\s*(-?\\d+)")) && m.size() > 1)
+        *out_difficulty = std::clamp(std::stoi(m[1].str()), 0, 2);
 
     // game mode (optional)
     std::regex gm_re("\"game_mode\"\\s*:\\s*(true|false)");
@@ -16238,6 +16380,7 @@ static void SaveStrategicStateFile(
     const std::unordered_map<int, StrategicLevelFrame::TerritoryResourceState>& territoryResources,
     const StrategicLevelFrame::LossStats* lossStats,
     const StrategicLevelFrame::MissionStats* missionStats,
+    int difficulty,
     const std::string& timestamp)
 {
     std::ofstream f(path);
@@ -16252,6 +16395,7 @@ static void SaveStrategicStateFile(
     f << "  \"money\": " << money << ",\n";
     f << "  \"research\": " << research << ",\n";
     f << "  \"selected_territory\": " << selected_territory << ",\n";
+    f << "  \"difficulty\": " << std::clamp(difficulty, 0, 2) << ",\n";
     f << "  \"game_mode\": " << (gameModeEnabled ? "true" : "false") << ",\n";
 
     // Statistics are part of the campaign state. Keep them inside the same
@@ -17076,6 +17220,7 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
     int windowStart = 1;
     int genCount = 0;
     std::string level_def, ts;
+    int loadedDifficulty = m_main ? (int)m_main->GetGameDifficulty() : (int)SpellMap::GameDifficulty::NORMAL;
     bool gm = false;
     std::vector<int> owned;
     std::unordered_map<int, TerritoryResourceState> terrRes;
@@ -17115,7 +17260,7 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
         playerCmds, availCmds, windowStart, genCount,
         gm, owned, terrRes,
         &m_lossStats, &m_stats,
-        &level_def, &ts);
+        &level_def, &ts, &loadedDifficulty);
     g_missionFlowPersistLoad = prevMF;
     g_hierarchyPersistLoad = prevH;
     g_unitStatePersistLoad = prevU;
@@ -17123,6 +17268,7 @@ bool StrategicLevelFrame::LoadStrategicStateFromPath(const std::filesystem::path
 
     if (ok)
     {
+        if (m_main) m_main->SetGameDifficulty((SpellMap::GameDifficulty)std::clamp(loadedDifficulty, 0, 2));
         // Validate that this save matches current level (compare stem)
         const std::string curStem = to_lower(std::filesystem::path(m_level.source_path).stem().string());
         const std::string saveStem = to_lower(std::filesystem::path(level_def).stem().string());
@@ -17264,6 +17410,7 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     LossStats previousLossStats{};
     MissionStats previousMissionStats{};
     std::string level_def, ts;
+    int loadedDifficulty = m_main ? (int)m_main->GetGameDifficulty() : (int)SpellMap::GameDifficulty::NORMAL;
 
     // Hook research persistence
     int resActiveId = -1, resActiveIndex = -1, resAllocPerTurn = 0;
@@ -17294,7 +17441,7 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
 
     const bool ok = LoadStrategicStateFile(prevSave, m_level, turn, money, research, selected, player,
         terrM, terrL, units, playerCmds, availCmds, windowStart, genCount,
-        gm, owned, terrRes, &previousLossStats, &previousMissionStats, &level_def, &ts);
+        gm, owned, terrRes, &previousLossStats, &previousMissionStats, &level_def, &ts, &loadedDifficulty);
 
     g_hierarchyPersistLoad = prevH;
     g_unitStatePersistLoad = prevU;
@@ -17307,6 +17454,7 @@ void StrategicLevelFrame::LoadPlayerStateFromPreviousLevel()
     }
 
     // --- Transfer player state (keep current level's territory/mission defaults) ---
+    if (m_main) m_main->SetGameDifficulty((SpellMap::GameDifficulty)std::clamp(loadedDifficulty, 0, 2));
     m_money = money;
     m_research = research;
     m_player = player;
@@ -17421,6 +17569,7 @@ void StrategicLevelFrame::SaveStrategicState() const
         m_playerCommanders, m_availableCommanders, m_cmdGenWindowStartTurn, m_cmdGenCountInWindow,
         m_gameModeEnabled, m_ownedTerritories, m_territoryResources,
         &m_lossStats, &m_stats,
+        m_main ? (int)m_main->GetGameDifficulty() : (int)SpellMap::GameDifficulty::NORMAL,
         NowIsoLocal());
 
     g_missionFlowPersistSave = prevMF;
@@ -19628,9 +19777,12 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
 
         // Convert tactical manpower back to the strategic strength percentage.
         const int maxMan = survivor->unit ? survivor->unit->cnt : 0;
-        pu.health = maxMan > 0
-            ? std::max(1, (survivor->man * 100 + maxMan / 2) / maxMan)
-            : 100;
+        if (survivor->unit && survivor->unit->isSingleMan())
+            pu.health = std::clamp((1000 - survivor->damage_remainder + 5) / 10, 1, 100);
+        else
+            pu.health = maxMan > 0
+                ? std::max(1, (survivor->man * 100 + maxMan / 2) / maxMan)
+                : 100;
 
         if (rosterIdx < m_unitStates.size())
         {
@@ -19683,9 +19835,12 @@ StrategicLevelFrame::LossBlock StrategicLevelFrame::CollectAndApplyBattleResults
         pu.unit_id = s->unit->type_id;
         pu.count = 1;
         const int maxMan = s->unit ? s->unit->cnt : 0;
-        pu.health = maxMan > 0
-            ? std::max(1, (s->man * 100 + maxMan / 2) / maxMan)
-            : 100;
+        if (s->unit && s->unit->isSingleMan())
+            pu.health = std::clamp((1000 - s->damage_remainder + 5) / 10, 1, 100);
+        else
+            pu.health = maxMan > 0
+                ? std::max(1, (s->man * 100 + maxMan / 2) / maxMan)
+                : 100;
         pu.extra = s->name.empty() ? "-" : s->name;
         pu.experience = std::max(0, s->experience);
         pu.experience_level = std::clamp(s->experience_level > 0

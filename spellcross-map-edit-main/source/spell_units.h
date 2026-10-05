@@ -150,6 +150,8 @@ class SpellUnitRec
 		int utype;
 		int res1;
 		int res2;
+		// Base initiative. Original SPELCROS.EXE uses JEDNOTKY.DEF +0x45
+		// for the defensive-fire initiative contest.
 		int res3;
 
 		// special actions
@@ -216,6 +218,7 @@ class SpellUnitRec
 		int isFlashAndBones();
 		int isMetal();
 		int isInefficientToArmor();
+		int stealsActionPoints();
 		int isFireSensitive();
 		int isFireHealed();
 		int hasFireAttack();
@@ -343,6 +346,7 @@ public:
 	int Count();
 	SpellUnitRec* GetUnit(int uid);
 	vector<SpellUnitRec*> &GetUnits();
+	bool IsEnglish() const { return is_eng != 0; }
 };
 
 
@@ -519,6 +523,13 @@ public:
 	// man count (health)
 	int man;
 	int wounded;
+	// Original DOS combat keeps sub-unit damage in thousandths.  For a
+	// single-man vehicle/monster this is its 0..999 accumulated damage; for
+	// multi-man units it carries fractional casualty effect between shots.
+	int damage_remainder;
+	// Difficulty experience normalization is applied once when an OS unit
+	// actually enters the battle.
+	bool difficulty_adjusted;
 	// spec unit type (event generated units)
 	MapUnitType spec_type;
 	// unit behaviour (non-event enemy units)
@@ -577,11 +588,6 @@ public:
 	int GetAP() const { return action_points; }
 	int GetFireRange() const { const int range = (unit ? unit->fire_range : 0) + upgrade_range_bonus; return range > 0 ? range : 0; }
 
-	// --- AI aggro memory (runtime only; not serialized) ---
-	MapXY ai_aggro_pos;          // last known attacker position
-	int ai_aggro_ttl;            // enemy turns to keep chasing (0 = inactive)
-	int ai_aggro_attacker_id;    // attacker unit id if known, otherwise -1
-	bool ai_alerted = false;     // set per enemy turn: unit sees player or chain-of-sight to spotter
 
 	// pointer to next unit to draw (for correct render order)
 	MapUnit* next;

@@ -1,0 +1,45 @@
+Spellcross 0.7.9 hotfix4e - SpellMap::Tick use-after-free fix
+================================================================
+
+Crash signature
+---------------
+
+SpellMap::Tick(), source/map.cpp at the access to
+target->unit->die_action_id, with an attempted read at address 0x1B8.
+
+Root cause
+----------
+
+CleanupDeadUnits() ran at the end of every timer tick. After DamageTarget()
+reduced a target to zero men, that cleanup could ExtractUnit()/Kill() the target
+while the attack state machine still owned it through attacker->attack_target.
+The next timer tick then used the dangling pointer while completing the death
+animation/morph/UPDATE sequence.
+
+The failing address is diagnostic: on the x64 layout used by this build,
+SpellUnitRec::die_action_id is at offset 0x1B8. A read at absolute address
+0x1B8 therefore means target->unit had become null/invalid after the target's
+MapUnit storage was freed or reused.
+
+Fix
+---
+
+* CleanupDeadUnits() now defers deletion of a dead unit while it is the target
+  of an active normal or kamikaze attack. The existing UPDATE state remains the
+  owner of death animation, morph, loss statistics and linked kill events.
+* The attack state machine validates that attack_target is still present in the
+  map and has a valid SpellUnitRec before dereferencing it. If an unrelated flow
+  removed it, the attack is cancelled cleanly instead of using freed memory.
+* Kamikaze sound completion now tolerates the normal UPDATE state having already
+  deleted a lethally hit target and cleared attack_target.
+
+Only source/map.cpp is changed. The original source ZIP and the live project on
+Z: were not modified.
+
+Verification
+------------
+
+The x64 Release project compiled and linked Spellcross.exe successfully with
+MSVC. The existing post-build copy step then reported two files missing from
+the supplied ZIP (data/movie_fallback/MANIFEST.tsv and README.md); that packaging
+issue is unrelated to this code change.

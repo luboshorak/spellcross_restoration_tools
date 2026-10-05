@@ -1,0 +1,27 @@
+Spellcross 0.7.9 hotfix4h - melee/static-defence AI fix
+=======================================================
+
+Reproduction: divne2.scsave (M02_02A)
+
+Observed state:
+- enemy group 3: WaitForContact, contacted=1, target_unit_id=66
+- members: 3x Orcs (type 37, range 1) + 2x Wolves (type 41, range 1)
+- saved order: STATIC_DEFENCE (4)
+- Orcs/Wolves were entrenched at dig level 5-6 while several tiles outside their
+  attack range, despite knowing the Alliance target.
+
+Root cause:
+PlanEnemyAIGroups() used STATIC_DEFENCE as the unconditional fallback when a weak
+contacted group had no stronger refuge. Order 4 correctly means hold position, so
+range-1 Other Side units could be ordered to hold at a position from which they
+could never attack. FinishUnits() then entrenched them further, producing the
+visible "stand still and get massacred" behaviour.
+
+Fix:
+- For the weak/no-refuge fallback, STATIC_DEFENCE is now allowed only when at
+  least one living group member can actually attack the known target from its
+  current position (including indirect-fire minimum-range rules).
+- Otherwise the group receives MOBILE_DEFENCE and closes to its real weapon
+  envelope. For Orcs/Ka-orcs/Wolves this means range 1 / adjacent combat.
+- Mission-authored fixed defence (ToughDefence -> SUICIDE_DEFENCE) is unchanged.
+- Includes hotfix4f enemy-turn deadlock fix and hotfix4g range-1 mobile-defence fix.

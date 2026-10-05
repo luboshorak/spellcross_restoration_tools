@@ -118,6 +118,8 @@ public:
 
     void OnOptionsAudio(wxCommandEvent& ev);
     void OnOptionsScreen(wxCommandEvent& ev);
+    void OnOptionsDifficulty(wxCommandEvent& ev);
+    void SyncDifficultyMenu();
 
     // Experimental second strategic UI branch. This stays completely separate
     // from the existing wx strategic layout while the restored 640x480 UI is
@@ -990,6 +992,9 @@ public:
         ID_MENU_LOAD_GAME,
         ID_MENU_OPTIONS_AUDIO,
         ID_MENU_OPTIONS_SCREEN,
+        ID_MENU_OPTIONS_DIFFICULTY_EASY,
+        ID_MENU_OPTIONS_DIFFICULTY_NORMAL,
+        ID_MENU_OPTIONS_DIFFICULTY_HARD,
         ID_MENU_GAME_MODE_TOGGLE,
         ID_MENU_STRATEGIC_UI_CURRENT,
         ID_MENU_STRATEGIC_UI_ORIGINAL,

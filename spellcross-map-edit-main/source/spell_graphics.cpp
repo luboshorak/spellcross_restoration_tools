@@ -15,6 +15,7 @@
 #include "wx/dcgraph.h"
 #include "wx/dcbuffer.h"
 #include <wx/rawbmp.h>
+#include <algorithm>
 
 
 SpellGraphics::SpellGraphics()
@@ -292,7 +293,7 @@ int SpellGraphicItem::Render(uint8_t* buf,uint8_t* buf_end,int buf_x_size,int x_
 			if(y_buffer)
 				y_buf += -x_pos;
 		}
-		x_sz = min(buf_x_size - max(x_pos,0), x_sz);
+		x_sz = (std::min)(buf_x_size - (std::max)(x_pos,0), x_sz);
 		
 		if(in_black)
 		{

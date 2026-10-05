@@ -1,0 +1,9 @@
+Spellcross 0.7.9 hotfix4c - min/max compile fix
+
+Build fix on top of hotfix4b.
+
+- Keeps NOMINMAX enabled so Windows.h cannot replace C++ min/max calls with macros.
+- Replaces every active unqualified min()/max() call in the project with (std::min)/(std::max).
+- Adds <algorithm> where required.
+- No gameplay logic is intentionally changed by this hotfix.
+- Includes all hotfix4b changes (difficulty/combat + difficulty Options UI + prior compile fixes).

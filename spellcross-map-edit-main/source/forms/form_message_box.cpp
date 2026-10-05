@@ -2,6 +2,7 @@
 #include "map.h"
 
 #include <wx/rawbmp.h>
+#include <algorithm>
 
 
 FormMsgBox::FormMsgBox(wxPanel* parent,wxWindowID win_id,SpellData* spell_data,SpellMap* spell_map,SpellTextRec* text,SpellMsgOptions options,std::function<void(bool)> selection_cb)
@@ -26,11 +27,11 @@ FormMsgBox::FormMsgBox(wxPanel* parent,wxWindowID win_id,SpellData* spell_data,S
     int y_size = 0;
     for(auto & line : m_chunks)
     {
-        y_size = max(y_size, line.pos_y); 
-        x_text = max(x_text, line.size_x);
+        y_size = (std::max)(y_size, line.pos_y); 
+        x_text = (std::max)(x_text, line.size_x);
     }
     y_size += spell_data->font->GetHeight() + 4*corn->y_size;
-    x_size -= max(text_x_size - x_text,0);
+    x_size -= (std::max)(text_x_size - x_text,0);
 
 
     if(options == SpellMsgOptions::YESNO)

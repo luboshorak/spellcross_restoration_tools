@@ -758,7 +758,7 @@ int SpellMapEvents::AddSpecialEvent(SpellData *data, SpellDEF* def, SpellDefCmd*
 			unit->InitExperience(stoi(evcmd->parameters->at(3)));
 
 			// man count (health)
-			unit->man = min(stoi(evcmd->parameters->at(4)),unit->unit->cnt);
+			unit->man = (std::min)(stoi(evcmd->parameters->at(4)),unit->unit->cnt);
 
 			// unit active (to change in game mode)
 			unit->is_active = 0;

@@ -1,0 +1,11 @@
+Spellcross 0.7.9 hotfix4b
+
+Compile fixes over hotfix4 + hotfix4a Options UI:
+- DTA loader defines the buffer end pointer used by L5/L6 bounds checks.
+- MapXY geometry/query methods are const-correct for the restored tactical AI planner.
+- NOMINMAX is enforced for all Visual Studio configurations to avoid Win32 min/max macro collisions.
+- Game Difficulty is also exposed in the reconstructed in-game Options panel (hotfix4a integration).
+
+Expected menu after a successful rebuild:
+Options -> Game Difficulty -> Easy / Normal / Hard
+(English original data: Normal / Hard)

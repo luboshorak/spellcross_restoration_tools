@@ -26,6 +26,7 @@
 #include <future>
 #include <chrono>
 #include <thread>
+#include <algorithm>
 
 using namespace std;
 
@@ -123,7 +124,7 @@ RtAudio* SoundChannels::GetChannel(int is_loop)
 // set/get global volume
 void SoundChannels::SetVolume(double vol)
 {
-    volume = max(min(vol,1.0),0.0);
+    volume = (std::max)((std::min)(vol,1.0),0.0);
 }
 double SoundChannels::GetVolume()
 {
@@ -503,7 +504,7 @@ vector<SpellSoundClassFile> SpellSounds::ParseSoundClasses(string text)
                     cls.items.push_back(NULL);
             }
             // place class to proper ID position
-            max_id = max(max_id, cls.index);
+            max_id = (std::max)(max_id, cls.index);
             lines.resize(max_id+1);
             lines[cls.index] = cls;
 
@@ -722,7 +723,7 @@ int SpellSound::cb_GetFrame(int16_t *buffer, int count)
                 }
             }
 
-            int smpl_count = min(count, samples[sub_id]->samples - pos);            
+            int smpl_count = (std::min)(count, samples[sub_id]->samples - pos);            
             buffer = cb_GetSmplData(buffer, smpl_count);
             count -= smpl_count;
             continue;
@@ -800,7 +801,7 @@ int SpellSound::cb_GetFrame(int16_t *buffer, int count)
 
             }
 
-            int smpl_count = min(count,samples[sub_id]->samples - pos);
+            int smpl_count = (std::min)(count,samples[sub_id]->samples - pos);
             if(smpl_count)
                 buffer = cb_GetSmplData(buffer,smpl_count);
             count -= smpl_count;
@@ -875,8 +876,8 @@ SpellSample* SpellSound::GetSample(int id)
 // set relative volume of left/right channel
 int SpellSound::SetPanning(double left_vol,double right_vol)
 {
-    this->left_vol = (int)(65534.0*max(min(left_vol,1.0),0.0));
-    this->right_vol = (int)(65534.0*max(min(right_vol,1.0),0.0));
+    this->left_vol = (int)(65534.0*(std::max)((std::min)(left_vol,1.0),0.0));
+    this->right_vol = (int)(65534.0*(std::max)((std::min)(right_vol,1.0),0.0));
     return(0);
 }
 
@@ -953,7 +954,7 @@ int SpellSound::Play(bool auto_delete, bool loop, std::function<void(void)> fram
     parameters.firstChannel = 0;
     parameters.nChannels = 2;
     unsigned int sampleRate = fs;
-    unsigned int bufferFrames = max(32,min((int)(frame_step*fs),512))&(~1);
+    unsigned int bufferFrames = (std::max)(32,(std::min)((int)(frame_step*fs),512))&(~1);
 
     // start stream    
     dac->openStream(&parameters,NULL,RTAUDIO_SINT16,sampleRate,&bufferFrames,&SpellSound_RtCallback,(void*)this);

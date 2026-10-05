@@ -2,6 +2,7 @@
 
 //#include <filesystem>
 #include <fstream>
+#include <algorithm>
 
 using namespace std;
 
@@ -25,9 +26,9 @@ void SpellFilterRec::SetFilter(uint8_t* pal,string name,double red,double green,
 	uint8_t color[256][3];
 	for(int k = 0; k < 256; k++)
 	{
-		color[k][0] = min((unsigned)(min(red,1.0)*pal[k*3 + 0] + 100.0*max(red-1.0,0.0)),255u);
-		color[k][1] = min((unsigned)(min(green,1.0)*pal[k*3 + 1] + 100.0*max(green-1.0,0.0)),255u);
-		color[k][2] = min((unsigned)(min(blue,1.0)*pal[k*3 + 2] + 100.0*max(blue-1.0,0.0)),255u);
+		color[k][0] = (std::min)((unsigned)((std::min)(red,1.0)*pal[k*3 + 0] + 100.0*(std::max)(red-1.0,0.0)),255u);
+		color[k][1] = (std::min)((unsigned)((std::min)(green,1.0)*pal[k*3 + 1] + 100.0*(std::max)(green-1.0,0.0)),255u);
+		color[k][2] = (std::min)((unsigned)((std::min)(blue,1.0)*pal[k*3 + 2] + 100.0*(std::max)(blue-1.0,0.0)),255u);
 	}
 	
 	// make default noll filter

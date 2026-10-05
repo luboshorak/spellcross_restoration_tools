@@ -91,7 +91,7 @@ void FormMapUnits::OnResizeCanvas(wxSizeEvent& ev)
     int cnt_x = floor(surf_x/(back->x_size + PANEL_SPACING));
     int cnt_y = floor((surf_y)/(back->y_size + PANEL_SPACING));
     grid->SetCols(cnt_x);
-    grid->SetRows(min((int)ceil((double)count/cnt_x),cnt_y));
+    grid->SetRows((std::min)((int)ceil((double)count/cnt_x),cnt_y));
 
     // generate panels
     // make list of desired units

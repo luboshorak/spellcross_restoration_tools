@@ -183,7 +183,7 @@ SpellUnits::SpellUnits(uint8_t* data, int dlen, FSUarchive *fsu, SpellGraphics *
 		// some probability???
 		unit->res2 = rdu8(rec + 0x44);
 
-		// ???
+		// base initiative (used by original defensive/opportunity fire)
 		unit->res3 = rdu8(rec + 0x45);
 
 		// max fire range
@@ -466,6 +466,10 @@ int SpellUnitRec::isInefficientToArmor()
 {
 	return(!!(fire_flags & FIRE_INEFFICIENT_TO_ARMORRED));
 }
+int SpellUnitRec::stealsActionPoints()
+{
+	return(!!(fire_flags & FIRE_STEAL_AP));
+}
 int SpellUnitRec::isFireSensitive()
 {
 	return(!!(fire_flags & FIRE_FIRE_SENSITIVE));
@@ -489,19 +493,19 @@ int SpellUnitRec::CalcExperiencePts(int level)
 	// note: it's not accurate, but decently close...
 	double a = (double)exp_min;
 	double b = log(200.0*exp_max/exp_min)/log(12);
-	level = min(max(level,0),11);
+	level = (std::min)((std::max)(level,0),11);
 	int points = (int)(a*pow((double)level,b));
 	return(points);
 }
 // get base experience points for given exp. level 1-12
 int SpellUnitRec::GetExperiencePts(int level)
 {
-	return(exp_limits[min(max(level-1,0),11)]);
+	return(exp_limits[(std::min)((std::max)(level-1,0),11)]);
 }
 // get base experience points for next of given exp. level 1-12
 int SpellUnitRec::GetNextExperiencePts(int level)
 {
-	return(exp_limits[min(max(level,0),11)]);
+	return(exp_limits[(std::min)((std::max)(level,0),11)]);
 }
 
 // uses projectile when shooting to target unit (or NULL to object)?
@@ -706,7 +710,7 @@ tuple<int,int> SpellUnitRec::Render(uint8_t* buffer, uint8_t* buf_end, int buf_x
 			ang_ofs = 1;
 			ang_step = 90;
 		}
-		for (int k = 0; k < min(man,4); k++)
+		for (int k = 0; k < (std::min)(man,4); k++)
 		{
 			// calculate man placement
 			uofs_x[man_id] = sina[ang_ofs];
@@ -872,7 +876,7 @@ tuple<int,int> SpellUnitRec::Render(uint8_t* buffer, uint8_t* buf_end, int buf_x
 			// store unit highest pixel offset
 			if(uid == 0)
 				x_status_bar = 40;
-			y_status_bar = min(y_pos + (spr->y_ofs - 128) - buf_y_pos,y_status_bar);
+			y_status_bar = (std::min)(y_pos + (spr->y_ofs - 128) - buf_y_pos,y_status_bar);
 
 			// render man of unit			
 			spr->Render(buffer, buf_end, x_pos, y_pos, buf_x_size, shadow_filter, filter);
@@ -1030,6 +1034,8 @@ MapUnit::MapUnit(SpellMap *map)
 	man = 1;
 	// health (wounded men)
 	wounded = 0;
+	damage_remainder = 0;
+	difficulty_adjusted = false;
 	// morale (default full)
 	morale = 100.0;
 	// panic
@@ -1094,11 +1100,6 @@ MapUnit::MapUnit(SpellMap *map)
 	sound_move = NULL;
 
 	radar_up = false;
-	// AI aggro defaults
-	ai_aggro_pos.Clear();
-	ai_aggro_ttl = 0;
-	ai_aggro_attacker_id = -1;
-	ai_alerted = false;
 
 	altitude = 100;
 
@@ -1115,6 +1116,23 @@ MapUnit::MapUnit(SpellMap *map)
 	move_state = MapUnit::MOVE_STATE::IDLE;
 	attack_state = MapUnit::ATTACK_STATE::IDLE;
 	action_state = MapUnit::ACTION_STATE::IDLE;
+	action_step = 0;
+
+	// Attack runtime state must never contain indeterminate pointers.  These
+	// fields are transient (not part of a save) and are rebuilt when an attack
+	// starts.  Leaving attack_target uninitialised makes any later cleanup/abort
+	// path capable of treating random memory as a live MapUnit.
+	attack_target = NULL;
+	attack_target_obj.Clear();
+	attack_hit_frame = 0;
+	attack_hit_pnm = NULL;
+	attack_fire_pnm = NULL;
+	attack_fire_x_org = 0;
+	attack_fire_y_org = 0;
+	attack_fire_frame = 0;
+	attack_proj_step = 0;
+	attack_proj_delay = 0;
+	is_target = false;
 
 }
 
@@ -1142,11 +1160,18 @@ MapUnit::MapUnit(MapUnit& obj,bool relink_event_trigger)
 	action_state = ACTION_STATE::IDLE;
 	move_state = MOVE_STATE::IDLE;
 	attack_state = ATTACK_STATE::IDLE;
-	// AI aggro is runtime only
-	ai_aggro_pos.Clear();
-	ai_aggro_ttl = 0;
-	ai_aggro_attacker_id = -1;
-	ai_alerted = false;
+	action_step = 0;
+	attack_target = NULL;
+	attack_target_obj.Clear();
+	attack_hit_frame = 0;
+	attack_hit_pnm = NULL;
+	attack_fire_pnm = NULL;
+	attack_fire_x_org = 0;
+	attack_fire_y_org = 0;
+	attack_fire_frame = 0;
+	attack_proj_step = 0;
+	attack_proj_delay = 0;
+	is_target = false;
 }
 
 // clear sound refs
@@ -1184,39 +1209,50 @@ MapUnit::~MapUnit()
 // morph unit type to target (used e.g. for land/take off action)
 int MapUnit::MorphUnit(SpellUnitRec* target, int health)
 {
-	// adapth health
-	int org_max_count = unit->cnt;
-	if(unit->cnt == 1)
-		org_max_count = 100;
-	int new_max_count = target->cnt;
-	if(target->cnt == 1)
-		new_max_count = 100;
-	if(health)
+	if(!target || !unit)
+		return 1;
+
+	// Preserve health across transformations.  The DOS engine represents a
+	// one-piece unit with a 0..999 fractional damage accumulator; infantry uses
+	// active/wounded men.
+	double active_frac = 1.0;
+	double wounded_frac = 0.0;
+	if(unit->isSingleMan())
 	{
-		man = unit->GetHP()*health/100;
-		wounded = 0;
+		active_frac = man > 0 ? (1000.0 - (std::clamp)(damage_remainder, 0, 999)) / 1000.0 : 0.0;
 	}
-	else
-	{		
-		man = man*new_max_count/org_max_count;
-		wounded = wounded*new_max_count/org_max_count;
+	else if(unit->cnt > 0)
+	{
+		active_frac = (double)man / (double)unit->cnt;
+		wounded_frac = (double)wounded / (double)unit->cnt;
+	}
+	if(health > 0)
+	{
+		active_frac = (std::clamp)(health / 100.0, 0.0, 1.0);
+		wounded_frac = 0.0;
 	}
 
-	// change unit type
-	//type_id
 	unit = target;
+	if(unit->isSingleMan())
+	{
+		man = active_frac > 0.0 ? 1 : 0;
+		wounded = 0;
+		damage_remainder = man ? (std::clamp)((int)std::lround((1.0 - active_frac) * 1000.0), 0, 999) : 0;
+	}
+	else
+	{
+		man = (std::clamp)((int)std::lround(active_frac * unit->cnt), 0, unit->cnt);
+		wounded = (std::clamp)((int)std::lround(wounded_frac * unit->cnt), 0, unit->cnt - man);
+		damage_remainder = 0;
+	}
 
 	radar_up = false;
 	if(unit->isAir())
-	{
 		dig_level = 0;
-	}
 
-	// reset sound refs so engine loads new sounds for new unit type
 	if(AreSoundsDone())
 		ClearSounds();
-
-	return(0);
+	return 0;
 }
 
 // try update dig level if possible (call before end of turn)
@@ -1288,6 +1324,7 @@ int MapUnit::isActive()
 int MapUnit::ResetHealth()
 {
 	wounded = 0;
+	damage_remainder = 0;
 	man = unit->cnt;
 	return(0);
 }
@@ -1387,28 +1424,39 @@ int MapUnit::GetWalkAP()
 // has unit wounded men?
 int MapUnit::HasWounded()
 {
-	return(wounded);
+	if(unit && unit->isSingleMan())
+		return(damage_remainder > 0);
+	return(wounded > 0);
 }
 
-// heal unit
+// heal/repair unit.  Infantry converts wounded men back to active men; the
+// original single-man damage accumulator is restored to zero for vehicles and
+// other one-piece units.  The action consumes the whole turn as before.
 int MapUnit::Heal()
 {
-	// Spellcross-style self-heal: convert wounded men back to active men.
-	// In HUD this is only enabled when unit has full AP and has wounded men.
-	if(wounded <= 0)
+	if(!unit)
 		return 0;
 
-	int max_men = unit->cnt;
-	int healed = wounded;
+	int healed = 0;
+	if(unit->isSingleMan())
+	{
+		if(damage_remainder <= 0)
+			return 0;
+		healed = damage_remainder;
+		damage_remainder = 0;
+	}
+	else
+	{
+		if(wounded <= 0)
+			return 0;
+		const int max_men = unit->cnt;
+		healed = wounded;
+		man = (std::min)(man + healed, max_men);
+		wounded = (std::max)(wounded - healed, 0);
+	}
 
-	// Move wounded back to active men (cap to max).
-	man = min(man + healed, max_men);
-	wounded = max(wounded - healed, 0);
-
-	// Healing consumes the whole turn.
 	action_points = 0;
 	ResetTurnsCounter();
-
 	return healed;
 }
 
@@ -1424,8 +1472,8 @@ int MapUnit::CanSpecAction()
 int MapUnit::InitExperience(int level)
 {
 	// set experience level
-	experience_init = min(max(level,0),12);
-	experience_level = min(max(level,1),12);
+	experience_init = (std::min)((std::max)(level,0),12);
+	experience_level = (std::min)((std::max)(level,1),12);
 	
 	// generate random experience points based on level
 	// note: crude approximation of Spellcross, it seems actual experience is always somewhere around 20% of current level
@@ -1439,7 +1487,7 @@ int MapUnit::InitExperience(int level)
 int MapUnit::AddExperience(int points)
 {
 	int old_level = experience_level;
-	experience = min(experience + points, unit->GetExperiencePts(12));
+	experience = (std::min)(experience + points, unit->GetExperiencePts(12));
 	experience_level = 1;
 	while(experience >= unit->GetNextExperiencePts(experience_level))
 		experience_level++;
@@ -1448,13 +1496,13 @@ int MapUnit::AddExperience(int points)
 // add points of experience based on target unit killed men
 int MapUnit::AddExperience(MapUnit* target,int killed)
 {	
-	return(AddExperience((killed*max(target->experience,target->unit->GetNextExperiencePts(1)/2))/target->unit->cnt));
+	return(AddExperience((killed*(std::max)(target->experience,target->unit->GetNextExperiencePts(1)/2))/target->unit->cnt));
 }
 // update morale level with limits protection
 int MapUnit::UpdateModale(double points)
 {
 	double old = morale;
-	morale = max(min(morale + points,100.0),0.0);
+	morale = (std::max)((std::min)(morale + points,100.0),0.0);
 
 	// Arm panic only on transition from >0 to 0 (so it happens once)
 	if (old > 0.0 && morale <= 0.0)
@@ -1517,20 +1565,12 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 	// hit points (in pixels)
 	int hp = 0;
 
-	// Single-man: "wounded" is HP damage (0..GetHP), not lost men
+	// Original single-man units keep damage in thousandths rather than in the
+	// infantry wounded counter.
 	if (unit->isSingleMan())
 	{
-		int hp_max = unit->GetHP();
-		if (hp_max < 1) hp_max = 1;
-
-		int hp_wound = wounded;
-		if (hp_wound < 0) hp_wound = 0;
-		if (hp_wound > hp_max) hp_wound = hp_max;
-
-		int hp_cur = hp_max - hp_wound;
-		if (hp_cur < 0) hp_cur = 0;
-
-		hp = (hp_w * hp_cur) / hp_max;
+		const int hp_cur = (std::max)(0, 1000 - damage_remainder);
+		hp = (hp_w * hp_cur) / 1000;
 	}
 	else
 	{
@@ -1541,7 +1581,7 @@ int MapUnit::Render(Terrain* data,uint8_t* buffer,uint8_t* buf_end,int buf_x_pos
 	hp = (std::max)(0, (std::min)(hp_w, hp));
 
 	// action points (in pixels)
-	int ap = min((hp_w*action_points)/GetMaxAP(),hp_w);
+	int ap = (std::min)((hp_w*action_points)/GetMaxAP(),hp_w);
 	
 	// render action point (aliance only)
 	if(!is_enemy)
@@ -1661,7 +1701,7 @@ void MapUnit::RenderVertBar(uint8_t* buffer,uint8_t* buf_end,int buf_x_size,int 
 {
 	if (level <= 0.0)
 		return;
-	int pix = min(max((int)(level*size_y), 1),size_y);
+	int pix = (std::min)((std::max)((int)(level*size_y), 1),size_y);
 	for(int y = pos_y + size_y - 1; y > pos_y + size_y - pix; y--)
 		for(int x = pos_x; x < pos_x+size_x; x++)
 		{
@@ -2024,7 +2064,7 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapSprite *target)
 		return(AttackResult::Missed);
 	
 	// reduce HP
-	target->hp = max(target->hp - hit, 0);
+	target->hp = (std::max)(target->hp - hit, 0);
 
 	if(!target->hp)
 		return(AttackResult::Kill);
@@ -2035,199 +2075,279 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapSprite *target)
 // apply damage model for attack to target unit
 MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 {
-	if(!target)
-		return(AttackResult::Missed);
+	if(!target || !unit || !target->unit)
+		return AttackResult::Missed;
 
 	ResetTurnsCounter();
-
-	// if someone attacks this unit, it must not keep "idle/dig" progress
 	target->ResetTurnsCounter();
 
-	// attack strength
-	double attack = GetAttack(target);
-	
-	// reduce attack by man state of ATTACKER unit (not target)
-	if (unit->isSingleMan())
-		attack *= (double)(unit->GetHP() - wounded) / unit->GetHP();
+	const int base_attack = GetAttack(target);
+	if(base_attack <= 0)
+	{
+		// In the original game even an incoming shot interrupts digging.
+		target->dig_level = (std::max)(target->dig_level - 1, 0);
+		return AttackResult::Missed;
+	}
+
+	auto rnd = [](int exclusive) -> int
+	{
+		return exclusive > 0 ? (std::rand() % exclusive) : 0;
+	};
+	auto rank_of = [](const MapUnit* u) -> int
+	{
+		return u ? (std::clamp)(u->experience_level - 1, 0, 11) : 0;
+	};
+
+	// ---------------------------------------------------------------------
+	// 1) ORIGINAL HIT CHANCE (SPELCROS.EXE 0x7C690)
+	// ---------------------------------------------------------------------
+	const int base_defence = target->GetDefence();
+	const int effective_defence = base_defence + 5 * (std::max)(0, target->dig_level);
+	int hit_chance = 100;
+
+	if(!unit->isActionKamikaze() && !(unit->hasFireAttack() && target->unit->isFireSensitive()))
+	{
+		const int diff = base_attack - effective_defence;
+		if(diff >= 0)
+		{
+			if(diff > 8)
+				hit_chance = 100;
+			else
+				hit_chance = 80 + (diff * diff * 80) / 64;
+		}
+		else
+		{
+			const int d = -diff;
+			if(d > 12)
+				hit_chance = 20;
+			else
+				hit_chance = 80 - (d * d * 60) / 144;
+		}
+
+		// Morale below 90 scales accuracy from 60% at zero morale to 100% at 90.
+		if(morale < 90.0)
+		{
+			const int m = (std::clamp)((int)std::lround(morale), 0, 90);
+			const int factor = 60 + (m * 40) / 90;
+			hit_chance = (hit_chance * factor) / 100;
+		}
+	}
+
+	if(map && is_enemy != target->is_enemy)
+	{
+		const auto difficulty = map->GetGameDifficulty();
+		if(difficulty == SpellMap::GameDifficulty::EASY && !is_enemy && target->is_enemy)
+			hit_chance += rnd(16);
+		else if(difficulty == SpellMap::GameDifficulty::HARD && is_enemy && !target->is_enemy)
+			hit_chance += rnd(16);
+	}
+	hit_chance = (std::clamp)(hit_chance, 20, 100);
+
+	// The original loses one entrenchment level after every incoming shot,
+	// including a miss.
+	target->dig_level = (std::max)(target->dig_level - 1, 0);
+
+	if(rnd(100) > hit_chance)
+		return AttackResult::Missed;
+
+	// ---------------------------------------------------------------------
+	// 2) ORIGINAL EFFECT / LETHALITY (SPELCROS.EXE 0x7C9B8)
+	// Normal attacks randomize attack and defence independently by 0..5 here.
+	// ---------------------------------------------------------------------
+	int effect_attack = base_attack + rnd(6);
+	int effect_defence = effective_defence + rnd(6);
+	int lethality = 0;
+	const int effect_diff = effect_attack - effect_defence;
+	if(effect_diff >= 0)
+	{
+		if(effect_diff > 14)
+			lethality = 100;
+		else
+			lethality = 16 + (effect_diff * effect_diff * 84) / 196;
+	}
 	else
-		attack *= (double)man / unit->GetHP();
+	{
+		const int d = -effect_diff;
+		if(d > 10)
+			lethality = 1;
+		else
+			lethality = 16 - (d * d * 16) / 100;
+	}
 
-	// target defence
-	double defence = target->GetDefence();
+	if(unit->hasFireAttack() && target->unit->isFireSensitive())
+		lethality += 10;
 
-	// defence bonus by dig level (cover helps a LOT vs kills)
-	double cover = (double)target->dig_level;
-	double def_wound = defence * (1.0 + cover * 0.7);
-	double def_kill = defence * (1.0 + cover * 1.6);   // <- silnější než wound
+	if(map && is_enemy != target->is_enemy)
+	{
+		const auto difficulty = map->GetGameDifficulty();
+		if(difficulty == SpellMap::GameDifficulty::HARD)
+			lethality += is_enemy ? rnd(6) : -rnd(6);
+		else if(difficulty == SpellMap::GameDifficulty::EASY)
+			lethality += is_enemy ? -rnd(6) : rnd(6);
+	}
+	lethality = (std::clamp)(lethality, 4, 100);
 
-	// morale penalty
-	defence *= (0.7 + 0.01*target->morale*0.3);
+	// AP-draining attacks (fire flag 0x04) use the same hit/effect rolls but
+	// branch out before the casualty model in SPELCROS.EXE 0x785B6.
+	if(unit->stealsActionPoints())
+	{
+		const int ap_loss = (std::max)(1, (target->GetMaxAP() * lethality) / 100);
+		target->action_points = (std::max)(0, target->action_points - ap_loss);
+		return AttackResult::Hit;
+	}
 
-	// conditional bonuses/penalties
-	double bonus = 1.0;
-		
-	// penalize armored attacks?
-	if(target->unit->isArmored() && unit->isInefficientToArmor())
-		bonus *= 0.7;
+	// ---------------------------------------------------------------------
+	// 3) ORIGINAL PARTIAL-DAMAGE / CASUALTY ACCUMULATOR
+	// SPELCROS.EXE 0x786E2..0x789B7 starts from
+	//     target_active * lethality
+	// and multiplies it by a current-strength ratio.  Single-piece units use
+	// a 0..999 sub-unit damage accumulator instead of a fractional man count.
+	// ---------------------------------------------------------------------
+	const int attacker_max = (std::max)(1, unit->cnt);
+	const int target_max = (std::max)(1, target->unit->cnt);
+	const int attacker_active = (std::max)(0, man);
+	const int target_active = (std::max)(0, target->man);
+	if(attacker_active <= 0 || target_active <= 0)
+		return AttackResult::Hit;
 
-	// bonus of fire sensitivity
-	if(target->unit->isFireSensitive() && unit->hasFireAttack())
-		bonus *= 1.5;
+	double numerator = 0.0;
+	double denominator = 1.0;
+	if(attacker_max != 1 && target_max != 1)
+	{
+		numerator = (double)attacker_active * (double)target_max;
+		denominator = (double)attacker_max * (double)target_active;
+	}
+	else if(attacker_max != 1 && target_max == 1)
+	{
+		numerator = (double)attacker_active * 1000.0;
+		denominator = (double)(1000 - (std::clamp)(target->damage_remainder, 0, 999)) * (double)attacker_max;
+	}
+	else if(attacker_max == 1 && target_max != 1)
+	{
+		numerator = (double)(1000 - (std::clamp)(damage_remainder, 0, 999)) * (double)target_max;
+		denominator = (double)target_active * 1000.0;
+	}
+	else
+	{
+		numerator = (double)(1000 - (std::clamp)(damage_remainder, 0, 999)) * 1000.0;
+		denominator = (double)(1000 - (std::clamp)(target->damage_remainder, 0, 999)) * 1000.0;
+	}
+	if(denominator <= 0.0)
+		return AttackResult::Hit;
 
-	double morale = this->morale*0.01;
-	
-	// randomize attack
-	double rng_attack = randgman(3.5,2.0,3.0/morale,0.7*morale)*attack*bonus;
+	double raw_effect = ((double)target_active * (double)lethality) * (numerator / denominator) / 100.0;
+	raw_effect += (double)(std::clamp)(target->damage_remainder, 0, 999) / 1000.0;
 
+	int affected = (int)raw_effect; // DOS helper truncates positive values toward zero
+	const int raw_affected = affected;
+	int new_remainder = (int)((raw_effect - (double)affected) * 1000.0);
+	target->damage_remainder = (std::clamp)(new_remainder, 0, 999);
 
-	// special (morale / fear / paralyze) can work even with zero/low damage
+	// A hit may only add fractional damage this time.  It still counts as a hit.
+	if(affected <= 0)
+	{
+		// Original morale damage is based on the hit's lethality, not only kills.
+		int morale_loss = ((19 - rank_of(target)) * lethality) / 50;
+		if(target->is_enemy)
+			morale_loss /= 4;
+		if(morale_loss <= 0) morale_loss = 1;
+		target->UpdateModale(-(double)morale_loss);
+		return AttackResult::Hit;
+	}
+
+	const int before_active = target->man;
+	affected = (std::clamp)(affected, 0, before_active);
+
+	// Original killed-vs-wounded split.  Hard adds a second 0..39% kill roll.
+	double kill_fraction = (double)(lethality + rnd(40)) / 100.0;
+	if(map && map->GetGameDifficulty() == SpellMap::GameDifficulty::HARD)
+		kill_fraction += (double)rnd(40) / 100.0;
+	if(unit->type_id == 0x3c)
+		kill_fraction = 1.0;
+	kill_fraction = (std::clamp)(kill_fraction, 0.0, 1.0);
+	int killed = (int)(kill_fraction * affected);
+	killed = (std::clamp)(killed, 0, affected);
+
+	if(target->unit->isSingleMan())
+	{
+		// One accumulated whole unit of effect destroys the vehicle/monster.
+		if(affected >= 1)
+		{
+			target->man = 0;
+			target->wounded = 0;
+			target->damage_remainder = 0;
+		}
+	}
+	else
+	{
+		target->man = (std::max)(0, target->man - affected);
+		target->wounded += (affected - killed);
+		if(target->man <= 0)
+			target->wounded = 0;
+	}
+
+	int level_up = false;
+	if(killed > 0)
+		level_up = AddExperience(target, killed);
+	if(level_up)
+		PlayLevelUp();
+
+	// Original target morale loss (0x7CDAF).
+	int morale_loss = ((19 - rank_of(target)) * lethality) / 50;
+	if(target->is_enemy)
+		morale_loss /= 4;
+	if(morale_loss <= 0) morale_loss = 1;
+	target->UpdateModale(-(double)morale_loss);
+
+	// Original attacker morale gain (0x7CE51), tied to relative experience and
+	// the severity of the hit.  Keep it integer-like just as the DOS routine did.
+	if(affected > 0)
+	{
+		const int ar = rank_of(this);
+		const int tr = rank_of(target);
+		int gain_base = 0;
+		if(tr > ar)
+			gain_base = lethality * (tr - ar);
+		else
+			gain_base = lethality / (ar - tr + 1);
+		int morale_gain = gain_base / (ar + 1);
+		morale_gain = (std::clamp)(morale_gain, 1, 30);
+		// DOS grants the destruction bonus only when the un-clamped calculated
+		// effect exceeds the target's remaining active count.
+		if(before_active < raw_affected)
+			morale_gain += 10 + 10 / (ar + 1);
+		if(is_enemy)
+			morale_gain *= 2;
+		UpdateModale((double)morale_gain);
+	}
+
+	// Existing special morale/fear/paralyze actions remain wired to the remaster
+	// action system.  Their dedicated DOS formulas are a separate subsystem.
 	const int act = unit->action_id;
 	const bool has_morale_spec =
 		(act == SpellUnitRec::SPEC_ACT_LOWER_MORALE ||
 		 act == SpellUnitRec::SPEC_ACT_DRAGON_FEAR ||
 		 act == SpellUnitRec::SPEC_ACT_PARALYZE);
-
-	auto apply_morale_spec = [&]()
+	if(has_morale_spec)
 	{
-		if (!has_morale_spec)
-			return;
-
-		int radius = unit->action_params[0];   // par1 = range (if >1 we do small AoE)
-		int level = unit->action_params[1];    // par2 = intensity/level
-
-		if (radius <= 0) radius = 1;
-
-		// intensity tuning: když mají data malé číslo, udělá to smysluplný drop
-		double drop = (level > 0) ? (level * 5.0) : 15.0;
-
-		if (!map || radius <= 1)
-		{
-			// conservative: affect only the primary target
+		int radius = unit->action_params[0];
+		int level = unit->action_params[1];
+		if(radius <= 0) radius = 1;
+		const double drop = (level > 0) ? (level * 5.0) : 15.0;
+		if(!map || radius <= 1)
 			target->UpdateModale(-drop);
-		}
 		else
 		{
-			// optional AoE around the struck target (fear-like behavior)
-			const MapXY center = (act == SpellUnitRec::SPEC_ACT_PARALYZE) ? this->coor : target->coor;
-			for (auto* u : map->units)
+			const MapXY center = (act == SpellUnitRec::SPEC_ACT_PARALYZE) ? coor : target->coor;
+			for(auto* u : map->units)
 			{
-				if (!u) continue;
-				if (u->is_enemy == this->is_enemy) continue;
-				if (u->coor.Distance(center) > radius) continue;
+				if(!u || u->is_enemy == is_enemy || u->coor.Distance(center) > radius) continue;
 				u->UpdateModale(-drop);
 			}
 		}
-	};
-
-
-	// damage model
-	double wound = (int)(rng_attack - 0.7 * def_wound);
-	double kill = (int)(rng_attack - 1.0 * def_kill);
-	if(wound < 0.0 && kill < 0.0)
-	{
-		if (has_morale_spec)
-		{
-			apply_morale_spec();
-			return(AttackResult::Hit);
-		}
-		return(AttackResult::Missed);
 	}
 
-	// reduce dig level of target
-	target->dig_level = max(target->dig_level - 1, 0);
-
-	wound = max(wound,0.0);
-	kill = max(kill,0.0);
-
-	// --- anti one-shot caps ---
-	if (!target->unit->isSingleMan())
-	{
-		const int hp = target->unit->GetHP();
-
-		if (target->dig_level > 0)
-		{
-			// entrenched: strong cap (max 25% kills, 35% wounds per hit)
-			int max_kill = (int)ceil(hp * 0.25);
-			if (max_kill < 1) max_kill = 1;
-			if (kill > (double)max_kill) kill = (double)max_kill;
-
-			int max_wound = (int)ceil(hp * 0.35);
-			if (max_wound < 1) max_wound = 1;
-			if (wound > (double)max_wound) wound = (double)max_wound;
-		}
-		else
-		{
-			// not entrenched: softer cap to prevent absurd one-shot wipes
-			// (max 40% kills, 50% wounds per hit)
-			int max_kill = (int)ceil(hp * 0.40);
-			if (max_kill < 1) max_kill = 1;
-			if (kill > (double)max_kill) kill = (double)max_kill;
-
-			int max_wound = (int)ceil(hp * 0.50);
-			if (max_wound < 1) max_wound = 1;
-			if (wound > (double)max_wound) wound = (double)max_wound;
-		}
-	}
-
-	// reduce HP
-	int level_up = false;
-	if(target->unit->isSingleMan())
-	{
-		// for single-man unit only wounding
-		target->wounded = min(target->wounded + (int)kill, target->unit->GetHP());
-		if(target->wounded >= target->unit->GetHP())
-		{
-			target->man = 0;
-						
-			// get target's experience
-			level_up = AddExperience(target,1);			
-		}
-	}
-	else
-	{
-		// for multi-man units
-		int kill_ref = target->man + target->wounded;
-
-		// kill some
-
-		target->wounded -= (int)(0.5*kill);
-		if(target->wounded < 0)
-		{
-			kill += (double)(-target->wounded);
-			target->wounded = 0;
-		}
-		else
-			kill -= 0.5*kill;
-		target->man = max(target->man - (int)kill, 0);
-				
-		// wound some
-		int to_wound = min((int)wound,target->man);
-		target->man -= to_wound;
-		target->wounded += to_wound;
-		if(!target->man)
-			target->wounded = 0;
-
-		// total killed in this round
-		int men_killed = kill_ref - target->man - target->wounded;
-
-		// get target's experience
-		level_up = AddExperience(target,men_killed);
-		
-		// steal morale of target
-		target->UpdateModale(-10.0*men_killed/target->unit->cnt);
-	}
-
-	// play level up sound?
-	if(level_up)
-		PlayLevelUp();
-
-	// apply special morale/fear/paralyze (also for special-only attackers)
-	apply_morale_spec();
-
-	if(!target->man)
-		return(AttackResult::Kill);
-	else
-		return(AttackResult::Hit);
+	return target->man <= 0 ? AttackResult::Kill : AttackResult::Hit;
 }
 
 // check if unit is dead
