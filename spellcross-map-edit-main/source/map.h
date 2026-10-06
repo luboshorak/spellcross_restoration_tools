@@ -362,6 +362,12 @@ public:
 		bool PanicTurnStep();
 		bool StartMove_NoRangeCheck(MapUnit* unit, MapXY target);
 		bool StartAttack_NoHUD(MapUnit* attacker, MapUnit* target);
+		bool TryEnemyMoraleSpecialAction(MapUnit* unit);
+		bool StartMoraleSpecialAction(MapUnit* unit);
+		// Restored DOS area specials: morale/paralysis/freeze/dragon fear/Breorn roar.
+		void ApplyMoraleSpecialAction(MapUnit* unit);
+		void ApplyCommanderDeathMorale(MapUnit* commander_host);
+		bool MovePanickedEnemy(MapUnit* unit);
 		bool IsUnitBusy(MapUnit* unit);
 		// Original Spellcross defensive/opportunity fire. Either side may react
 		// when a moving opponent enters previously unseen direct sight while the
@@ -449,6 +455,11 @@ public:
 		// unit range map		
 		int unit_range_view_mode;
 		int unit_range_view_mode_lock;
+		// Original temporary range modes (M/A): preserve the SPACE-selected mode
+		// while a temporary key is being held.
+		int unit_range_temp_active = 0;
+		int unit_range_temp_saved_mode = 0;
+		int unit_range_temp_saved_lock = 0;
 		uint8_t *GetUnitRangeFilter(int x,int y);
 		uint8_t *default_filter;
 		uint8_t *render_filter;
@@ -993,6 +1004,8 @@ public:
 		//vector<AStarNode> FindUnitPath(MapUnit* unit,MapXY target);
 		//int FindUnitRange(MapUnit* unit);
 		int SetUnitRangeViewMode(int mode);
+		int BeginTemporaryUnitRangeViewMode(int mode);
+		int EndTemporaryUnitRangeViewMode();
 		int CanUnitMove(MapXY target);
 		int MoveUnit(MapXY target);		
 		int ResetUnitsAP();

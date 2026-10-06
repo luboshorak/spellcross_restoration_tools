@@ -586,12 +586,6 @@ int SpellUnitRec::canAttack(SpellUnitRec* target)
 	if(!target)
 		return(false);
 
-	// special attackers that only apply morale/fear/paralyze should still be able to "attack"
-	if(action_id == SPEC_ACT_LOWER_MORALE ||
-		action_id == SPEC_ACT_DRAGON_FEAR ||
-		action_id == SPEC_ACT_PARALYZE)
-		return(true);
-
 	if(target->isLight() && !attack_light)
 		return(false);
 	if(target->isArmored() && !attack_armored)
@@ -1038,8 +1032,10 @@ MapUnit::MapUnit(SpellMap *map)
 	difficulty_adjusted = false;
 	// morale (default full)
 	morale = 100.0;
-	// panic
+	// morale/status state
 	panic_turns = 0;
+	paralyze_turns = 0;
+	freeze_turns = 0;
 	// spec unit type
 	spec_type = MapUnitType::Unknown;
 	// unit behave
@@ -1295,10 +1291,11 @@ void MapUnit::ClearDigLevel()
 
 void MapUnit::ResetTurnsCounter()
 {
-	// -1 je �mysln�: v End-of-turn se v�dy inkrementuje,
-	// tak�e jednotka co n�co d�lala skon�� po inkrementu na 0 (ne na 1).
-	dig_turns = -1;
-	idle_turns = -1;
+	// DOS Spellcross tracks uninterrupted inactivity with ordinary zero-based
+	// counters.  Whether the just-finished round counts as idle is decided from
+	// remaining AP at round end, not from a separate "acted" sentinel.
+	dig_turns = 0;
+	idle_turns = 0;
 }
 
 
@@ -1371,6 +1368,8 @@ int MapUnit::GetAPperFire()
 // get fires count
 int MapUnit::GetFireCount(int ext_ap)
 {
+	if (paralyze_turns > 0 || freeze_turns > 0)
+		return 0;
 	int ap_per_fire = GetAPperFire();
 	if(!ap_per_fire)
 		return(0);
@@ -1463,6 +1462,8 @@ int MapUnit::Heal()
 // can do special action (if enough AP)
 int MapUnit::CanSpecAction()
 {
+	if (paralyze_turns > 0 || freeze_turns > 0)
+		return(false);
 	if(!unit->hasSpecAction())
 		return(false);
 	return(action_points >= unit->action_ap);
@@ -1504,12 +1505,15 @@ int MapUnit::UpdateModale(double points)
 	double old = morale;
 	morale = (std::max)((std::min)(morale + points,100.0),0.0);
 
-	// Arm panic only on transition from >0 to 0 (so it happens once)
-	if (old > 0.0 && morale <= 0.0)
+	// Original threshold is 20 morale.  Crossing it arms one uncontrolled
+	// flight phase; if end-of-round recovery lifts the unit above 20 before its
+	// own phase starts, the pending panic is cancelled.
+	if (old > 20.0 && morale <= 20.0)
 		panic_turns = 2;
+	else if (morale > 20.0 && panic_turns == 2)
+		panic_turns = 0;
 
-	// flee level?
-	return(morale < 25.0);
+	return(morale <= 20.0);
 }
 
 
@@ -2045,11 +2049,9 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapSprite *target)
 
 	ResetTurnsCounter();
 
-	// being attacked should interrupt digging/idle progress (even if the shot misses)
-	if (auto* tu = dynamic_cast<MapUnit*>(target))
-	{
-		tu->ResetTurnsCounter();
-	}
+	// The target does NOT reset its digging timer here.  Original Spellcross
+	// only removes an already-built entrenchment level for an incoming attack;
+	// being fired upon by itself does not spend the defender's AP.
 
 	// attack strength
 	double attack = GetAttack();
@@ -2078,13 +2080,16 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 	if(!target || !unit || !target->unit)
 		return AttackResult::Missed;
 
+	// Firing is activity for the attacker, so it cannot make digging progress
+	// this round.  Do not reset the defender's dig/idle timer: the manual
+	// explicitly ties digging progress to standing still without spending AP.
 	ResetTurnsCounter();
-	target->ResetTurnsCounter();
 
 	const int base_attack = GetAttack(target);
 	if(base_attack <= 0)
 	{
-		// In the original game even an incoming shot interrupts digging.
+		// Every incoming attack removes one finished entrenchment level, even
+		// when the shot itself cannot damage the target.
 		target->dig_level = (std::max)(target->dig_level - 1, 0);
 		return AttackResult::Missed;
 	}
@@ -2132,6 +2137,13 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 			hit_chance = (hit_chance * factor) / 100;
 		}
 	}
+
+	// Original frozen-state accuracy modifiers (SPELCROS.EXE 0x7F73D/0x7F765):
+	// a frozen target is easier to hit (+30), while a frozen attacker suffers -40.
+	if (target->freeze_turns > 0)
+		hit_chance += 30;
+	if (freeze_turns > 0)
+		hit_chance -= 40;
 
 	if(map && is_enemy != target->is_enemy)
 	{
@@ -2321,31 +2333,6 @@ MapUnit::AttackResult MapUnit::DamageTarget(MapUnit* target)
 		UpdateModale((double)morale_gain);
 	}
 
-	// Existing special morale/fear/paralyze actions remain wired to the remaster
-	// action system.  Their dedicated DOS formulas are a separate subsystem.
-	const int act = unit->action_id;
-	const bool has_morale_spec =
-		(act == SpellUnitRec::SPEC_ACT_LOWER_MORALE ||
-		 act == SpellUnitRec::SPEC_ACT_DRAGON_FEAR ||
-		 act == SpellUnitRec::SPEC_ACT_PARALYZE);
-	if(has_morale_spec)
-	{
-		int radius = unit->action_params[0];
-		int level = unit->action_params[1];
-		if(radius <= 0) radius = 1;
-		const double drop = (level > 0) ? (level * 5.0) : 15.0;
-		if(!map || radius <= 1)
-			target->UpdateModale(-drop);
-		else
-		{
-			const MapXY center = (act == SpellUnitRec::SPEC_ACT_PARALYZE) ? coor : target->coor;
-			for(auto* u : map->units)
-			{
-				if(!u || u->is_enemy == is_enemy || u->coor.Distance(center) > radius) continue;
-				u->UpdateModale(-drop);
-			}
-		}
-	}
 
 	return target->man <= 0 ? AttackResult::Kill : AttackResult::Hit;
 }

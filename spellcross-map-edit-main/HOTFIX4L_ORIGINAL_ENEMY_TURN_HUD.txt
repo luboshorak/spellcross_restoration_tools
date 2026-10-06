@@ -1,0 +1,8 @@
+Spellcross 0.7.9 hotfix4l - original enemy turn HUD
+
+- Restores the original tactical-map enemy-turn bottom panel from COMMON.FS.
+- Uses the existing LISTA_1.LZ resource (already loaded as wm_hud_enemy).
+- While enemy_turn_running is active, the regular selected/cursor unit HUD is not rendered.
+- Interactive HUD buttons are removed for the duration of the enemy turn.
+- AI may keep changing its internal selected unit for its state machine, but those details are no longer exposed in the player HUD.
+- If LISTA_1 is unavailable, the normal base panel is used as a visual fallback while unit details/buttons remain hidden.

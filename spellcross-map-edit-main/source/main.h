@@ -183,6 +183,8 @@ public:
 
 private:
     bool m_applicationExitInProgress = false;
+    bool m_rangeMoveKeyDown = false;
+    bool m_rangeAttackKeyDown = false;
 
     void OnMapConsoleCommand();
     void OnViewLayer(wxCommandEvent& event);
@@ -266,6 +268,7 @@ private:
     void OnCanvasMouseEnter(wxMouseEvent& event);
     void OnCanvasMouseWheel(wxMouseEvent& event);
     void OnCanvasKeyDown(wxKeyEvent& event);
+    void OnCanvasKeyUp(wxKeyEvent& event);
     void OnCanvasLMouseDown(wxMouseEvent& event);
     void OnCanvasPopupSelect(wxCommandEvent& event);
     void OnUnitClick_cb(int action);

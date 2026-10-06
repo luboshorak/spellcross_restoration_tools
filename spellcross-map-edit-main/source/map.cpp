@@ -140,7 +140,7 @@ namespace
 namespace scsave
 {
 	static constexpr uint32_t MAGIC = 0x56435353; // 'SSCV'
-	static constexpr uint32_t VERSION = 6;
+	static constexpr uint32_t VERSION = 7;
 
 	template<typename T>
 	inline void write(std::ostream& os, const T& v)
@@ -244,6 +244,11 @@ static void scsave_write_unit(std::ostream& os, SpellData* data, MapUnit* u, Spe
 	scsave::write(os, (int32_t)u->dig_level);
 	scsave::write(os, (int32_t)u->dig_turns);
 	scsave::write(os, (int32_t)u->idle_turns);
+	// v7: complete morale/status state.
+	scsave::write(os, (double)u->morale);
+	scsave::write(os, (int32_t)u->panic_turns);
+	scsave::write(os, (int32_t)u->paralyze_turns);
+	scsave::write(os, (int32_t)u->freeze_turns);
 
 	scsave::write(os, (uint8_t)u->is_active);
 	scsave::write(os, (uint8_t)u->is_enemy);
@@ -298,6 +303,8 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	int32_t exp = 0, exp_lvl = 1, man = 1, wounded = 0, damage_remainder = 0, ap = 1;
 	uint8_t difficulty_adjusted = 0;
 	int32_t dig_lvl = 0, dig_turns = 0, idle_turns = 0;
+	double morale = 100.0;
+	int32_t panic_turns = 0, paralyze_turns = 0, freeze_turns = 0;
 	uint8_t is_active = 0, is_enemy = 0, hide = 0, was_moved = 0, is_event = 0, was_seen = 0;
 	int32_t is_visible = 0;
 	uint8_t radar_up = 0;
@@ -328,6 +335,11 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	}
 	if (!scsave::read(is, ap)) return false;
 	if (!scsave::read(is, dig_lvl) || !scsave::read(is, dig_turns) || !scsave::read(is, idle_turns)) return false;
+	if (version >= 7)
+	{
+		if (!scsave::read(is, morale) || !scsave::read(is, panic_turns) ||
+			!scsave::read(is, paralyze_turns) || !scsave::read(is, freeze_turns)) return false;
+	}
 
 	if (!scsave::read(is, is_active) || !scsave::read(is, is_enemy) || !scsave::read(is, hide) || !scsave::read(is, was_moved) ||
 		!scsave::read(is, is_event) || !scsave::read(is, was_seen) || !scsave::read(is, is_visible)) return false;
@@ -385,8 +397,12 @@ static bool scsave_read_unit(std::istream& is, uint32_t version, SpellMap* map, 
 	u->action_points = ap;
 
 	u->dig_level = dig_lvl;
-	u->dig_turns = dig_turns;
-	u->idle_turns = idle_turns;
+	u->dig_turns = (std::max)(0, (int)dig_turns);
+	u->idle_turns = (std::max)(0, (int)idle_turns);
+	u->morale = (std::clamp)(morale, 0.0, 100.0);
+	u->panic_turns = (std::clamp)((int)panic_turns, 0, 2);
+	u->paralyze_turns = (std::max)(0, (int)paralyze_turns);
+	u->freeze_turns = (std::max)(0, (int)freeze_turns);
 
 	u->is_active = is_active;
 	u->is_enemy = is_enemy;
@@ -6874,19 +6890,51 @@ int SpellMap::SetUnitRangeViewMode(int mode)
 
 	if (mode == UNIT_RANGE_INCREMENT)
 	{
-		// cycle through mode only
+		// Original SPACE behaviour: Normal -> Move -> Attack -> Normal.
 		unit_range_view_mode++;
 		if (unit_range_view_mode > UNIT_RANGE_ATTACK)
 			unit_range_view_mode = UNIT_RANGE_NONE;
 
-		// explicit selection lock if not NONE state
+		// SPACE selects a persistent mode until the next SPACE press.
 		unit_range_view_mode_lock = (unit_range_view_mode != UNIT_RANGE_NONE);
 	}
 	else if (!unit_range_view_mode_lock)
 	{
-		// explicit setup
+		// Mouse temporary movement display may change the mode only when SPACE
+		// has not selected a persistent mode.
 		unit_range_view_mode = mode;
+	}
 
+	return(old_state);
+}
+
+// Original hotkeys M/A are temporary: while held they override the persistent
+// SPACE-selected mode and release restores exactly what was selected before.
+int SpellMap::BeginTemporaryUnitRangeViewMode(int mode)
+{
+	int old_state = unit_range_view_mode;
+	if (mode != UNIT_RANGE_MOVE && mode != UNIT_RANGE_ATTACK)
+		return(old_state);
+
+	if (!unit_range_temp_active)
+	{
+		unit_range_temp_saved_mode = unit_range_view_mode;
+		unit_range_temp_saved_lock = unit_range_view_mode_lock;
+		unit_range_temp_active = 1;
+	}
+
+	unit_range_view_mode = mode;
+	return(old_state);
+}
+
+int SpellMap::EndTemporaryUnitRangeViewMode()
+{
+	int old_state = unit_range_view_mode;
+	if (unit_range_temp_active)
+	{
+		unit_range_view_mode = unit_range_temp_saved_mode;
+		unit_range_view_mode_lock = unit_range_temp_saved_lock;
+		unit_range_temp_active = 0;
 	}
 	return(old_state);
 }
@@ -6903,6 +6951,12 @@ int SpellMap::CanUnitMove(MapXY target)
 	// selected unit
 	auto* unit = GetSelectedUnit();
 	if (!unit)
+		return(false);
+
+	// temporary original status effects block movement without consuming AP.
+	// This matters for freeze: the DOS routine sets its status bit but does not
+	// zero the AP counter, so idle/entrenchment accounting still sees untouched AP.
+	if (unit->paralyze_turns > 0 || unit->freeze_turns > 0)
 		return(false);
 
 	// runtime created unit cannot move until activated (next turn)
@@ -7038,6 +7092,7 @@ int SpellMap::MoveUnit(MapXY target)
             if (u->is_enemy) continue;
             if (!IsUnitInActiveGroup(u)) continue;
             if (u->radar_up) continue;
+            if (u->paralyze_turns > 0 || u->freeze_turns > 0) continue;
             if (u->action_points <= 0) continue;
 
             // pick destination for this unit and reserve it
@@ -7065,6 +7120,8 @@ int SpellMap::MoveUnit(MapXY target)
 		return(1);
 
 	if (unit->radar_up)
+		return(1);
+	if (unit->paralyze_turns > 0 || unit->freeze_turns > 0)
 		return(1);
 
 	// clear last move
@@ -7238,6 +7295,8 @@ bool SpellMap::StartMove_NoRangeCheck(MapUnit* unit, MapXY target)
 
     if (unit->radar_up)
         return(false);
+    if (unit->paralyze_turns > 0 || unit->freeze_turns > 0)
+        return(false);
 
     // clear last move
     unit->move_state = MapUnit::MOVE_STATE::IDLE;
@@ -7310,6 +7369,123 @@ bool SpellMap::StartAttack_NoHUD(MapUnit* attacker, MapUnit* target)
     return(true);
 }
 
+// DOS helper used by morale shock routines: approximately 75..125% of base.
+// This mirrors the original integer helper (3/4 base + random over twice the remainder).
+static int _dos_morale_jitter(int base)
+{
+	if (base <= 0) return 0;
+	const int low = (3 * base) / 4;
+	const int span = 2 * (base - low);
+	return low + (span > 0 ? (std::rand() % span) : 0);
+}
+
+static int _morale_rank(const MapUnit* unit)
+{
+	return unit ? (std::clamp)(unit->experience_level - 1, 0, 11) : 0;
+}
+
+bool SpellMap::StartMoraleSpecialAction(MapUnit* caster)
+{
+	if (!caster || !caster->unit || !caster->CanSpecAction())
+		return false;
+
+	const int act = caster->unit->action_id;
+	if (act != SpellUnitRec::SPEC_ACT_LOWER_MORALE &&
+		act != SpellUnitRec::SPEC_ACT_PARALYZE &&
+		act != SpellUnitRec::SPEC_ACT_FREEZE &&
+		act != SpellUnitRec::SPEC_ACT_DRAGON_FEAR &&
+		act != SpellUnitRec::SPEC_ACT_BREORN_SCREAM)
+		return false;
+
+	caster->action_points = (std::max)(0, caster->action_points - caster->unit->action_ap);
+	caster->ResetTurnsCounter();
+	caster->PlayAction();
+	caster->in_animation = caster->unit->gr_action;
+	caster->frame = 0;
+	caster->frame_stop = (std::max)(0, caster->unit->action_fsu_frames);
+	caster->action_step = 0;
+	caster->action_state = MapUnit::ACTION_STATE::SPECIAL_MORALE;
+	caster->was_moved = true;
+	return true;
+}
+
+void SpellMap::ApplyMoraleSpecialAction(MapUnit* caster)
+{
+	if (!caster || !caster->unit)
+		return;
+
+	const int act = caster->unit->action_id;
+	const int radius = (std::max)(1, caster->unit->action_params[0]);
+	const int base_drop = (std::max)(0, caster->unit->action_params[1]);
+	const int resistance_step = (std::max)(0, caster->unit->action_params[2]);
+
+	for (auto* target : units)
+	{
+		if (!target || target == caster || target->isDead() || target->is_enemy == caster->is_enemy)
+			continue;
+		if (caster->coor.Distance(target->coor) > radius)
+			continue;
+
+		// Original special-effect resistance: experience rank reduces the 90%
+		// base chance, but every target always retains at least a 10% chance.
+		const int chance = (std::max)(10, 90 - _morale_rank(target) * resistance_step);
+		if ((std::rand() % 100) >= chance)
+			continue;
+
+		// Action 14 (Breorn) is not a morale debuff at all.  The original
+		// dispatcher (SPELCROS.EXE switch case 14) performs the same
+		// experience-based resistance roll and kills the affected company outright.
+		if (act == SpellUnitRec::SPEC_ACT_BREORN_SCREAM)
+		{
+			target->man = 0;
+			target->wounded = 0;
+			target->damage_remainder = 0;
+			target->was_moved = true;
+			continue;
+		}
+
+		if (base_drop > 0)
+			target->UpdateModale(-(double)_dos_morale_jitter(base_drop));
+
+		// Exact DOS switch mapping recovered from SPELCROS.EXE:
+		//  9 Harpy      -> morale loss + paralysis (+0x0A bit 0x20), AP=0
+		// 11 Death Rider-> morale loss + freeze    (+0x0B bit 0x08)
+		// 12 Dragon     -> morale loss + BOTH flags, AP=0
+		if (act == SpellUnitRec::SPEC_ACT_PARALYZE || act == SpellUnitRec::SPEC_ACT_DRAGON_FEAR)
+		{
+			target->paralyze_turns = (std::max)(target->paralyze_turns, 1);
+			target->action_points = 0;
+		}
+		if (act == SpellUnitRec::SPEC_ACT_FREEZE || act == SpellUnitRec::SPEC_ACT_DRAGON_FEAR)
+			target->freeze_turns = (std::max)(target->freeze_turns, 1);
+	}
+
+	unit_selection_mod = true;
+	InvalidateHUDbuttons();
+}
+
+bool SpellMap::TryEnemyMoraleSpecialAction(MapUnit* caster)
+{
+	if (!caster || !caster->unit || !caster->is_enemy || !caster->CanSpecAction())
+		return false;
+
+	const int act = caster->unit->action_id;
+	if (act != SpellUnitRec::SPEC_ACT_LOWER_MORALE &&
+		act != SpellUnitRec::SPEC_ACT_PARALYZE &&
+		act != SpellUnitRec::SPEC_ACT_FREEZE &&
+		act != SpellUnitRec::SPEC_ACT_DRAGON_FEAR &&
+		act != SpellUnitRec::SPEC_ACT_BREORN_SCREAM)
+		return false;
+
+	const int radius = (std::max)(1, caster->unit->action_params[0]);
+	for (auto* target : units)
+	{
+		if (!target || target->is_enemy || target->isDead()) continue;
+		if (caster->coor.Distance(target->coor) <= radius)
+			return StartMoraleSpecialAction(caster);
+	}
+	return false;
+}
 
 static bool _ptr_in_units_list(const std::vector<MapUnit*>& list, const MapUnit* ptr)
 {
@@ -8301,12 +8477,18 @@ void SpellMap::StartEnemyTurn()
         if (!u)
             continue;
         if (u->is_enemy)
+        {
             u->ResetAP();
+            if (u->paralyze_turns > 0)
+                u->action_points = 0;
+        }
         else
         {
             // Alliance keeps unspent AP as the reserve for original defensive fire.
-            if (u->panic_turns == 1)
-                u->panic_turns = 0;
+            // Its just-finished own phase consumes one status duration.
+            if (u->panic_turns == 1) u->panic_turns = 0;
+            if (u->paralyze_turns > 0) --u->paralyze_turns;
+            if (u->freeze_turns > 0) --u->freeze_turns;
         }
     }
 
@@ -8361,6 +8543,20 @@ void SpellMap::EndEnemyTurn()
 	// Remove any dead units that weren't cleaned up during attack processing
 	CleanupDeadUnits();
 
+	// The original entrenchment rule is based on the whole round: a unit may
+	// dig only if it stayed put and lost no AP.  Finalize both sides here,
+	// after enemy actions and defensive/reaction fire, but BEFORE AP restoration.
+	FinishUnits();
+
+	// Enemy own phase has ended: consume one turn of temporary status/panic.
+	for (auto* u : units)
+	{
+		if (!u || !u->is_enemy) continue;
+		if (u->panic_turns == 1) u->panic_turns = 0;
+		if (u->paralyze_turns > 0) --u->paralyze_turns;
+		if (u->freeze_turns > 0) --u->freeze_turns;
+	}
+
 	// restore player AP for alliance
 	bool has_alliance = false;
 	MapUnit* first_alliance = nullptr;
@@ -8369,13 +8565,15 @@ void SpellMap::EndEnemyTurn()
 		if (u && !u->is_enemy)
 		{
 			u->ResetAP();
+			if (u->paralyze_turns > 0)
+				u->action_points = 0;
 			has_alliance = true;
 			if (!first_alliance)
 				first_alliance = u;
 		}
 	}
 
-	// === PANIC: player units with morale==0 flee uncontrollably for one player phase ===
+	// === PANIC: original threshold is morale <= 20; pending units flee for one player phase ===
 	// panic_turns meanings: 2=pending flee (execute now), 1=panicking (cannot be controlled), 0=normal
 	std::vector<MapUnit*> panic_units;
 	panic_units.reserve(units.size());
@@ -8611,6 +8809,46 @@ bool SpellMap::PanicTurnStep()
 	return(false);
 }
 
+bool SpellMap::MovePanickedEnemy(MapUnit* unit)
+{
+	if (!unit || !unit->is_enemy || unit->action_points <= 0 || !unit_range)
+		return false;
+
+	MapUnit* nearest = FindNearestPlayerUnit(unit->coor, false, nullptr);
+	if (!nearest)
+	{
+		unit->action_points = 0;
+		return false;
+	}
+
+	unit_range->FindRange(unit);
+	unit_range->ResultLock(true);
+	int best_idx = -1;
+	double best_dist = unit->coor.Distance(nearest->coor);
+	for (int idx = 0; idx < (int)unit_range->ap_left.size(); ++idx)
+	{
+		if (unit_range->ap_left[idx] < 0) continue;
+		MapXY p; p.x = idx % x_size; p.y = idx / x_size;
+		if (!p.IsSelected()) continue;
+		bool occupied = false;
+		for (auto* other = Lunit[idx]; other; other = other->next)
+			if (other && other != unit) { occupied = true; break; }
+		if (occupied) continue;
+		const double d = p.Distance(nearest->coor);
+		if (d > best_dist) { best_dist = d; best_idx = idx; }
+	}
+	unit_range->ResultLock(false);
+
+	if (best_idx >= 0)
+	{
+		MapXY dst; dst.x = best_idx % x_size; dst.y = best_idx / x_size;
+		if (StartMove_NoRangeCheck(unit, dst))
+			return true;
+	}
+	unit->action_points = 0;
+	return false;
+}
+
 bool SpellMap::EnemyTurnStep()
 {
     // Schedule exactly one action.  enemy_turn_idx stays on the current company
@@ -8658,6 +8896,25 @@ bool SpellMap::EnemyTurnStep()
             continue;
         }
 
+        // Low-morale Other Side companies obey the same <=20 panic threshold.
+        // They spend this phase fleeing away from the nearest Alliance company
+        // instead of executing their tactical-group order.
+        if (enemy->panic_turns == 2)
+            enemy->panic_turns = 1;
+        if (enemy->panic_turns == 1)
+        {
+            unit_selection = enemy;
+            unit_selection_mod = true;
+            const bool moved = MovePanickedEnemy(enemy);
+            if (moved)
+            {
+                ReleaseMap();
+                return true;
+            }
+            ++enemy_turn_idx;
+            continue;
+        }
+
         AITacticalGroup* group = FindEnemyAIGroupForUnit(enemy);
         if (!group)
         {
@@ -8674,6 +8931,14 @@ bool SpellMap::EnemyTurnStep()
         {
             ++enemy_turn_idx;
             continue;
+        }
+
+        // Morale/fear/paralysis/freezing are independent original special actions,
+        // not an extra side effect glued onto an ordinary weapon hit.
+        if (TryEnemyMoraleSpecialAction(enemy))
+        {
+            ReleaseMap();
+            return true;
         }
 
         // Every active/defending order may exploit a legal target already in
@@ -9187,6 +9452,7 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 	static MapUnit* last_selected_unit = NULL;
 	static int last_can_heal = -1;
 	static MapSprite* last_destructible = NULL;
+	static bool last_enemy_turn_hud = false;
 
 	if (!hud_enabled)
 	{
@@ -9216,8 +9482,10 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 	// clear y-buffer (for finding top most pixel of HUD (for mouse area cutoff))
 	pic_y_buffer.assign(pic_x_size, -1);
 
-	// render center panel
-	img = gres.wm_hud;
+	// Render the original enemy-turn HUD (LISTA_1) while AI owns the turn.
+	// The DOS game deliberately hid all unit/AP/action details during this phase.
+	const bool enemy_turn_hud = isGameMode() && enemy_turn_running;
+	img = (enemy_turn_hud && gres.wm_hud_enemy) ? gres.wm_hud_enemy : gres.wm_hud;
 	x_ofs = surf_x_origin + (surf_x - img->x_size) / 2;
 	y_ofs = surf_y_origin + surf_y - img->y_size;
 	img->Render(buf, buf_end, buf_x_size, x_ofs, y_ofs, false, pic_y_buffer.data());
@@ -9237,6 +9505,28 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 	for (; x_ofs >= surf_x_origin; x_ofs -= img->x_size)
 		img->Render(buf, buf_end, buf_x_size, x_ofs, y_ofs, false, pic_y_buffer.data());
 	img->Render(buf, buf_end, buf_x_size, x_ofs, y_ofs, false, pic_y_buffer.data());
+
+	// LISTA_1 is the complete original enemy-turn center HUD.  Do not render
+	// selected/cursor unit data or interactive HUD buttons over it: AI selection
+	// is an internal implementation detail and was hidden by the original game.
+	if (enemy_turn_hud)
+	{
+		if (!last_enemy_turn_hud)
+		{
+			ClearHUDbuttons();
+			if (hud_buttons_cb)
+				hud_buttons_cb();
+		}
+
+		last_enemy_turn_hud = true;
+		last_hud_state = hud_enabled;
+		last_cursor_unit = NULL;
+		last_selected_unit = NULL;
+		last_can_heal = -1;
+		last_destructible = NULL;
+		return(0);
+	}
+	last_enemy_turn_hud = false;
 
 	// for left and right panels
 	for (int pid = 0; pid < 2; pid++)
@@ -9464,14 +9754,14 @@ int SpellMap::RenderHUD(uint8_t* buf, uint8_t* buf_end, int buf_x_size, MapXY* c
 		// render freeze mark
 		// pos a: 13,5
 		// pos b: 593,5
-		int freeze_mark = 0;//rand()%2;
+		int freeze_mark = unit->freeze_turns > 0;
 		if (freeze_mark)
 			gres.wm_freeze->Render(buf, buf_end, buf_x_size, hud_left + ix_ref + (pid == 1) + 13, hud_top + 5);
 
 		// render paralysed mark
 		// pos a: 36,5
 		// pos b: 616,5
-		int paralyze_mark = 0;//rand()%2;
+		int paralyze_mark = unit->paralyze_turns > 0;
 		if (paralyze_mark)
 			gres.wm_paralyze->Render(buf, buf_end, buf_x_size, hud_left + ix_ref + (pid == 1) + 36, hud_top + 5);
 
@@ -9648,10 +9938,9 @@ void SpellMap::OnHUDswitchEndTurn()
 	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 
-	// End player turn and start enemy turn (game mode)
-	FinishUnits();
-
-	// start scripted enemy phase
+	// End the player phase.  Do NOT finalize digging yet: Alliance units may
+	// still spend their reserved AP on original-style defensive/reaction fire
+	// during the enemy phase.  The full round is finalized in EndEnemyTurn().
 	StartEnemyTurn();
 }
 
@@ -11478,20 +11767,88 @@ int SpellMap::FinishUnits()
 {
 	for (auto& unit : units)
 	{
+		if (!unit || !unit->unit)
+			continue;
 
-		// todo: update morale (long inactivity)
+		// DOS rule: an idle round is identified by untouched AP at round end.
+		// There is no separate synthetic "acted" flag in the original routine.
+		const bool full_ap = (unit->action_points == unit->GetMaxAP());
+		if (full_ap)
+		{
+			unit->dig_turns = (std::max)(0, unit->dig_turns);
+			unit->idle_turns = (std::max)(0, unit->idle_turns);
+			unit->IncrementTurnsCounter();
+			unit->UpdateDigLevel();
+		}
+		else
+		{
+			unit->dig_turns = 0;
+			unit->idle_turns = 0;
+		}
 
-		// update idle counters for next round
-		unit->IncrementTurnsCounter();
+		// Original morale recovery routine: 6 + 2*experience-rank per round.
+		// Alliance recovery stops after the long-idle threshold, while Other Side
+		// keeps recovering at x4 regardless of idle time (unless paralyzed).
+		const int rank = _morale_rank(unit);
+		if (unit->paralyze_turns <= 0 && (unit->is_enemy || unit->idle_turns <= 16))
+		{
+			int recovery = 6 + 2 * rank;
+			if (unit->is_enemy) recovery *= 4;
+			unit->UpdateModale((double)recovery);
+		}
 
-		// update dig level
-		unit->UpdateDigLevel();
+		// Original long-entrenchment/inactivity penalty (Alliance companies).
+		// It starts at 16 idle rounds and doubles after round 22.  On Easy/Normal
+		// the decay stops once morale has reached the original 60-point floor; on
+		// Hard it may continue all the way to zero.
+		if (!unit->is_enemy && unit->idle_turns >= 16)
+		{
+			const int floor_morale = (game_difficulty == GameDifficulty::HARD) ? 0 : 60;
+			if (unit->morale > floor_morale)
+			{
+				int base_loss = ((12 - rank) / 2) + 4;
+				if (unit->idle_turns > 22) base_loss *= 2;
+				unit->UpdateModale(-(double)_dos_morale_jitter(base_loss));
+			}
+		}
 
-		// activate runtime crated units
+		// Low morale remains a live condition, not a one-shot threshold crossing.
+		// The original turn code tests morale <= 20 directly every phase.
+		if (unit->morale <= 20.0)
+			unit->panic_turns = 2;
+		else if (unit->panic_turns == 2)
+			unit->panic_turns = 0;
+
 		unit->ActivateUnit();
-
 	}
 	return(0);
+}
+
+void SpellMap::ApplyCommanderDeathMorale(MapUnit* host)
+{
+	if (!host || host->is_enemy || host->formation_id < 1 || host->formation_id > 8)
+		return;
+	const unsigned int mask = (unsigned int)host->formation_commander_mask & 0x07u;
+	if (!mask) return;
+
+	const int dead_b = host->formation_id;
+	const int dead_reg = (dead_b - 1) / 2;
+	const int dead_brig = (dead_b - 1) / 4;
+
+	for (auto* u : units)
+	{
+		if (!u || u == host || u->is_enemy || u->isDead() || u->formation_id < 1 || u->formation_id > 8)
+			continue;
+		int shock = 0;
+		if ((mask & 0x01u) && u->formation_id == dead_b)
+			shock += _dos_morale_jitter(20);
+		if ((mask & 0x02u) && ((u->formation_id - 1) / 2) == dead_reg)
+			shock += _dos_morale_jitter(30);
+		if ((mask & 0x04u) && ((u->formation_id - 1) / 4) == dead_brig)
+			shock += _dos_morale_jitter(40);
+		if (shock > 0)
+			u->UpdateModale(-(double)shock);
+	}
 }
 
 void SpellMap::RecalculateTacticalFormations()
@@ -11689,6 +12046,7 @@ void SpellMap::CleanupDeadUnits()
 	for (auto* dead : dead_list)
 	{
 		RecordMissionLoss(dead);
+		ApplyCommanderDeathMorale(dead);
 		auto extracted = ExtractUnit(dead);
 		if (extracted)
 			extracted->Kill();
@@ -12966,6 +13324,7 @@ int SpellMap::Tick()
 					// the tactical roster. The original statistics count destroyed
 					// companies, not only corpses still present at mission end.
 					RecordMissionLoss(target);
+					ApplyCommanderDeathMorale(target);
 					auto dead = ExtractUnit(target, unit);
 					if (dead)
 					{
@@ -13205,6 +13564,31 @@ int SpellMap::Tick()
 				unit->action_points = 0;
 
 				air_done = true;
+			}
+			update = true;
+		}
+		else if (unit->action_state == MapUnit::ACTION_STATE::SPECIAL_MORALE)
+		{
+			// Dedicated DOS-style area special.  Apply once when its action animation
+			// reaches the end (or immediately for units without an action animation).
+			bool done = (unit->frame_stop <= 0 || !unit->in_animation);
+			if (!done)
+			{
+				++unit->frame;
+				done = unit->frame >= unit->frame_stop;
+			}
+			if (done)
+			{
+				if (unit->action_step == 0)
+				{
+					ApplyMoraleSpecialAction(unit);
+					unit->action_step = 1;
+				}
+				if (unit->in_animation && unit->unit && unit->unit->gr_base)
+					unit->azimuth = unit->unit->gr_base->GetStaticAzim(unit->in_animation->GetAnimAngle(unit->azimuth));
+				unit->in_animation = NULL;
+				unit->frame = 0;
+				unit->action_state = MapUnit::ACTION_STATE::IDLE;
 			}
 			update = true;
 		}

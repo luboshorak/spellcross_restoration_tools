@@ -2102,7 +2102,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
 	menuGame->Append(ID_mmLoadGameState, "Load game state...\tCtrl+Shift+L", "Load game snapshot from file.");
     menuGame->AppendSeparator();
     menuGame->Append(ID_mmResetViewMap,"Reset view map","");
-    menuGame->Append(ID_mmUnitViewMode,"View unit move/attack range\tSpace","");
+    menuGame->Append(ID_mmUnitViewMode,"View unit move/attack range (Space)","");
     
     
     // View menu
@@ -2269,6 +2269,7 @@ MainFrame::MainFrame(SpellMap* map, SpellData* spelldata):wxFrame(NULL, wxID_ANY
     canvas->Bind(wxEVT_ENTER_WINDOW,&MainFrame::OnCanvasMouseEnter,this);
     canvas->Bind(wxEVT_MOUSEWHEEL,&MainFrame::OnCanvasMouseWheel,this);
     canvas->Bind(wxEVT_KEY_DOWN,&MainFrame::OnCanvasKeyDown,this);
+    canvas->Bind(wxEVT_KEY_UP,&MainFrame::OnCanvasKeyUp,this);
     canvas->Bind(wxEVT_LEFT_DOWN,&MainFrame::OnCanvasLMouseDown,this);
     //canvas->Bind(wxEVT_LEFT_DCLICK,&MainFrame::OnCanvasLMouseDown,this);
     canvas->Bind(wxEVT_THREAD,&MainFrame::OnThreadCanvas,this);
@@ -6145,6 +6146,41 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
         return;
     }
 
+    // Original tactical range hotkeys.
+    // SPACE cycles persistent modes: Normal -> Move -> Attack -> Normal.
+    // M/A temporarily override the current mode only while the key is held.
+    if(spell_map->isGameMode())
+    {
+        if(key == WXK_SPACE)
+        {
+            spell_map->SetUnitRangeViewMode(SpellMap::UNIT_RANGE_INCREMENT);
+            if(canvas) canvas->Refresh();
+            return;
+        }
+
+        if(key == 'M' || key == 'm')
+        {
+            if(!m_rangeMoveKeyDown)
+            {
+                m_rangeMoveKeyDown = true;
+                spell_map->BeginTemporaryUnitRangeViewMode(SpellMap::UNIT_RANGE_MOVE);
+            }
+            if(canvas) canvas->Refresh();
+            return;
+        }
+
+        if(key == 'A' || key == 'a')
+        {
+            if(!m_rangeAttackKeyDown)
+            {
+                m_rangeAttackKeyDown = true;
+                spell_map->BeginTemporaryUnitRangeViewMode(SpellMap::UNIT_RANGE_ATTACK);
+            }
+            if(canvas) canvas->Refresh();
+            return;
+        }
+    }
+
     // Group move hotkeys (game mode only)
     if(spell_map->isGameMode())
     {
@@ -6165,6 +6201,45 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
 
     // keep existing controls working
     event.Skip();
+}
+
+void MainFrame::OnCanvasKeyUp(wxKeyEvent& event)
+{
+    if(!spell_map || !spell_map->isGameMode())
+    {
+        event.Skip();
+        return;
+    }
+
+    int key = event.GetKeyCode();
+    bool handled = false;
+
+    if(key == 'M' || key == 'm')
+    {
+        m_rangeMoveKeyDown = false;
+        handled = true;
+    }
+    else if(key == 'A' || key == 'a')
+    {
+        m_rangeAttackKeyDown = false;
+        handled = true;
+    }
+
+    if(!handled)
+    {
+        event.Skip();
+        return;
+    }
+
+    // If the other temporary key is still held, keep its mode active.
+    if(m_rangeAttackKeyDown)
+        spell_map->BeginTemporaryUnitRangeViewMode(SpellMap::UNIT_RANGE_ATTACK);
+    else if(m_rangeMoveKeyDown)
+        spell_map->BeginTemporaryUnitRangeViewMode(SpellMap::UNIT_RANGE_MOVE);
+    else
+        spell_map->EndTemporaryUnitRangeViewMode();
+
+    if(canvas) canvas->Refresh();
 }
 
 void MainFrame::OnMapConsoleCommand()

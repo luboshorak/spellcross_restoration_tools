@@ -483,7 +483,8 @@ public:
 		FROM_FORT_TURRET,
 		CREATE_UNIT,
 		KAMIKAZE,
-		KAMIKAZE_EXPLOSION
+		KAMIKAZE_EXPLOSION,
+		SPECIAL_MORALE
 	};
 
 	// unit move states
@@ -571,8 +572,13 @@ public:
 	int is_event;
 	// morale level
 	double morale;
-	// panic state: 0=none, 2=pending flee at start of player phase, 1=panicking (cannot be controlled)
+	// panic state: 0=none, 2=pending flee at next own phase, 1=panicking
 	int panic_turns;
+	// Original tactical status effects.  These count remaining OWN phases.
+	// Paralysis (Harpy/Dragon) and freeze (Order of Death) both prevent action;
+	// they stay separate because the original HUD and effect sources distinguish them.
+	int paralyze_turns;
+	int freeze_turns;
 	// unit in placement (selected and moving)
 	int in_placement;
 	// unit moved flag (cleared when rendered)

@@ -1,0 +1,29 @@
+Spellcross 0.7.9 hotfix4j - original entrenchment round rules
+================================================================
+
+Based on the original Spellcross manual and original JEDNOTKY.DEF data.
+
+Changes:
+- Entrenchment is finalized once per COMPLETE tactical round, after the Other Side
+  phase and defensive/reaction fire, immediately before Alliance AP is restored.
+- A unit gains digging progress only if it kept full AP and performed no action in
+  that round.
+- Defensive/reaction fire therefore correctly prevents digging progress.
+- Incoming enemy fire no longer resets the defender's unfinished digging timer.
+  The attack still removes one already-built entrenchment level, including a miss.
+- Moving still removes all existing entrenchment.
+- Firing/healing/special actions stop progress toward the next level but do not
+  arbitrarily erase already-built fortifications unless the action already did so.
+
+Preserved original data/mechanics:
+- Per-unit rounds-per-dig-level comes from JEDNOTKY.DEF (field 0xB1/ENG shifted).
+- Light units: maximum 6 entrenchment levels.
+- Armored/other ground units: maximum 2 levels.
+- Air units: 0 levels.
+- Combat model keeps the reverse-engineered +5 effective defence per dig level.
+- Every incoming attack removes one entrenchment level.
+
+Not guessed in this hotfix:
+- The original manual states that prolonged entrenchment/inactivity lowers morale,
+  but the exact DOS numeric formula/rate is not yet verified. The existing morale
+  TODO is therefore intentionally left without an invented constant.
