@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./main/spellcross-map-edit-main/data/logo.png" alt="Spellcross" width="430">
+  <img src="./spellcross-map-edit-main/data/logo.png" alt="Spellcross" width="430">
 </p>
 
 # Spellcross Reloaded
