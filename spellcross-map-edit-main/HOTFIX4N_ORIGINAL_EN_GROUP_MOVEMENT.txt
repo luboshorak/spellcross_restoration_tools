@@ -1,0 +1,48 @@
+Spellcross 0.7.9 hotfix4n - original English group movement restoration
+=======================================================================
+
+Basis
+-----
+This restores the multi-unit group movement present in the original English
+Spellcross release. It is intentionally kept even though the Czech release did
+not expose the feature.
+
+Original EN controls (manual p.13 / p.20)
+-----------------------------------------
+- 1..8: select/unselect one of eight unit groups.
+- LMB on own unit: insert/remove land unit from the selected group.
+- Shift+LMB on own unit: insert/remove AIR unit from the selected group.
+- Alt+A: add all Alliance units to the selected group.
+- LMB on map: move the selected group toward the clicked square until APs run out.
+- Alt+LMB on map: same, but leave enough AP for one shot.
+- ESC or plain RMB: cancel group movement and unselect the group.
+- Firing is disabled while group mode is selected.
+- A unit can belong to only one group.
+
+EXE-backed movement behaviour
+-----------------------------
+- Unit group membership is a single byte in the original unit state (+0x1d).
+- The EN executable builds [unit,distance] records for the selected group,
+  sorts them by distance (qsort comparator at 0x156d5) and tries members nearest
+  to the target first.
+- Distance ordering uses the original staggered-map integer distance routine
+  at SPELCROS.EXE 0x75650.
+- A successful movement starts ONE unit and returns to the main state machine;
+  group members are not launched concurrently. The next unit is replanned only
+  after occupancy has changed.
+- Path mode 1 is ordinary group movement; path mode 2 is the Alt variant that
+  reserves AP for one attack.
+
+Restoration changes
+-------------------
+- Removed the old square-ring destination assignment.
+- Removed parallel multi-unit movement and the duplicated movement state machine.
+- Every group member now uses the normal tactical movement state machine, so
+  reaction fire, visibility, events, teleport movement, sounds and AP charging
+  all share exactly the same code path as single-unit movement.
+- Group pathfinding can plan toward a remote command point beyond current AP,
+  then truncates the route to the AP budget for this round.
+- Other group members remain normal same-layer obstacles. The next member gets a
+  fresh route after the previous member moves, matching the EN executable.
+- Group membership + active group are persisted in .scsave v8. A transient
+  in-progress group move is intentionally not serialized.

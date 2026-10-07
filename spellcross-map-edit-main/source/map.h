@@ -439,11 +439,24 @@ public:
 		int unit_selection_mod;
 		int unit_sel_land_preference;
 
-		// --- Group move (multi-unit selection) ---
+		// --- EN original group movement ---
 		int active_group = 0; // 0=off, 1..8 active slot
-		std::array<std::vector<int>, 9> group_units; // store MapUnit::id, [1..8] used
+		std::array<std::vector<int>, 9> group_units; // persistent membership by MapUnit::id
+
+		// The EN executable advances a group sequentially: the nearest member is
+		// moved first, occupancy is updated, then the next member is planned.
+		// Keeping the command separate from active_group also makes cancellation
+		// and mid-command deaths deterministic.
+		bool group_move_active = false;
+		int group_move_group = 0;
+		int group_move_unit_id = -1;
+		MapXY group_move_target;
+		bool group_move_reserve_one_shot = false;
+
 		void RemoveUnitFromAllGroups(int unit_id);
 		void ToggleUnitInActiveGroup(MapUnit* u);
+		bool StartNextGroupMove();
+		void StopGroupMoveCommand(bool stop_current_unit);
 
 
 		// sound selection
@@ -783,7 +796,14 @@ public:
 			void WaitIdle();
 			void ResultLock(bool state);
 			vector<AStarNode> FindPath(MapUnit* unit,MapXY target);
+			// EN group move: route may extend beyond current AP; if the exact target is
+			// blocked/unreachable, returns a route to the reachable tile closest to it.
+			vector<AStarNode> FindPathToward(MapUnit* unit, MapXY target);
 
+		private:
+			vector<AStarNode> FindPathInternal(MapUnit* unit, MapXY target, int max_ap, bool return_best);
+
+		public:
 			vector<AStarNode> range_nodes_buffer; // this is preinitialized buffer holding the nodes
 			vector<AStarNode> range_nodes; // this is working buffer
 			
@@ -967,14 +987,17 @@ public:
 		void OnHUDfortresToggle();
 		void OnHUDcreateUnit();
 
-		// --- Group move (multi-unit selection) ---
-		void SetActiveGroup(int g);   // g: 0..8 (0 disables group mode)
+		// --- EN original group movement ---
+		void SetActiveGroup(int g);   // 1..8 toggles that group, 0 explicitly leaves group mode
 		int  GetActiveGroup() const { return active_group; }
 		bool IsGroupMode() const { return active_group != 0; }
 		bool IsUnitInActiveGroup(const MapUnit* u) const;
+		bool IsEnemyTurnRunning() const { return enemy_turn_running; }
+		bool IsActiveGroupMoving() const { return group_move_active; }
+		void CancelActiveGroupMovement();
+		void AddAllUnitsToActiveGroup();
+		MapUnit* GetGroupCursorUnit(bool air_only, TScroll* scroll = NULL);
 
-        // --- Group move API ---
-		
 
 		MapUnit* GetUnit(int id);		
 		int RemoveUnit(MapUnit* unit,bool from_events=false);		
@@ -1007,7 +1030,7 @@ public:
 		int BeginTemporaryUnitRangeViewMode(int mode);
 		int EndTemporaryUnitRangeViewMode();
 		int CanUnitMove(MapXY target);
-		int MoveUnit(MapXY target);		
+		int MoveUnit(MapXY target, bool reserve_one_shot = false);
 		int ResetUnitsAP();
 		static constexpr int UNIT_RANGE_NONE = 0x00;
 		static constexpr int UNIT_RANGE_MOVE = 0x01;

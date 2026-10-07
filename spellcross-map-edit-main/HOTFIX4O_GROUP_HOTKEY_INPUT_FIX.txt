@@ -1,0 +1,18 @@
+Spellcross 0.7.9 hotfix4o - EN group hotkey input fix
+=====================================================
+
+Fixes group slots 1..8 not activating reliably on Windows/Czech keyboard layouts.
+
+Cause:
+- group slot keys were handled only by the tactical wxPanel KEY_DOWN handler;
+- that path depended on keyboard focus and assumed GetKeyCode() was ASCII '1'..'8';
+- non-US keyboard layouts can report the top number row differently even though
+  the physical Windows virtual-key remains VK_1..VK_8.
+
+Fix:
+- handle group slots in MainFrame wxEVT_CHAR_HOOK before menu accelerators/focus routing;
+- accept ASCII 1..8, numpad 1..8 and raw Windows VK_1..VK_8;
+- keep the canvas handler as a fallback using the same decoding;
+- do not allow group switching during the enemy turn or modal tactical overlays.
+
+No group/pathfinding/gameplay rules from hotfix4n were changed.

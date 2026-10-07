@@ -140,7 +140,7 @@ namespace
 namespace scsave
 {
 	static constexpr uint32_t MAGIC = 0x56435353; // 'SSCV'
-	static constexpr uint32_t VERSION = 7;
+	static constexpr uint32_t VERSION = 8;
 
 	template<typename T>
 	inline void write(std::ostream& os, const T& v)
@@ -973,7 +973,7 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 	// Header
 	f << "{\n";
 	f << "  \"format\": \"spellcross_map_editor_save\",\n";
-	f << "  \"version\": 6,\n";
+	f << "  \"version\": 8,\n";
 	f << "  \"map_path\": \"" << wstring2string(GetTopPath()) << "\",\n";
 	f << "  \"note\": \"Binary payload follows after marker\",\n";
 	f << "  \"payload\": \"__BINARY__\"\n";
@@ -1011,6 +1011,18 @@ int SpellMap::SaveGameStateToFile(const std::wstring& path)
 
 		int32_t sel_id = (tmp.sel_unit ? (int32_t)tmp.sel_unit->id : -1);
 		scsave::write(f, sel_id);
+
+		// EN group slots are persistent tactical state in the English original
+		// (one group byte is stored on each unit).  Persist membership and which
+		// slot is selected, but never serialize a transient in-progress move.
+		scsave::write(f, (int32_t)active_group);
+		for (int g = 1; g <= 8; ++g)
+		{
+			uint32_t gcnt = (uint32_t)group_units[g].size();
+			scsave::write(f, gcnt);
+			for (int id : group_units[g])
+				scsave::write(f, (int32_t)id);
+		}
 	}
 
 	// --- EVENTS ---
@@ -1364,6 +1376,8 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 	}
 
 	SpellMap::SavedState tmp;
+	int32_t loaded_active_group = 0;
+	std::array<std::vector<int>, 9> loaded_group_units;
 
 	// --- TILES ---
 	{
@@ -1408,6 +1422,23 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 
 		int32_t sel_id = -1;
 		if (!scsave::read(is, sel_id)) return 12;
+
+		if (ver >= 8)
+		{
+			if (!scsave::read(is, loaded_active_group)) return 12;
+			for (int g = 1; g <= 8; ++g)
+			{
+				uint32_t gcnt = 0;
+				if (!scsave::read(is, gcnt)) return 12;
+				loaded_group_units[g].reserve(gcnt);
+				for (uint32_t gi = 0; gi < gcnt; ++gi)
+				{
+					int32_t id = -1;
+					if (!scsave::read(is, id)) return 12;
+					loaded_group_units[g].push_back((int)id);
+				}
+			}
+		}
 
 		tmp.sel_unit = NULL;
 		for (auto* u : tmp.units)
@@ -1620,6 +1651,29 @@ int SpellMap::LoadGameStateFromFile(const std::wstring& path)
 		}
 	}
 
+	// Restore EN group membership only after SavedState has installed the live
+	// tactical unit objects.  Old saves simply start with group mode off.
+	StopGroupMoveCommand(false);
+	active_group = 0;
+	for (auto& g : group_units)
+		g.clear();
+	if (ver >= 8)
+	{
+		for (int g = 1; g <= 8; ++g)
+		{
+			for (int id : loaded_group_units[g])
+			{
+				MapUnit* u = GetUnit(id);
+				if (!u || u->is_enemy || u->isDead())
+					continue;
+				RemoveUnitFromAllGroups(id);
+				group_units[g].push_back(id);
+			}
+		}
+		if (loaded_active_group >= 1 && loaded_active_group <= 8)
+			active_group = loaded_active_group;
+	}
+
 	return 0;
 }
 
@@ -1665,6 +1719,15 @@ void SpellMap::ResumeUnitRanging(bool resume)
 int SpellMap::SetGameMode(int new_mode)
 {
 	int old_state = game_mode;
+
+	if (old_state != new_mode)
+	{
+		StopGroupMoveCommand(true);
+		active_group = 0;
+		for (auto& g : group_units)
+			g.clear();
+	}
+
 	game_mode = new_mode;
 
 	// entering game mode: ensure we are not in any editor "placement" state
@@ -1880,6 +1943,17 @@ void SpellMap::Close()
 		delete units[k];
 	units.clear();
 	unit_selection = NULL;
+
+	// EN group state belongs to this tactical map only.
+	active_group = 0;
+	for (auto& g : group_units)
+		g.clear();
+	group_move_active = false;
+	group_move_group = 0;
+	group_move_unit_id = -1;
+	group_move_target.Clear();
+	group_move_reserve_one_shot = false;
+
 	// loose selection array
 	select.clear();
 	L1_flags.clear();
@@ -6687,85 +6761,109 @@ struct FindUnitPathCompareHeap
 // try to find path for unit to target position
 vector<AStarNode> SpellMap::MoveRange::FindPath(MapUnit* unit, MapXY target)
 {
+	return FindPathInternal(unit, target, unit ? unit->action_points : 0, false);
+}
+
+// EN group movement uses the same terrain cost and collision rules as normal
+// movement, but the command point may be farther away than this round's AP.
+// Find the full route (or the reachable tile closest to the command point) and
+// let the group driver stop at the last node affordable this round.
+vector<AStarNode> SpellMap::MoveRange::FindPathToward(MapUnit* unit, MapXY target)
+{
+	return FindPathInternal(unit, target, -1, true);
+}
+
+vector<AStarNode> SpellMap::MoveRange::FindPathInternal(MapUnit* unit, MapXY target, int max_ap, bool return_best)
+{
+	vector<AStarNode> path;
+	if (!unit || !target.IsSelected() || !unit->coor.IsSelected())
+		return path;
+
 	// local nodes map
 	vector<AStarNode>* nodes = &range_nodes;
-
-	auto start = std::chrono::high_resolution_clock::now();
-
-	// init local nodes map
 	nodes->resize(map->x_size * map->y_size);
 	memcpy(&nodes->at(0), &range_nodes_buffer[0], map->x_size * map->y_size * sizeof(AStarNode));
 
-	// path start position
 	MapXY start_pos = unit->coor;
 
-	// list of active nodes
 	vector<AStarNode*> open_set;
 	open_set.reserve(500);
 
-	// initial tile
-	open_set.push_back(&nodes->at(map->ConvXY(start_pos)));
-	open_set.back()->f_cost = 0;
-	open_set.back()->h_cost = 0;
-	open_set.back()->g_cost = 0;
+	AStarNode* start_node = &nodes->at(map->ConvXY(start_pos));
+	start_node->f_cost = 0;
+	start_node->h_cost = 0;
+	start_node->g_cost = 0;
+	open_set.push_back(start_node);
 	push_heap(open_set.begin(), open_set.end(), FindUnitPathCompareHeap());
 
-	// unit maximum AP
-	int max_ap = unit->action_points;
+	AStarNode* best_node = start_node;
+	double best_distance = start_pos.Distance(target);
+	int best_cost = 0;
 
-	int count = 0;
-	while (open_set.size())
+	auto retrace = [&](AStarNode* node) -> vector<AStarNode>
 	{
-		// look for lowest cost node	
+		vector<AStarNode> result;
+		if (!node)
+			return result;
+		result.reserve(30);
+		while (true)
+		{
+			result.push_back(*node);
+			if (!node->parent_pos.IsSelected())
+				break;
+			node = &nodes->at(map->ConvXY(node->parent_pos));
+		}
+		reverse(result.begin(), result.end());
+		return result;
+	};
+
+	while (!open_set.empty())
+	{
 		pop_heap(open_set.begin(), open_set.end(), FindUnitPathCompareHeap());
 		AStarNode* current_node = open_set.back();
 		open_set.pop_back();
 
-		// close it
+		if (current_node->closed)
+			continue;
 		current_node->closed = true;
 
-		if (current_node->pos == target)
+		if (return_best)
 		{
-			// found path: retrace
-			vector<AStarNode> path;
-
-			//path.push_back(*current_node);
-
-			path.reserve(30);
-			while (true)
+			double distance = current_node->pos.Distance(target);
+			if (distance < best_distance || (distance == best_distance && current_node->g_cost < best_cost))
 			{
-				path.push_back(*current_node);
-				if (!current_node->parent_pos.IsSelected())
-					break;
-				current_node = &nodes->at(map->ConvXY(current_node->parent_pos));
-			};
-			reverse(path.begin(), path.end());
-
-			return(path);
+				best_node = current_node;
+				best_distance = distance;
+				best_cost = current_node->g_cost;
+			}
 		}
 
-		// current sprite
+		if (current_node->pos == target)
+			return retrace(current_node);
+
 		Sprite* current_spr = map->tiles[map->ConvXY(current_node->pos)].L1;
 		int current_slope = current_spr->GetSlope();
 
-		// for each neighbor:
 		for (int nid = 0; nid < 8; nid++)
 		{
 			MapXY n_pos = map->GetNeighborTile8D(current_node->pos, nid);
 			if (!n_pos.IsSelected())
 				continue;
-			AStarNode* neighbor_node = &nodes->at(map->ConvXY(n_pos));
+			int n_idx = map->ConvXY(n_pos);
+			AStarNode* neighbor_node = &nodes->at(n_idx);
 
-			// skip if closed
 			if (neighbor_node->closed)
 				continue;
 
-			// skip if unit in path
-			auto tile_unit = map->Lunit[map->ConvXY(n_pos)];
-			int no_pasaran = false;
+			// Original EN group movement still treats other units as ordinary
+			// obstacles. Members are moved nearest-to-target first specifically so
+			// the front of the group clears space before followers are replanned.
+			auto tile_unit = map->Lunit[n_idx];
+			bool no_pasaran = false;
 			while (tile_unit)
 			{
-				if (unit->unit->isAir() && tile_unit->unit->isAir() || !unit->unit->isAir() && !tile_unit->unit->isAir())
+				if (tile_unit != unit &&
+					(unit->unit->isAir() == tile_unit->unit->isAir()))
 				{
 					no_pasaran = true;
 					break;
@@ -6775,32 +6873,24 @@ vector<AStarNode> SpellMap::MoveRange::FindPath(MapUnit* unit, MapXY target)
 			if (no_pasaran)
 				continue;
 
-			// basic AP/step
 			double ap_step_w = (double)unit->GetWalkAP();
-			// finite AP/step
 			double ap_step = ap_step_w;
 
-			// tile flags
-			int flag = map->tiles[map->ConvXY(n_pos)].flags;
-
+			int flag = map->tiles[n_idx].flags;
 			int is_bridge = (flag == 0x70);
 			int is_forest = (flag == 0x90);
-			int is_object = flag && !is_bridge && !is_forest; // any obstacle but trees
-			int is_obstacle = flag && !is_bridge; // any obstacle
-			int is_hoverable = !is_obstacle || (flag == 0x60); // can hover over			
+			int is_object = flag && !is_bridge && !is_forest;
+			int is_obstacle = flag && !is_bridge;
+			int is_hoverable = !is_obstacle || (flag == 0x60);
 
-			// get L1 sprite
-			Sprite* spr = map->tiles[map->ConvXY(n_pos)].L1;
+			Sprite* spr = map->tiles[n_idx].L1;
 			int class_flags = spr->GetFlags();
 			int slope = spr->GetSlope();
 
 			if (unit->unit->isHover())
 			{
-				// hover unit
 				if (!is_hoverable)
 					continue;
-
-				// apply slope penalty
 				if (slope != 'A' && current_slope != 'A')
 					ap_step = (ap_step_w * 11.0 / 9.0);
 			}
@@ -6808,7 +6898,6 @@ vector<AStarNode> SpellMap::MoveRange::FindPath(MapUnit* unit, MapXY target)
 			{
 				if (is_object)
 					continue;
-
 				if (unit->unit->isWalk() && is_forest)
 					ap_step = (ap_step_w * 10.0 / 9.0);
 				else if (is_forest)
@@ -6816,7 +6905,6 @@ vector<AStarNode> SpellMap::MoveRange::FindPath(MapUnit* unit, MapXY target)
 				else if (slope != 'A' && current_slope != 'A')
 					ap_step = (ap_step_w * 11.0 / 9.0);
 
-				// modify step cost for various terrains	
 				double cost = 1.0;
 				if (class_flags & Sprite::IS_DIRT_ROAD)
 					cost = 0.9;
@@ -6825,32 +6913,28 @@ vector<AStarNode> SpellMap::MoveRange::FindPath(MapUnit* unit, MapXY target)
 				ap_step *= cost;
 			}
 
-			// potential neighbor costs
 			int next_g = current_node->g_cost + (int)round(ap_step * current_node->pos.Distance(n_pos));
-			int next_h = ap_step_w * neighbor_node->pos.Distance(target);
+			int next_h = (int)(ap_step_w * neighbor_node->pos.Distance(target));
 			int next_f = next_g + next_h;
 
-			// leave if exceeded AP count
-			if (next_g > max_ap)
+			if (max_ap >= 0 && next_g > max_ap)
 				continue;
 
 			if (neighbor_node->f_cost == AStarNode::INIT_COST || neighbor_node->f_cost > next_f)
 			{
-				// new node or better node: replace
 				neighbor_node->g_cost = next_g;
 				neighbor_node->h_cost = next_h;
 				neighbor_node->f_cost = next_f;
 				neighbor_node->parent_pos = current_node->pos;
-
 				open_set.push_back(neighbor_node);
 				push_heap(open_set.begin(), open_set.end(), FindUnitPathCompareHeap());
 			}
 		}
 	}
 
-	// fail: return empty path
-	vector<AStarNode> path;
-	return(path);
+	if (return_best && best_node != start_node)
+		return retrace(best_node);
+	return path;
 }
 
 // set default (idle) filter for map render (used to darken map when GUI window shown)
@@ -6985,132 +7069,34 @@ int SpellMap::CanUnitMove(MapXY target)
 }
 
 // move unit (in game mode)
-int SpellMap::MoveUnit(MapXY target)
+int SpellMap::MoveUnit(MapXY target, bool reserve_one_shot)
 {
     if (isGameMode() && (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty()))
         return(1);
 
-    // GROUP MODE: move whole group (no attack, no single-unit range UI)
+    // EN GROUP MODE: the command point can be anywhere on the map.  The
+    // original English executable does NOT launch every member in parallel:
+    // it sorts the group by distance to the command point, moves one member,
+    // then replans the next member against the updated occupancy.
     if (IsGroupMode())
     {
-        // check target
         if (!target.IsSelected())
             return(1);
+        if (active_group <= 0 || active_group > 8 || group_units[active_group].empty())
+            return(1);
 
-        // Build occupancy maps (prevent stacking on the same tile).
-        // Rule: two LAND units cannot share a tile; two AIR units cannot share a tile.
-        // AIR + LAND on the same tile is allowed (matches existing air/land pairing logic).
-        std::vector<int> occ_land, occ_air;
-        occ_land.reserve(units.size());
-        occ_air.reserve(units.size());
-        for (auto* u : units)
-        {
-            if (!u) continue;
-            int mxy = ConvXY(&u->coor);
-            if (mxy < 0) continue;
-            if (u->unit && u->unit->isAir())
-                occ_air.push_back(mxy);
-            else
-                occ_land.push_back(mxy);
-        }
+        // A fresh click replaces a previous group order.  AP already spent is
+        // naturally retained; only the still-pending movement is cancelled.
+        if (group_move_active)
+            StopGroupMoveCommand(true);
 
-        std::vector<int> res_land, res_air;
-        res_land.reserve(64);
-        res_air.reserve(64);
+        group_move_active = true;
+        group_move_group = active_group;
+        group_move_unit_id = -1;
+        group_move_target = target;
+        group_move_reserve_one_shot = reserve_one_shot;
 
-        auto vec_has = [](const std::vector<int>& v, int x) -> bool
-        {
-            return std::find(v.begin(), v.end(), x) != v.end();
-        };
-
-        auto is_free_for = [&](MapUnit* u, MapXY pos) -> bool
-        {
-            int mxy = ConvXY(&pos);
-            if (mxy < 0) return false;
-
-            bool air = (u->unit && u->unit->isAir());
-            if (air)
-            {
-                if (vec_has(occ_air, mxy)) return false;
-                if (vec_has(res_air, mxy)) return false;
-            }
-            else
-            {
-                if (vec_has(occ_land, mxy)) return false;
-                if (vec_has(res_land, mxy)) return false;
-            }
-            return true;
-        };
-
-        auto reserve_for = [&](MapUnit* u, MapXY pos)
-        {
-            int mxy = ConvXY(&pos);
-            if (mxy < 0) return;
-            bool air = (u->unit && u->unit->isAir());
-            if (air) res_air.push_back(mxy);
-            else     res_land.push_back(mxy);
-        };
-
-        // Find nearest free tile around target (simple square-ring scan).
-        auto find_dest = [&](MapUnit* u) -> MapXY
-        {
-            // radius 0 = exact target
-            if (is_free_for(u, target))
-                return target;
-
-            const int RMAX = 10;
-            for (int r = 1; r <= RMAX; r++)
-            {
-                for (int dy = -r; dy <= r; dy++)
-                {
-                    for (int dx = -r; dx <= r; dx++)
-                    {
-                        if (abs(dx) != r && abs(dy) != r) continue; // ring only
-
-                        MapXY cand;
-                        cand.x = target.x + dx;
-                        cand.y = target.y + dy;
-
-                        if (!is_free_for(u, cand))
-                            continue;
-
-                        return cand;
-                    }
-                }
-            }
-
-            // fallback: keep original target (will likely fail)
-            return target;
-        };
-
-        bool any = false;
-
-        // Move each grouped unit to a unique destination (no stacking).
-        for (auto* u : units)
-        {
-            if (!u) continue;
-            if (u->is_enemy) continue;
-            if (!IsUnitInActiveGroup(u)) continue;
-            if (u->radar_up) continue;
-            if (u->paralyze_turns > 0 || u->freeze_turns > 0) continue;
-            if (u->action_points <= 0) continue;
-
-            // pick destination for this unit and reserve it
-            MapXY dest = find_dest(u);
-            reserve_for(u, dest);
-
-            // clear last move
-            LockMap();
-            u->move_state = MapUnit::MOVE_STATE::IDLE;
-            u->move_nodes.clear();
-            ReleaseMap();
-
-            // start move using existing helper (handles AP drain over time)
-            if (StartMove_NoRangeCheck(u, dest))
-                any = true;
-        }
-
-        return(any ? 0 : 1);
+        return StartNextGroupMove() ? 0 : 1;
     }
 
 
@@ -7176,6 +7162,15 @@ int SpellMap::GetUnitOptions(TScroll* scroll)
 	auto select_pos = GetSelection(scroll);
 	int options = 0;
 
+	// EN group mode has only two pointer meanings: toggle a friendly unit, or
+	// issue a movement order to a square. It never exposes fire choices.
+	if (IsGroupMode())
+	{
+		if (GetGroupCursorUnit(false, scroll))
+			return UNIT_OPT_SELECT;
+		return select_pos.IsSelected() ? UNIT_OPT_MOVE : 0;
+	}
+
 	// v8: make sure attack_map corresponds to the currently selected unit (avoid stale target selection on stacked tiles)
 	if (unit_selection && g_attack_map_dirty_for == unit_selection)
 	{
@@ -7218,25 +7213,29 @@ int SpellMap::GetUnitOptions(TScroll* scroll)
 
 // reset AP of all units
 
-// --- Group move (multi-unit selection) ---
+// --- EN original group movement ---
 void SpellMap::SetActiveGroup(int g)
 {
-	if (g < 0 || g > 8) g = 0;
+	if (g < 0 || g > 8)
+		g = 0;
 
-	// If switching from off->on, optionally auto-add currently selected player unit
-	int prev = active_group;
+	// EN executable: pressing the currently selected number unselects that
+	// group.  Switching/unselecting also aborts an in-progress group command.
+	if (g != 0 && g == active_group)
+		g = 0;
+
+	if (group_move_active && g != active_group)
+		StopGroupMoveCommand(true);
+	else if (group_move_active && g == 0)
+		StopGroupMoveCommand(true);
+
 	active_group = g;
-
-	if (active_group != 0 && prev == 0 && unit_selection && !unit_selection->is_enemy)
-	{
-		// Add selection into this group for convenience (matches user expectation)
-		ToggleUnitInActiveGroup(unit_selection);
-	}
 }
 
 bool SpellMap::IsUnitInActiveGroup(const MapUnit* u) const
 {
-	if (!u || active_group == 0) return false;
+	if (!u || active_group == 0)
+		return false;
 	const auto& v = group_units[active_group];
 	return std::find(v.begin(), v.end(), u->id) != v.end();
 }
@@ -7250,12 +7249,188 @@ void SpellMap::RemoveUnitFromAllGroups(int unit_id)
 	}
 }
 
+void SpellMap::StopGroupMoveCommand(bool stop_current_unit)
+{
+	if (stop_current_unit && group_move_unit_id >= 0)
+	{
+		MapUnit* u = GetUnit(group_move_unit_id);
+		if (u && u->move_state != MapUnit::MOVE_STATE::IDLE)
+		{
+			LockMap();
+			u->move_nodes.clear();
+			u->move_step = 0;
+			u->move_state = MapUnit::MOVE_STATE::IDLE;
+			u->in_animation = nullptr;
+			u->frame = 0;
+			u->PlayStop();
+			u->was_moved = true;
+			ReleaseMap();
+		}
+	}
+
+	group_move_active = false;
+	group_move_group = 0;
+	group_move_unit_id = -1;
+	group_move_target = MapXY();
+	group_move_reserve_one_shot = false;
+}
+
+void SpellMap::CancelActiveGroupMovement()
+{
+	StopGroupMoveCommand(true);
+}
+
+bool SpellMap::StartNextGroupMove()
+{
+	if (!group_move_active || group_move_group <= 0 || group_move_group > 8)
+		return false;
+
+	// A reaction shot, panic phase or Other Side turn owns the tactical state
+	// machine.  Keep the group command pending and resume it afterwards.
+	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+		return true;
+
+	// Wait until the member currently animated by the normal movement state
+	// machine has completely finished.  If it died, GetUnit() returns null and
+	// we simply continue with the remaining members.
+	if (group_move_unit_id >= 0)
+	{
+		MapUnit* current = GetUnit(group_move_unit_id);
+		if (current && IsUnitBusy(current))
+			return true;
+		group_move_unit_id = -1;
+	}
+
+	std::vector<MapUnit*> members;
+	members.reserve(group_units[group_move_group].size());
+	for (int id : group_units[group_move_group])
+	{
+		MapUnit* u = GetUnit(id);
+		if (!u || u->is_enemy || u->isDead())
+			continue;
+		members.push_back(u);
+	}
+
+	// The EN executable builds [unit,distance] records and qsorts them before
+	// looking for the next member that can start moving.  0x75650 uses the
+	// original staggered-map integer distance, not Euclidean screen distance.
+	auto en_group_distance = [&](MapUnit* u) -> int
+	{
+		if (!u || !u->coor.IsSelected() || !group_move_target.IsSelected() || x_size <= 0)
+			return INT_MAX;
+
+		int a = u->coor.y * x_size + u->coor.x;
+		int b = group_move_target.y * x_size + group_move_target.x;
+		int y1 = a / x_size, x1 = a % x_size;
+		int y2 = b / x_size, x2 = b % x_size;
+
+		if ((y1 & 1) == (y2 & 1))
+			return std::abs(y2 - y1) / 2 + std::abs(x2 - x1);
+
+		// This is the odd/even-row branch from SPELCROS.EXE 0x75650.
+		if (y2 & 1)
+		{
+			std::swap(y1, y2);
+			std::swap(x1, x2);
+		}
+		if (x1 > x2)
+			return std::abs(y1 - y2) / 2 + (x1 - x2);
+		return std::abs(y1 - y2) / 2 + (x2 - x1) + 1;
+	};
+
+	std::stable_sort(members.begin(), members.end(),
+		[&](MapUnit* a, MapUnit* b)
+		{
+			const int da = en_group_distance(a);
+			const int db = en_group_distance(b);
+			if (da != db) return da < db;
+			return a->id < b->id;
+		});
+
+	for (MapUnit* u : members)
+	{
+		if (!u->isActive() || u->radar_up || IsUnitBusy(u))
+			continue;
+		if (u->paralyze_turns > 0 || u->freeze_turns > 0 || u->action_points <= 0)
+			continue;
+
+		int budget = u->action_points;
+		if (group_move_reserve_one_shot)
+		{
+			const int shot_ap = u->GetAPperFire();
+			if (shot_ap > 0)
+				budget -= shot_ap;
+		}
+		if (budget <= 0)
+			continue;
+
+		// Group destination may lie far beyond this round's AP.  Find the real
+		// route first, then keep only the prefix affordable this round.  Other
+		// group members remain ordinary blockers; the next member is replanned
+		// only after this one has physically moved away.
+		HaltUnitRanging(true);
+		auto path = unit_range->FindPathToward(u, group_move_target);
+		ResumeUnitRanging(false);
+
+		if (path.size() < 2)
+			continue;
+
+		int last = 0;
+		for (int i = 1; i < (int)path.size(); ++i)
+		{
+			if (path[i].g_cost > budget)
+				break;
+			last = i;
+		}
+		if (last <= 0)
+			continue;
+
+		LockMap();
+		u->move_nodes.clear();
+		u->move_step = 0;
+		for (int i = 1; i <= last; ++i)
+			u->move_nodes.push_back(path[i]);
+		u->move_state = MapUnit::MOVE_STATE::TURRET;
+		u->ClearDigLevel();
+		u->ResetTurnsCounter();
+
+		// The ordinary single-unit movement state machine is intentionally reused
+		// verbatim.  This avoids the parallel duplicate that previously diverged
+		// from reaction fire, events, teleport and visibility handling.
+		unit_selection = u;
+		unit_selection_mod = true;
+		g_attack_map_dirty_for = u;
+		group_move_unit_id = u->id;
+		InvalidateHUDbuttons();
+		ReleaseMap();
+		return true;
+	}
+
+	// No member can make another legal step with its remaining AP.  The group
+	// remains selected, exactly as in the EN version; only this move command ends.
+	StopGroupMoveCommand(false);
+	return false;
+}
+
+void SpellMap::AddAllUnitsToActiveGroup()
+{
+	if (active_group == 0 || group_move_active)
+		return;
+
+	for (auto* u : units)
+	{
+		if (!u || u->is_enemy || u->isDead())
+			continue;
+		RemoveUnitFromAllGroups(u->id);
+		group_units[active_group].push_back(u->id);
+	}
+}
+
 void SpellMap::ToggleUnitInActiveGroup(MapUnit* u)
 {
-	if (!u || active_group == 0) return;
-	if (u->is_enemy) return;
+	if (!u || active_group == 0 || group_move_active || u->is_enemy || u->isDead())
+		return;
 
-	// Toggle off if already in active group
 	auto& v = group_units[active_group];
 	auto it = std::find(v.begin(), v.end(), u->id);
 	if (it != v.end())
@@ -7264,10 +7439,7 @@ void SpellMap::ToggleUnitInActiveGroup(MapUnit* u)
 		return;
 	}
 
-	// Units cannot be in more than one group
 	RemoveUnitFromAllGroups(u->id);
-
-	// Add
 	v.push_back(u->id);
 }
 
@@ -9304,13 +9476,6 @@ MapUnit* SpellMap::SelectUnit(MapUnit* new_unit, bool scroll_to)
 		return unit_selection;
 	}
 
-    // GROUP MODE: click on own unit toggles membership, selection stays unchanged
-    if (IsGroupMode() && new_unit && !new_unit->is_enemy)
-    {
-        ToggleUnitInActiveGroup(new_unit);
-        return(unit_selection);
-    }
-
 
 	if (unit_selection && unit_selection == new_unit)
 	{
@@ -9408,6 +9573,36 @@ MapUnit* SpellMap::GetCursorUnit(TScroll* scroll)
 			}
 	}
 	return(cur_unit);
+}
+
+// Group-mode unit picking follows the EN shortcut contract rather than the
+// ordinary air/land selection preference: normal LMB picks the land unit on a
+// stacked square (falling back to air), Shift+LMB explicitly picks the air unit.
+MapUnit* SpellMap::GetGroupCursorUnit(bool air_only, TScroll* scroll)
+{
+	if (!scroll)
+		scroll = &scroller;
+
+	auto msel = GetSelections(scroll);
+	if (msel.empty() || !msel[0].IsSelected())
+		return nullptr;
+	const MapXY pos = msel[0];
+
+	MapUnit* land = nullptr;
+	MapUnit* air = nullptr;
+	for (auto* u : units)
+	{
+		if (!u || u->is_enemy || u->isDead() || u->coor != pos)
+			continue;
+		if (u->unit && u->unit->isAir())
+			air = u;
+		else
+			land = u;
+	}
+
+	if (air_only)
+		return air;
+	return land ? land : air;
 }
 
 // get currently selected unit
@@ -9890,7 +10085,7 @@ int SpellMap::RenderHUDrect(uint8_t* buf, uint8_t* buf_end, int buf_x_size, int 
 // HUD button event handlers
 void SpellMap::OnHUDnextUnit()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	if (units.empty())
 		return;
@@ -9917,7 +10112,7 @@ void SpellMap::OnHUDnextUnit()
 }
 void SpellMap::OnHUDnextUnfinishedUnit()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	InvalidateHUDbuttons();
 }
@@ -9935,7 +10130,7 @@ void SpellMap::OnHUDswitchEndTurn()
 {
 	// Do not let player input advance phases while a scripted phase or defensive
 	// fire sequence owns the tactical state machine.
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 
 	// End the player phase.  Do NOT finalize digging yet: Alliance units may
@@ -9947,7 +10142,7 @@ void SpellMap::OnHUDswitchEndTurn()
 // heal unit HUD button pressed
 void SpellMap::OnHUDhealUnit()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
@@ -9958,7 +10153,7 @@ void SpellMap::OnHUDhealUnit()
 // turret toggle HUD button pressed
 void SpellMap::OnHUDturretToggle()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
@@ -9986,7 +10181,7 @@ void SpellMap::OnHUDturretToggle()
 // radar toggle HUD button pressed
 void SpellMap::OnHUDradarToggle()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
@@ -10022,7 +10217,7 @@ void SpellMap::OnHUDradarToggle()
 // aircraft land/takeoff HUD button pressed
 void SpellMap::OnHUDairLandTakeOff()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
@@ -10063,7 +10258,7 @@ void SpellMap::OnHUDairLandTakeOff()
 // switch to/from fortres HUD button callback
 void SpellMap::OnHUDfortresToggle()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
@@ -10098,7 +10293,7 @@ void SpellMap::OnHUDfortresToggle()
 // create new unit HUD button pressed
 void SpellMap::OnHUDcreateUnit()
 {
-	if (enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
+	if (group_move_active || enemy_turn_running || panic_turn_running || reaction_fire_active || !reaction_fire_queue.empty())
 		return;
 	auto unit = GetSelectedUnit();
 	if (!unit)
@@ -12026,6 +12221,11 @@ void SpellMap::InvalidateRuntimeReferencesToUnit(MapUnit* victim, MapUnit* prese
 		AbortAttackOnMissingTarget(owner);
 	}
 
+	// Persistent group slots must never retain IDs of units that leave the tactical roster.
+	RemoveUnitFromAllGroups(victim->id);
+	if (group_move_unit_id == victim->id)
+		group_move_unit_id = -1;
+
 	if (unit_selection == victim)
 	{
 		unit_selection = nullptr;
@@ -12292,6 +12492,19 @@ int SpellMap::Tick()
 		}
 	}
 
+	// === EN sequential group movement driver ===
+	// The original English build advances one group member through the normal
+	// movement state machine, then replans the next member against the new map
+	// occupancy.  Drive that command before the no-selection fast path because
+	// a killed/removed mover may temporarily leave unit_selection null.
+	if (isGameMode() && group_move_active &&
+		!enemy_turn_running && !panic_turn_running &&
+		!reaction_fire_active && reaction_fire_queue.empty())
+	{
+		StartNextGroupMove();
+		unit = GetSelectedUnit();
+	}
+
 	if (!unit)
 	{
 		// A finished objective must be allowed to advance the mission even when
@@ -12323,318 +12536,6 @@ int SpellMap::Tick()
 	}
 
 	
-	// === Group multi-move support ===
-	// The original Tick state machine processes only the selected unit.
-	// For Spellcross group move we must advance movement for ALL units that have a pending move path.
-	if (isGameMode())
-	{
-		LockMap();
-		for (auto* mu : units)
-		{
-			// Once any group member triggers defensive fire, freeze every other
-			// mover until the reaction sequence has completed.
-			if (reaction_fire_active || !reaction_fire_queue.empty())
-				break;
-			if (!mu) continue;
-			if (mu == unit) continue; // keep selected unit handled by the original state machine below
-			if (mu->move_state == MapUnit::MOVE_STATE::IDLE) continue;
-
-			MapUnit* unit = mu;
-
-					// === UNIT MOVEMENT ===
-
-					//unit_action_lock.lock();
-
-					if (unit->unit->usingTeleportMove())
-					{
-						// --- teleport move mode:
-
-						if (unit->move_state == MapUnit::MOVE_STATE::TURRET)
-						{
-							// turn unit to match teleport animation
-							int azim_count = unit->unit->gr_base->stat.azimuths;
-							int delta_azim = mod(0x0A - unit->azimuth + azim_count / 2, azim_count) - azim_count / 2;
-							if (delta_azim == 0)
-							{
-								// aligned: done										
-								unit->frame = -1;
-								unit->move_state = MapUnit::MOVE_STATE::TELEPORT_IN;
-							}
-							else if (delta_azim > 0)
-								unit->azimuth++;
-							else
-								unit->azimuth--;
-							if (unit->azimuth < 0)
-								unit->azimuth += azim_count;
-							else if (unit->azimuth >= azim_count)
-								unit->azimuth -= azim_count;
-
-							update = true;
-						}
-						else if (unit->move_state == MapUnit::MOVE_STATE::TELEPORT_IN && tick_30ms)
-						{
-							// play teleport animation
-
-							if (unit->frame < 0)
-							{
-								// start animation				
-								unit->in_animation = unit->unit->gr_action;
-								unit->azimuth = 0; // animation has no azimuth!
-
-								// play move sound (async)
-								unit->PlayMove();
-
-								// update view of all but this unit:
-								unit_view->ClearUnitsView();
-								unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true, unit);
-								unit_view->StoreUnitsView(unit->is_enemy);
-								if (!unit->is_enemy)
-									unit_view->AddUnitView(unit);
-
-								// go directly to last step
-								unit->move_step = unit->move_nodes.size() - 1;
-							}
-
-							unit->frame++;
-							if (unit->frame >= unit->in_animation->anim.frames)
-							{
-								// unit disappeared:
-
-								// move unit
-								auto next_pos = unit->move_nodes[unit->move_step];
-								unit->action_points -= (next_pos.g_cost - 0);
-								unit->coor = next_pos.pos;
-
-								// stop move sound (async - this is just flag to shut down in next sound frame)
-								unit->PlayStop();
-
-								// resort units in map
-								SortUnits();
-
-								// play the animation backwards
-								unit->move_state = MapUnit::MOVE_STATE::TELEPORT_OUT;
-							}
-
-							update = true;
-						}
-						if (unit->move_state == MapUnit::MOVE_STATE::TELEPORT_OUT && tick_30ms)
-						{
-							// teleport out
-
-							unit->frame--;
-							if (unit->frame < 0)
-							{
-								// unit again visible:					
-
-								// update this unit view
-								unit_view->RestoreUnitsView(unit->is_enemy);
-								SpellMapEventsList events;
-								int new_contact;
-								if (!unit->is_enemy)
-								{
-									unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
-									HideEnemiesOutsidePlayerView(this, unit_view);
-								}
-								else 
-								{
-									new_contact = 0;
-									UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, &new_contact);
-								}
-								if (new_contact)
-								{
-									unit->PlayContact();
-								}
-								// append events
-								event_list.insert(event_list.end(), events.begin(), events.end());
-
-								// check and append TransportUnit/SaveUnit events
-								for (auto& trig_event : unit->trig_events)
-									if (trig_event->CheckUnitInPos(true))
-										event_list.push_back(trig_event);
-
-								// Teleport has no traversed intermediate tile. Treat reappearance as
-								// entering sight from an unseen position, as the DOS movement path does.
-								if (isGameMode())
-									CheckReactionFire(unit, MapXY());
-
-								// done					
-								unit->in_animation = NULL;
-								unit->azimuth = 0x0A; // azimuth matching teleport animation which has only one azimumth
-								unit->move_nodes.clear();
-								unit->was_moved = true; // this will force range recalculation
-								unit->move_state = MapUnit::MOVE_STATE::IDLE;
-							}
-
-							update = true;
-						}
-
-					}
-					else
-					{
-						if (unit->move_state == MapUnit::MOVE_STATE::TURRET)
-						{
-							// turret allign:
-							if (unit->unit->hasTurret())
-							{
-								// has turret: align it first with rest of vehicle
-
-								unit->move_state = MapUnit::MOVE_STATE::MOVE;
-								unit->move_step = 0;
-							}
-							else
-							{
-								// no turret: skip step
-								unit->move_state = MapUnit::MOVE_STATE::MOVE;
-								unit->move_step = 0;
-							}
-
-						}
-						else if (unit->move_state == MapUnit::MOVE_STATE::MOVE)
-						{
-							// movement:
-
-							if (unit->move_step == 0)
-							{
-								// first step:
-
-								// play move sound (async)
-								unit->PlayMove();
-
-								// start animation
-								unit->frame = -1;
-								if (unit->unit->gr_base->anim.frames)
-									unit->in_animation = unit->unit->gr_base;
-
-								// update view of all but this unit:
-								unit_view->ClearUnitsView();
-								unit_view->AddUnitsView(UNIT_TYPE_ALIANCE, true, unit);
-								unit_view->StoreUnitsView(unit->is_enemy);
-								if (!unit->is_enemy)
-									unit_view->AddUnitView(unit);
-
-							}
-
-							auto this_pos = unit->coor;
-
-							int ap_prev = 0;
-							if (unit->move_step)
-								ap_prev = unit->move_nodes[unit->move_step - 1].g_cost;
-
-							auto next_pos = unit->move_nodes[unit->move_step++];
-
-							HaltUnitRanging(true);
-							unit->action_points -= (next_pos.g_cost - ap_prev);
-							unit->coor = next_pos.pos;
-							ResumeUnitRanging(false);
-
-							double azimuth = this_pos.Angle(next_pos.pos);
-
-							// resort units in map
-							unit_view->WaitIdle();
-							SortUnits();
-
-							// update this unit view
-							unit_view->RestoreUnitsView(unit->is_enemy);
-							SpellMapEventsList events;
-							int new_contact = 0;
-							if (!unit->is_enemy)
-							{
-								unit_view->AddUnitView(unit, ViewRange::ClearMode::NONE, &new_contact, &events);
-								HideEnemiesOutsidePlayerView(this, unit_view);
-							}
-							else
-							{
-								UpdateEnemyVisibilityFromPlayerView(this, unit_view, unit, nullptr);
-							}
-							if (new_contact)
-							{
-								// enemy contact event:
-								unit->PlayContact();
-							}
-							// append eventual events
-							event_list.insert(event_list.end(), events.begin(), events.end());
-
-							// check and append TransportUnit/SaveUnit events
-							for (auto& trig_event : unit->trig_events)
-								if (trig_event->CheckUnitInPos(true))
-									event_list.push_back(trig_event);
-
-							// Original defensive fire is evaluated after every movement tile,
-							// for either side, at the instant the mover enters new direct sight.
-							if (isGameMode())
-								CheckReactionFire(unit, this_pos);
-
-
-							if (unit->in_animation)
-							{
-								// animated move
-								unit->azimuth = unit->unit->gr_base->GetAnimAzim(azimuth);
-								unit->frame++;
-								if (unit->frame >= unit->in_animation->anim.frames)
-									unit->frame = 0;
-							}
-							else
-							{
-								// static
-								unit->azimuth = unit->unit->gr_base->GetStaticAzim(azimuth);
-							}
-							unit->azimuth_turret = unit->azimuth;
-
-							bool stop_for_events = false;
-							for (auto* e : events)
-							{
-								if (!e) continue;
-
-								// SEE_* jsou jen info (fog-of-war reveal) -> NERUŠIT pohyb
-								if (e->evt_type == SpellMapEventRec::EvtTypes::EVT_SEE_PLACE) continue;
-								if (e->evt_type == SpellMapEventRec::EvtTypes::EVT_SEE_UNIT)  continue;
-
-								stop_for_events = true;
-								break;
-							}
-
-							//if (new_contact || !events.empty() || unit->move_step >= unit->move_nodes.size())
-
-							//if (new_contact || stop_for_events || unit->move_step >= unit->move_nodes.size())
-
-							if (unit->move_step >= unit->move_nodes.size())
-
-							{
-								// movement done:
-								unit->move_state = MapUnit::MOVE_STATE::IDLE;
-								unit->move_nodes.clear();
-								unit->was_moved = true; // this will force range recalculation
-
-								// stop move sound (async - this is just flag to shut donw in next sound frame)
-								unit->PlayStop();
-
-								// stop animation (switch to static)
-								unit->in_animation = NULL;
-								unit->azimuth = unit->unit->gr_base->GetStaticAzim(azimuth);
-								unit->frame = 0;
-							}
-
-						}
-
-						update = true;
-					}
-
-					//unit_action_lock.unlock();
-
-
-
-		}
-		ReleaseMap();
-	}
-
-	// A non-selected group member may have entered enemy sight above. Start the
-	// first defensive shot before the ordinary selected-unit state machine gets a
-	// chance to advance another mover in the same tick.
-	if (isGameMode() && !reaction_fire_active && !reaction_fire_queue.empty())
-	{
-		ProcessReactionFire();
-		unit = GetSelectedUnit();
-	}
 
 // === Unit state machine ===
 	LockMap();

@@ -2401,6 +2401,46 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
     // ESC handler via CHAR_HOOK — fires BEFORE menu accelerators,
     // so ESC is not consumed by the disabled Edit > Clear buffer accelerator.
     Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent& event) {
+        // EN group slots must be handled at frame level.  wxPanel key events
+        // are focus-dependent and keyboard layouts (notably Czech) may not
+        // report the top number row as ASCII '1'..'8'.  Accept the logical
+        // key, numpad key and raw Windows VK code.
+        if (spell_map && spell_map->isGameMode() && !inSubForm() &&
+            !spell_map->IsEnemyTurnRunning())
+        {
+            int group_slot = 0;
+            const int key = event.GetKeyCode();
+            const int raw = (int)event.GetRawKeyCode();
+
+            if (key >= '1' && key <= '8')
+                group_slot = key - '0';
+            else if (key >= WXK_NUMPAD1 && key <= WXK_NUMPAD8)
+                group_slot = key - WXK_NUMPAD0;
+            else if (raw >= 0x31 && raw <= 0x38) // Windows VK_1 .. VK_8
+                group_slot = raw - 0x30;
+
+            if (group_slot != 0)
+            {
+                spell_map->SetActiveGroup(group_slot);
+                if (canvas)
+                {
+                    canvas->SetFocus();
+                    canvas->Refresh();
+                }
+                return;
+            }
+        }
+
+        // ALT+A is an EN group shortcut and on Windows would otherwise be
+        // eligible for menu mnemonic handling before the canvas sees it.
+        if (spell_map && spell_map->isGameMode() && spell_map->IsGroupMode() &&
+            event.AltDown() && (event.GetKeyCode() == 'A' || event.GetKeyCode() == 'a'))
+        {
+            spell_map->AddAllUnitsToActiveGroup();
+            if (canvas) canvas->Refresh();
+            return;
+        }
+
         if (event.GetKeyCode() == WXK_ESCAPE && !m_editor_unlocked && !form_mmenu)
         {
             // Tactical HUD overlays sit on/over the map. ESC must close the
@@ -2423,8 +2463,14 @@ Bind(wxEVT_MENU, [this](wxCommandEvent&)
                 return;
             }
 
-            if (spell_map && spell_map->isGameMode())
+            if (spell_map && spell_map->isGameMode() && spell_map->IsGroupMode())
+            {
+                // EN executable: ESC cancels movement and unselects the group.
                 spell_map->SetActiveGroup(0);
+                if (canvas) canvas->Refresh();
+                return;
+            }
+
             wxCommandEvent evt;
             OnOpenMainMenu(evt);
             return;
@@ -5461,6 +5507,16 @@ void MainFrame::OnCanvasRMouse(wxMouseEvent& event)
     else if(event.RightUp())
     {
         int was_moved = spell_map->scroller.Idle();
+
+        // EN group shortcut: a plain right click unselects the active group.
+        // Right-drag remains map scrolling and must not alter group state.
+        if (!was_moved && spell_map->isGameMode() && spell_map->IsGroupMode())
+        {
+            spell_map->SetActiveGroup(0);
+            if (canvas) canvas->Refresh();
+            return;
+        }
+
         if(!was_moved && !spell_map->isGameMode())
         {
             // --- editor mode popup menu stuff:
@@ -5921,11 +5977,20 @@ void MainFrame::OnCanvasLMouseDown(wxMouseEvent& event)
                 // game mode:
                 if (spell_map->IsGroupMode())
                 {
-                    // group mode = no unit options menu: toggle units / move immediately (like original)
-                    if (cur_unit && !cur_unit->is_enemy)
-                        spell_map->SelectUnit(cur_unit);
-                    else
-                        spell_map->MoveUnit(select_pos);
+                    // EN original group mode:
+                    //   LMB unit       -> insert/remove (land preferred on stacked tile)
+                    //   Shift+LMB unit -> insert/remove AIR unit
+                    //   LMB square     -> move group toward square
+                    //   Alt+LMB square -> same, but reserve AP for one shot
+                    // While a group command is running, ESC/RMB is the cancel path.
+                    if (!spell_map->IsActiveGroupMoving())
+                    {
+                        MapUnit* group_unit = spell_map->GetGroupCursorUnit(event.ShiftDown());
+                        if (group_unit)
+                            spell_map->SelectUnit(group_unit);
+                        else if (!event.ShiftDown())
+                            spell_map->MoveUnit(select_pos, event.AltDown());
+                    }
                 }
                 else
                 {
@@ -6129,7 +6194,7 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
     }
 
     // ESC opens the main menu only when no tactical overlay is active.
-    // Minimap / unit list / map options own ESC themselves and close first.
+    // In EN group mode it belongs to group control instead.
     if(key == WXK_ESCAPE && !m_editor_unlocked)
     {
         if (form_unit_opts || form_message || form_video_box ||
@@ -6139,17 +6204,51 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
             return;
         }
 
-        if(spell_map->isGameMode())
+        if (spell_map->isGameMode() && spell_map->IsGroupMode())
+        {
             spell_map->SetActiveGroup(0);
+            if(canvas) canvas->Refresh();
+            return;
+        }
+
         wxCommandEvent evt;
         OnOpenMainMenu(evt);
         return;
     }
 
+    // EN group-mode shortcuts. Process these before ordinary M/A range keys,
+    // otherwise ALT+A would be swallowed by temporary attack-range display.
+    if(spell_map->isGameMode())
+    {
+        int group_slot = 0;
+        const int raw = (int)event.GetRawKeyCode();
+        if(key >= '1' && key <= '8')
+            group_slot = key - '0';
+        else if(key >= WXK_NUMPAD1 && key <= WXK_NUMPAD8)
+            group_slot = key - WXK_NUMPAD0;
+        else if(raw >= 0x31 && raw <= 0x38)
+            group_slot = raw - 0x30;
+
+        if(group_slot != 0)
+        {
+            spell_map->SetActiveGroup(group_slot);
+            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
+            return;
+        }
+
+        if(spell_map->IsGroupMode() && event.AltDown() && (key == 'A' || key == 'a'))
+        {
+            spell_map->AddAllUnitsToActiveGroup();
+            if(canvas) canvas->Refresh();
+            return;
+        }
+    }
+
     // Original tactical range hotkeys.
     // SPACE cycles persistent modes: Normal -> Move -> Attack -> Normal.
     // M/A temporarily override the current mode only while the key is held.
-    if(spell_map->isGameMode())
+    // Group mode owns its own controls and intentionally suppresses these.
+    if(spell_map->isGameMode() && !spell_map->IsGroupMode())
     {
         if(key == WXK_SPACE)
         {
@@ -6177,24 +6276,6 @@ void MainFrame::OnCanvasKeyDown(wxKeyEvent& event)
                 spell_map->BeginTemporaryUnitRangeViewMode(SpellMap::UNIT_RANGE_ATTACK);
             }
             if(canvas) canvas->Refresh();
-            return;
-        }
-    }
-
-    // Group move hotkeys (game mode only)
-    if(spell_map->isGameMode())
-    {
-        if(key >= '1' && key <= '8')
-        {
-            spell_map->SetActiveGroup(key - '0');
-            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
-            return;
-        }
-
-        if(key == '0' || key == WXK_ESCAPE)
-        {
-            spell_map->SetActiveGroup(0);
-            if(canvas) { canvas->SetFocus(); canvas->Refresh(); }
             return;
         }
     }
